@@ -29,3 +29,8 @@ dev = [
     "pre-commit>=4.6.2",
     "ruff>=0.16.9",
 ]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+exclude = ["migrations"]
