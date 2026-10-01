@@ -39,7 +39,6 @@ Ensure the following tools are installed on your workstation:
 | **Git** | 2.40+ | `git --version` | Configured with your PUP student/faculty email |
 | **Python** | 3.12 | `python --version` | Managed via `uv` or system Python |
 | **[uv](https://docs.astral.sh/uv/)** | 0.7+ (Recommended 0.12+) | `uv --version` | Ultra-fast Python package and project manager |
-| **PostgreSQL** | 16 (Optional locally) | `psql --version` | SQLite is used by default locally; Render uses PostgreSQL |
 
 ### Operating System & Shell Guidelines
 - **Windows**: Use **Git Bash** or **PowerShell**. Avoid Command Prompt (`cmd.exe`).
@@ -88,7 +87,7 @@ Open `.env` and review the local development values:
 |---|---|---|
 | `DEBUG` | `True` | Enables Django debug mode and detailed error pages |
 | `SECRET_KEY` | *(Generated dev secret)* | Secret key for cryptographic signing |
-| `DATABASE_URL` | `sqlite:///db.sqlite3` | Zero-configuration local database |
+| `DATABASE_URL` | `render_db_url` | Zero-configuration local database |
 | `JWT_SECRET` | *(Dev JWT secret)* | Key used for signing authentication tokens |
 | `ALLOWED_STUDENT_EMAIL_DOMAIN` | `iskolarngbayan.pup.edu.ph` | Validates student/alumni registration domain |
 | `ALLOWED_FACULTY_EMAIL_DOMAIN` | `pup.edu.ph` | Validates faculty/staff registration domain |

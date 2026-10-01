@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 
 import os
 from pathlib import Path
+
 import dj_database_url
 from dotenv import load_dotenv
 
@@ -44,7 +45,11 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
 
+    # Third-party apps
+    'rest_framework',
+
     # local apps
+    'apps.core',
     'apps.users',
     'apps.listings',
     'apps.orders',
@@ -54,7 +59,6 @@ INSTALLED_APPS = [
     'apps.reports',
     'apps.notifications',
     'apps.audit',
-    'apps.core',
 ]
 
 MIDDLEWARE = [
@@ -142,3 +146,4 @@ STATICFILES_DIRS = [BASE_DIR / "static"]
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+AUTH_USER_MODEL = 'users.User'
