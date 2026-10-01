@@ -47,6 +47,14 @@ class UserManager(BaseUserManager):
         if not email:
             raise ValueError("The Email field must be set")
         email = self.normalize_email(email)
+
+        # Auto-assign if affiliation was not passed
+        if "affiliation" not in extra_fields:
+            if "iskolar" in email.lower():
+                extra_fields["affiliation"] = self.model.AffiliationChoices.STUDENT
+            elif "pup.edu.ph" in email.lower():
+                extra_fields["affiliation"] = self.model.AffiliationChoices.FACULTY
+
         user = self.model(email=email, **extra_fields)
         if password:
             user.set_password(password)
@@ -77,7 +85,6 @@ class User(AbstractUser):
 
     class AffiliationChoices(models.TextChoices):
         STUDENT = "Student", "Student"
-        ALUMNI = "Alumni", "Alumni"
         FACULTY = "Faculty", "Faculty"
         STAFF = "Staff", "Staff"
         ADMIN = "Admin", "Admin"
@@ -94,7 +101,7 @@ class User(AbstractUser):
         ACTIVE = "active", "Active"
         REVOKED = "revoked", "Revoked"
 
-    username = models.CharField(max_length=150, unique=True, null=True, blank=True)
+    username = None
     email = models.EmailField(unique=True)
     full_name = models.CharField(max_length=255)
     contact_number = models.CharField(max_length=20)
@@ -104,7 +111,7 @@ class User(AbstractUser):
         default=AffiliationChoices.STUDENT,
     )
     bio = models.TextField(blank=True, null=True)
-    photo = models.CharField(max_length=500, blank=True, null=True)
+    photo = models.ImageField(upload_to="profile_photos/", blank=True, null=True)
     email_verified_at = models.DateTimeField(blank=True, null=True)
     account_status = models.CharField(
         max_length=20,
@@ -197,7 +204,9 @@ class IdentityDocument(models.Model):
         related_name="documents",
     )
     id_number = models.CharField(max_length=100)
-    file_reference = models.CharField(max_length=500)  # Encrypted storage reference
+    file_reference = models.FileField(
+        upload_to="identity_documents/"
+    )  # Encrypted storage reference
     status = models.ForeignKey(
         IdentityDocumentStatus,
         on_delete=models.PROTECT,

@@ -150,7 +150,7 @@ class DisputeEvidence(models.Model):
         on_delete=models.PROTECT,
         related_name="submitted_dispute_evidences",
     )
-    file_reference = models.CharField(max_length=500)
+    file_reference = models.FileField(upload_to="dispute_evidences/")
     file_type = models.ForeignKey(
         FileType,
         on_delete=models.PROTECT,

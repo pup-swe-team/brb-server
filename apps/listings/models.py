@@ -97,7 +97,7 @@ class ListingPhoto(models.Model):
         on_delete=models.CASCADE,
         related_name="photos",
     )
-    file_reference = models.CharField(max_length=500)
+    file_reference = models.ImageField(upload_to="listing_photos/")
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
