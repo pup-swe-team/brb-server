@@ -98,7 +98,7 @@ Open `.env` and review the local development values:
 | `DATABASE_URL` | `sqlite:///db.sqlite3` | Zero-configuration local database (or PostgreSQL connection string for Render parity) |
 | `DATABASE_PASSWORD` | `yourpassword` | Database password when connecting to local or remote PostgreSQL |
 | `JWT_SECRET` | *(Dev JWT secret)* | Key used for signing authentication tokens |
-| `ALLOWED_STUDENT_EMAIL_DOMAIN` | `iskolarngbayan.pup.edu.ph` | Validates student/alumni registration domain (SRS FR1, NFR 4.2) |
+| `ALLOWED_STUDENT_EMAIL_DOMAIN` | `iskolarngbayan.pup.edu.ph` | Validates student registration domain (SRS FR1, NFR 4.2). Students only — `Alumni` was removed from the project (DECISIONS.md D-15) |
 | `ALLOWED_FACULTY_EMAIL_DOMAIN` | `pup.edu.ph` | Validates faculty/staff registration domain (SRS FR1, NFR 4.2) |
 | `CRON_SECRET_TOKEN` | `local-dev-cron-token-brb` | Bearer token for protected scheduled endpoints (SRS Section 2.4 & 5.2) |
 | `EMAIL_BACKEND` | `django.core.mail.backends.console.EmailBackend` | Dumps verification/reset emails to terminal in local development |
@@ -161,13 +161,13 @@ sequenceDiagram
     Dev->>Board: Pick issue from "Ready" column & move to "In Progress"
     Dev->>Local: git checkout dev && git pull origin dev
     Dev->>Local: uv sync --dev (ensure dependencies & tools are current)
-    Dev->>Local: git checkout -b feature/<module>-<name>
+    Dev->>Local: git checkout -b feature/sprint-<n>_cp<ticket>-<desc>
     Dev->>Local: Write code + unit tests
     Dev->>Local: Run Ruff (ruff check / ruff format)
     Dev->>Local: Run tests (uv run python manage.py test)
     Dev->>Local: git commit -m "feat(module): description"
     Dev->>Repo: git pull origin dev (resolve any conflicts)
-    Dev->>Repo: git push -u origin feature/<module>-<name>
+    Dev->>Repo: git push -u origin feature/sprint-<n>_cp<ticket>-<desc>
     Dev->>Repo: Open Pull Request against dev
     CI->>Repo: Run automated checks (Ruff, tests)
     Dev->>Board: Move issue to "In Review"
@@ -181,7 +181,7 @@ sequenceDiagram
    git checkout dev
    git pull origin dev
    uv sync --dev
-   git checkout -b feature/order-handover-code
+   git checkout -b feature/sprint-3_cp504-handover-code
    ```
 3. **Develop in Small Commits**: Write clean code backed by unit tests.
 4. **Run Ruff Linting and Formatting**:
@@ -206,13 +206,13 @@ sequenceDiagram
    ```bash
    git checkout dev
    git pull origin dev
-   git checkout feature/order-handover-code
+   git checkout feature/sprint-3_cp504-handover-code
    git merge dev
    uv run python manage.py test
    ```
 8. **Push and Open a PR**:
    ```bash
-   git push -u origin feature/order-handover-code
+   git push -u origin feature/sprint-3_cp504-handover-code
    ```
    Open a PR targeting the **`dev`** branch. In the PR description, link the issue using `Closes #XX`.
 9. **Peer Review & CI Validation**: CI runs automated checks (Ruff, test suite). Address peer review feedback with additional commits.
@@ -223,17 +223,41 @@ sequenceDiagram
 ## 4. Branches and Commits
 
 ### 4.1 Branch Naming Conventions
-Branch names must be lowercase, hyphen-separated, and prefixed by category and module:
+Branch names must be lowercase, hyphen-separated, and prefixed by category.
+
+Every branch that does work on a sprint ticket carries **both** the sprint number and the ticket number, so a branch can be traced back to `docs/BRB_BACKEND_SPRINTS.md` without opening the tracker:
+
+```
+<category>/sprint-<n>_cp<ticket>-<short-description>
+```
 
 | Branch Pattern | Purpose | Example |
 |---|---|---|
 | `main` | Production release branch. Direct commits strictly prohibited. | `main` |
 | `dev` | Active integration branch. Target of all PRs. Direct commits strictly prohibited. | `dev` |
-| `feature/<module>-<desc>` | New feature development | `feature/auth-pup-webmail` |
-| `bugfix/<module>-<desc>` | Bug fix for code on `dev` | `bugfix/orders-code-expiry` |
-| `hotfix/<module>-<desc>` | Critical fix for code on `main` | `hotfix/auth-token-invalidation` |
-| `refactor/<module>-<desc>`| Code restructuring without behavior changes | `refactor/listings-querysets` |
-| `test/<module>-<desc>`    | Test coverage improvements | `test/disputes-case-flow` |
+| `feature/sprint-<n>_cp<ticket>-<desc>` | New feature development | `feature/sprint-1_cp102-email-verification` |
+| `bugfix/sprint-<n>_cp<ticket>-<desc>` | Bug fix for code on `dev` | `bugfix/sprint-1_cp103-login-lockout` |
+| `hotfix/sprint-<n>_cp<ticket>-<desc>` | Critical fix for code on `main` | `hotfix/sprint-1_cp102-verification-token` |
+| `refactor/sprint-<n>_cp<ticket>-<desc>` | Code restructuring without behavior changes | `refactor/sprint-2_cp301-listing-filters` |
+| `test/sprint-<n>_cp<ticket>-<desc>` | Test coverage improvements | `test/sprint-1_cp105-identity-documents` |
+
+Rules for the ticket segment:
+
+- Keep the `cp` prefix in lowercase and **do not zero-pad**: `cp102`, not `cp0102`. Ticket numbers reach four digits (e.g. `CP-1001`, `CP-1105`), so padding would make `cp1001` ambiguous to read.
+- The `<short-description>` is 2–4 lowercase hyphenated words, in plain English. It is a label for humans scanning `git branch`, not a restatement of the ticket title.
+- The ticket number identifies the ticket. The **domain** is expressed by the Conventional Commit **scope** (§4.2), not by the branch name — so branch names should not repeat the module.
+
+#### Work with no ticket number
+Some work has no CP ticket: infrastructure, dependency bumps, CI changes, documentation, or the pre-sprint setup pass. Use `no-ticket` in place of the ticket number so these branches stay self-describing and can be filtered out of ticket-scoped queries:
+
+```
+<category>/sprint-<n>_no-ticket-<desc>
+```
+
+| Example | Purpose |
+|---|---|
+| `feature/sprint-1_no-ticket-simplejwt-setup` | Prerequisite infrastructure with no ticket |
+| `chore/sprint-0_no-ticket-dependency-bumps` | Maintenance outside any sprint (`sprint-0` = pre-sprint) |
 
 ### 4.2 Conventional Commits
 All commit messages and PR titles must adhere to the **Conventional Commits** specification:
@@ -406,7 +430,9 @@ brb_server/
 
 #### 1. PUP Webmail Domain Validation (FR1, NFR 4.2)
 - Registrations are strictly restricted to PUP webmail addresses:
-  - Students and Alumni: `@iskolarngbayan.pup.edu.ph`
+  - Students: `@iskolarngbayan.pup.edu.ph`
+   - Note: `Alumni` is **not** a supported affiliation (DECISIONS.md D-15). The
+     enum is exactly `Student`, `Faculty`, `Staff`. Do not add it back.
   - Faculty and Staff: `@pup.edu.ph`
 - All other domains must be rejected with a user-friendly error message.
 

@@ -140,8 +140,10 @@ right thing if rows exist elsewhere:
 - affiliation narrowing promotes any surviving `Admin` row to `is_staff`
 
 **TODO 5 (`user_municipalities` / `user_provinces`) remains open** — still a
-team decision, nothing removed. `Alumni` affiliation is also still undecided
-and was not part of the original TODO list.
+team decision, nothing removed.
+
+**`Alumni` is no longer open — it was decided on 2026-10-05 and removed from the
+project. See D-15.**
 
 ---
 
@@ -192,14 +194,8 @@ anywhere in the branch, which is all CP-102 scope. Sprint 1 remains
 
 ## Open questions not yet decided
 
-1. **`Alumni` affiliation is missing.** The ERD specifies
-   `student, alumni, faculty, staff`; the code now has
-   `Student, Faculty, Staff` (see D-03). `CONTRIBUTING.md` §2.4 also describes
-   `ALLOWED_STUDENT_EMAIL_DOMAIN` as validating the "student/alumni" domain, so
-   alumni appear to be in scope. Note that both student and alumni share the
-   `@iskolarngbayan.pup.edu.ph` domain, so the two cannot be told apart by
-   email domain alone — CP-101 will need an explicit signal. Needs adding, or an
-   explicit decision to drop.
+None. The last open question — whether to add `Alumni` to `affiliation` — was
+answered on 2026-10-05: **`Alumni` is removed from the project entirely (D-15).**
 
 ## Verification performed
 
@@ -225,3 +221,264 @@ criteria (domain rejection, domain-affiliation matching, Admin self-registration
 prohibition, duplicate email, required fields, password mismatch, weak
 password, contact-number format, and affiliation not gating Borrower/Lender
 defaults). All 15 pass. The other nine apps still have stub `tests.py` files.
+
+---
+
+## 2026-10-05 — Sprint 1 onboarding pass (CP-102, CP-103, CP-105)
+
+Branch: `test/aaron-scratch`. Covers CP-102, CP-103 and CP-105. **CP-104 is
+deliberately untouched** — the sprint board schedules it for Sprint 2, and CP-102's
+token work deliberately leaves it room (see D-08).
+
+### D-06 — Unverified accounts cannot log in
+
+**Decision:** A `pending_review` account with no `email_verified_at` is refused at
+login with `401` and a message telling the user to check their inbox. Chosen over
+"log in but restrict": the account has no verified contact channel, so an
+unverified login is indistinguishable from the person who merely knows the
+address, and every downstream feature assumes a reachable owner.
+
+The unknown-email and wrong-password cases deliberately return a **byte-identical**
+response (`Invalid email or password.`) so the endpoint cannot be used to
+enumerate registered addresses. The lockout counter is only incremented for
+accounts that actually exist, which means an attacker cannot lock someone else
+out by guessing their email.
+
+### D-07 — The 7-day sweep deletes rows instead of setting a flag
+
+**Decision:** `POST /api/v1/jobs/deactivate-unverified/` **hard-deletes**
+unverified accounts past the window. The ticket says "auto-deactivate", but a
+deactivated flag on an account nobody can reach is a dead end: there is no
+reactivation path (next bullet), so the row would exist only to block the email
+address. Deleting frees the address for the re-registration the ticket requires.
+
+Consequence worth stating plainly: **the delete cascades**, so the gate that
+blocks document upload behind email verification (CP-105) is what stops a
+sweep from destroying an uploaded document. That ordering is a dependency, not a
+coincidence.
+
+Window is Admin-configurable through `SystemConfig`
+(`email_verification_expiry_days`, default 7). A mail outage cannot strand
+anyone because the sweep is the safety net — registration still returns `201` when
+the send fails, since failing the request would only invite a retry that then
+collides on duplicate email.
+
+### D-08 — Verification token lifetime is per-instance, not `PASSWORD_RESET_TIMEOUT`
+
+**Decision:** `EmailVerificationTokenGenerator` subclasses
+`PasswordResetTokenGenerator` and moves the expiry onto an instance attribute.
+
+Django's generator hard-codes its window to the global `PASSWORD_RESET_TIMEOUT`,
+which is the wrong knob: CP-102 links must outlive 7 days while CP-104's reset
+links need 1 hour. One global setting cannot serve both without one ticket
+silently changing the other's behaviour. The subclass reuses the parent's private
+helpers rather than re-deriving the HMAC, so the two cannot drift on salt
+construction, and it uses a distinct `key_salt` so a verification token can never
+be replayed against Django's password-reset view.
+
+### D-09 — The emailed link targets the app; verification is a POST
+
+**Decision:** The email contains `brb://auth/verify-email?uid=...&token=...`
+(configurable via `EMAIL_VERIFICATION_REDIRECT_URL`). Verification happens at
+`POST /api/v1/auth/verify-email/`.
+
+A confirmation link that mutates state on `GET` is unsafe by construction: link
+previews, scanners and browser prefetch all issue `GET`s, so any of them would
+consume the token. `POST` keeps the mutation explicit and leaves the scheme
+handler in the frontend's control.
+
+### D-10 — Identity mismatch is a declared-name comparison, not OCR
+
+**Decision:** `has_profile_mismatch` is set by comparing the client-supplied
+`name_on_document` against `User.full_name`, normalised for case, spacing and
+punctuation. The document image is **not** read.
+
+CP-105 says "flag mismatches between registration info and submitted document".
+Doing that properly means OCR over a government ID, which is a large, failure-prone
+dependency and a privacy commitment nobody has made yet. The flag is explicitly
+*advisory*: it routes the submission to human review, it does not reject. So the
+cheap signal captures the intent (most submissions are honest, and a mismatch
+is what a reviewer needs to see) while leaving OCR as a later upgrade if CP-106
+reviewers ask for it. Normalisation is one-way — punctuation is stripped from both
+sides so "Dela Cruz" and "dela cruz." compare equal.
+
+### D-11 — `id_number` is unique per account, enforced in the serializer
+
+**Decision:** The database index on `id_number` is **not** unique. The rule is
+"one id_number per account", which spans rows and is enforced by the serializer
+using a case-insensitive lookup.
+
+CP-106 allows resubmission after a rejection, so the same person must be able to
+submit the same ID again; a unique index would make the second attempt a database
+error instead of a valid workflow step. Uniqueness is also checked
+case-insensitively, since IDs are transcribed by hand. One test pins this: the
+same account re-submitting its own ID stays legal, a different account is refused.
+
+### D-12 — Auth failures are `401`, not `400`
+
+**Decision:** Login, refresh and logout failures raise
+`AuthenticationFailed` (`401`). Structural problems — missing field, malformed
+payload — remain `400`.
+
+The serializer originally raised `ValidationError({"detail": ...})`, which DRF
+renders as `400` **with `detail` as a list**. That shape is wrong on two counts:
+`400` says "fix your request", but a bad password is a credential problem, and a
+`detail` key holding a list of `ErrorDetail` is a shape no other endpoint here
+returns. `AuthenticationFailed` also unifies the lockout, suspended, banned and
+unverified branches behind one status with distinct error `code`s, so a client
+can branch without string-matching prose.
+
+### D-13 — Identity document bytes live in Postgres, not in a bucket or on disk
+
+**Decision:** `identity_documents.document_data` is a `BinaryField` (Postgres
+`bytea`). The document bytes are written into the row. **Cloudinary is removed**,
+along with the `cloudinary` and `django-cloudinary-storage` packages, the
+`CLOUDINARY_*` settings and the `USE_CLOUDINARY_STORAGE` toggle.
+
+**Why not the local filesystem**, which was the previous fallback: Render's
+filesystem is ephemeral and the free tier has no persistent disk, so every
+uploaded ID would silently vanish on the next redeploy or restart. A dev-branch
+that looks correct and loses real government IDs in production is worse than one
+that was never finished. This was caught before any Cloudinary code was tested, so
+nothing was migrated in the wrong direction.
+
+**Why not another object store** (S3/R2/Backblaze): that is the same architecture
+under a different vendor name. The team's stated goal is to keep everything on
+Render, and a second service means a second account, a second bill and a second
+thing to go down.
+
+The trade-offs accepted, stated plainly:
+
+- **Database growth.** Render's free Postgres is ~1GB and a document is capped at
+  5MB, so roughly 200 documents is the ceiling before the disk is at risk. That is
+  fine for a capstone demo and wrong for a real deployment; the honest fix later is
+  object storage with a lifecycle policy, not a bigger database.
+- **Backup size.** Every DB backup now carries the documents. That is a feature for
+  recoverability and a cost for backup time.
+- **CP-107's "store identity documents encrypted"** now applies to the blob rather
+  than to a path. Render encrypts volumes at rest, but application-level encryption
+  (e.g. Fernet around the bytes) is still owed by CP-107 and is *not* done here.
+- **Ephemerality is not fixed for `users.photo`.** Profile photos still use the
+  default filesystem backend and will still be lost on redeploy. They are cosmetic
+  and the user can re-upload, unlike an ID.
+
+The client API is unchanged: the request is still `multipart/form-data` with a
+`document_file` part, and size/type validation still happens on the uploaded file.
+Only the write target moved, so the mobile client needs no change.
+
+The response serializer uses an explicit field list that omits `document_data`, so
+the bytes cannot reach a phone even accidentally — FR3 keeps documents
+Administrator-only, and one test asserts the key is absent.
+
+### D-14 - "Sprint 1 tables only" is not a workable database boundary
+
+**Context:** Populating the shared Render `copup_db` was scoped to Sprint 1, so
+the first migration pass applied only `contenttypes`, `auth`, `sessions`, `admin`,
+`users`, `core`, `audit` and `token_blacklist` — 19 tables — leaving `chat`,
+`codes`, `listings`, `notifications`, `orders`, `reports` and `reviews` unmigrated.
+
+**Problem:** CP-102's expiry sweep removes unverified accounts by deleting the row
+(D-07), and Django's delete collector walks *every* reverse relation on `User`.
+All seven deferred apps hold FKs to `AUTH_USER_MODEL`, so the sweep died against
+the partially-migrated database:
+
+```
+ProgrammingError: relation "listings" does not exist
+```
+
+Reproduced live against `copup_db`, then confirmed fixed after the full
+migration.
+
+**Decision:** Apply the full migration set (50 tables). A partially-migrated
+shared database is not a sprint boundary, it is a broken one. Sprint scope stays
+where it belongs: in what we *implement* and *test*. No Sprint 2+ endpoint,
+serializer or test is claimed by this pass, and every Sprint 2+ table is empty.
+
+**Rejected:** hard-coding a table-existence check around deletes (silently skips
+real cascades and must be revisited every sprint); switching CP-102 to a soft
+delete (breaks the email-reuse requirement that motivated D-07).
+
+### D-15 - `Alumni` is removed from the project, permanently
+
+**Decision (lead, 2026-10-05):** `Alumni` is out of scope. `users.affiliation`
+has exactly three values — **`Student`, `Faculty`, `Staff`** — and that is the
+final list.
+
+**Standing instruction:** do not add `Alumni` to `AffiliationChoices`, do not
+add an alumni registration path, do not infer alumni from the email domain, and
+do not reintroduce it in any future sprint. If a document, diagram or spec still
+mentions alumni, it is stale and should be corrected rather than followed. This
+supersedes every earlier "undecided"/"still open"/"needs a team decision" note
+about alumni anywhere in this repository.
+
+**Why this needed no code change:** the code never implemented `Alumni` in the
+first place. The enum has always been `[Student, Faculty, Staff]`, the live
+Render `copup_db` holds zero user rows, and no migration is required — there is
+no `Alumni` value in the database to strip out. The whole change is
+documentation, so the team and any AI assistant reading this repo stop treating
+it as an open question.
+
+**What was corrected:** `docs/COPUP_ERD.md` (four places, including the `USERS`
+enum comment and the draw.io sync checklist), this file, and
+`CONTRIBUTING.md` §2.4 and §7.2, which described
+`ALLOWED_STUDENT_EMAIL_DOMAIN` as the "student/alumni" domain and listed
+"Students and Alumni" as a registration category. `@iskolarngbayan.pup.edu.ph`
+is the **student** domain only.
+
+**Also closed the same day:** the Render `copup_db` password was rotated after
+being pasted into chat, and TODO 5 (`user_municipalities` / `user_provinces`
+normalization) is the one remaining genuinely open question in this file.
+
+## Fixes and issues found along the way
+
+- **The ERD drew `municipality` and `province` as free-text strings on `USERS`.**
+  The code has always used nullable FKs to the `Municipality` and `Province`
+  lookup tables declared in the `users` app (physically `user_municipalities` and
+  `user_provinces`). Verified against `copup_db` and corrected in
+  `docs/COPUP_ERD.md`; this is the same lookup-table pattern as D-02.
+
+- **DRF does not inject `request` into serializer context.** The CP-105
+  submission serializer needs the current user to enforce "this ID number is not
+  already linked to another account", but a serializer constructed as
+  `Serializer(data=request.data)` has no `request` in `self.context` — reading it
+  raises `KeyError`. Every context-dependent serializer in this codebase must be
+  constructed with an explicit `context={"request": request}`.
+
+- **Windows cannot re-read Django's spooled uploads.** Anything above
+  `FILE_UPLOAD_MAX_MEMORY_SIZE` (2.5 MB by default) is streamed to an on-disk
+  temporary file, and the Windows test runner then fails with
+  `PermissionError: [WinError 32]` when storage reads it back. The 5 MB cap
+  therefore has its boundary asserted at the field level rather than over HTTP;
+  the cap is storage-independent, so the rule is still tested properly. Not a
+  production issue — real clients upload over the wire.
+
+- **`ruff` 0.16.9 flags two framework idioms as `RUF012`.** Django reads
+  `Meta.constraints`/`Meta.indexes` as plain lists and DRF merges
+  `default_error_messages` across a serializer hierarchy; both are containers by
+  contract. Added documented `per-file-ignores` for `**/models.py` and
+  `**/serializers.py` rather than sprinkling `ClassVar` annotations that the
+  frameworks do not read.
+
+## Verification performed
+
+| Gate | Result |
+|---|---|
+| `uv run ruff format --check .` | All files formatted |
+| `uv run ruff check .` | All checks passed |
+| `uv run python manage.py makemigrations --check --dry-run` | No changes detected |
+| `uv run python manage.py migrate --check` | No pending migrations |
+| `uv run python manage.py test` | **117 tests, all passing** |
+
+Test counts by suite: `apps.users` 98 (CP-101's original 15 plus CP-102, CP-103 and
+CP-105), `apps.core` 13 (the CP-102 cron endpoint's secret handling). The other
+nine apps still have stub `tests.py` files.
+
+New migrations applied cleanly: `0003_identitydocument_consent_given_and_more`
+and `0004_seed_identity_document_lookups` (the latter is a data migration seeding
+`IdentityDocumentType` and `IdentityDocumentStatus`, so CP-105 does not depend on
+someone remembering to insert rows).
+
+`POST /api/v1/jobs/deactivate-unverified/` was additionally exercised by hand
+with a missing, malformed and correct token; a token in either bare or `Bearer`
+form is accepted, and an unset `CRON_SECRET_TOKEN` fails closed with `503` rather
+than running the sweep unprotected.

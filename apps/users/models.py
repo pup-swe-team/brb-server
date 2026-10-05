@@ -3,6 +3,7 @@ import typing
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
+from django.utils import timezone
 
 
 class Province(models.Model):
@@ -143,6 +144,12 @@ class User(AbstractUser):
         blank=True,
         related_name="users",
     )
+    # CP-103 lockout state. Both columns are additive with a default/nullable so
+    # the migration stays backward-compatible against a populated table: existing
+    # rows simply start with a clean slate and no lock. See DECISIONS.md D-06 --
+    # these two columns are the one place CP-103 needed to extend `users`.
+    failed_login_attempts = models.PositiveIntegerField(default=0)
+    locked_until = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -162,6 +169,35 @@ class User(AbstractUser):
 
     def __str__(self) -> str:
         return f"{self.full_name} ({self.email})"
+
+    @property
+    def is_email_verified(self) -> bool:
+        """Whether CP-102's confirmation step has been completed."""
+        return self.email_verified_at is not None
+
+    @property
+    def is_locked_out(self) -> bool:
+        """
+        Whether a CP-103 lockout is currently in force.
+
+        A lockout that has run out is treated as absent here; the stale
+        `locked_until` timestamp is cleared by the next successful login.
+        """
+        return self.locked_until is not None and self.locked_until > timezone.now()
+
+    def has_verified_identity(self) -> bool:
+        """
+        Whether an Admin approved an identity document for this account (CP-105).
+
+        This is the gate CP-105 puts in front of listing creation and borrow
+        requests, and it is deliberately distinct from `is_email_verified`:
+        confirming an email (CP-102) is not the same as having one's ID checked
+        (CP-105/CP-106).
+        """
+        approved = IdentityDocumentStatus.objects.filter(name="approved").first()
+        if approved is None:
+            return False
+        return self.identity_documents.filter(status=approved).exists()
 
 
 class IdentityDocumentType(models.Model):
@@ -209,14 +245,29 @@ class IdentityDocument(models.Model):
         related_name="documents",
     )
     id_number = models.CharField(max_length=100)
-    file_reference = models.FileField(
-        upload_to="identity_documents/"
-    )  # Encrypted storage reference
+    # CP-105: the document bytes live in Postgres, not on a filesystem or a third
+    # party bucket. Render's filesystem is ephemeral and the free tier has no
+    # persistent disk, so a FileField here would lose every upload on the next
+    # redeploy. Keeping the blob in the row also makes "store the document and its
+    # submission record" a single atomic write (DECISIONS.md D-13).
+    document_data = models.BinaryField(editable=False)
     status = models.ForeignKey(
         IdentityDocumentStatus,
         on_delete=models.PROTECT,
         related_name="documents",
     )
+    # CP-105: the name printed on the uploaded document, kept so an Admin can
+    # compare it against `users.full_name`. Set by the client at submission time;
+    # CP-105 does no OCR, so this is the declared name, not a parsed one.
+    name_on_document = models.CharField(max_length=255, blank=True, default="")
+    # CP-105: raised automatically when name_on_document disagrees with the
+    # registration name. The submission is still accepted -- a mismatch is a
+    # reason for an Admin to look harder, not a reason to reject (CP-106).
+    has_profile_mismatch = models.BooleanField(default=False)
+    # CP-105: consent is a precondition of submission, so it is recorded with the
+    # submission rather than collected on a separate form.
+    consent_given = models.BooleanField(default=False)
+    consented_at = models.DateTimeField(null=True, blank=True)
     rejection_reason = models.TextField(blank=True, default="")
     reviewed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -232,6 +283,23 @@ class IdentityDocument(models.Model):
         db_table = "identity_documents"
         verbose_name = "Identity Document"
         verbose_name_plural = "Identity Documents"
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(consent_given=False) | models.Q(consented_at__isnull=False)
+                ),
+                name="identity_document_consent_has_timestamp",
+            ),
+        ]
+        indexes = [
+            # CP-105 rejects an id_number already linked to a different account,
+            # so every submission hits this lookup. It is deliberately NOT a
+            # unique constraint: CP-106 lets a rejected submission be replaced,
+            # and the same person re-submitting the same ID must stay legal. The
+            # uniqueness rule is "one id_number per account", which spans rows
+            # and is enforced in the serializer rather than by the database.
+            models.Index(fields=["id_number"], name="idx_identity_doc_id_number"),
+        ]
 
     def __str__(self) -> str:
         return f"{self.user.email} - {self.document_type.name} ({self.id_number})"

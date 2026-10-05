@@ -42,8 +42,6 @@ INSTALLED_APPS = [
     # Third-party apps
     "rest_framework",
     "rest_framework_simplejwt.token_blacklist",
-    "cloudinary_storage",
-    "cloudinary",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -167,7 +165,15 @@ REST_FRAMEWORK = {
         "rest_framework.renderers.JSONRenderer",
         "rest_framework.renderers.BrowsableAPIRenderer",
     ),
-    "DEFAULT_PARSER_CLASSES": ("rest_framework.parsers.JSONParser",),
+    # CP-105 uploads an identity document, which requires multipart. Added to the
+    # single canonical block above rather than as a second REST_FRAMEWORK dict:
+    # Python takes the last assignment, so a duplicate key would silently drop
+    # the default-deny permission classes (see DECISIONS.md M-01).
+    "DEFAULT_PARSER_CLASSES": (
+        "rest_framework.parsers.JSONParser",
+        "rest_framework.parsers.MultiPartParser",
+        "rest_framework.parsers.FormParser",
+    ),
 }
 
 # JSON Web Tokens (djangorestframework-simplejwt)
@@ -188,22 +194,25 @@ SIMPLE_JWT = {
     "USER_ID_CLAIM": "user_id",
 }
 
-# Cloudinary Credentials
-CLOUDINARY_STORAGE = {
-    "CLOUD_NAME": os.getenv("CLOUDINARY_CLOUD_NAME"),
-    "API_KEY": os.getenv("CLOUDINARY_API_KEY"),
-    "API_SECRET": os.getenv("CLOUDINARY_API_SECRET"),
-}
-
-# Tell Django to use Cloudinary for all uploaded media files
+# Media storage
+# CP-105 identity documents are NOT stored here: their bytes live in Postgres as
+# `identity_documents.document_data`, because Render's filesystem is ephemeral and
+# the free tier has no persistent disk (DECISIONS.md D-13).
+#
+# The backend below only serves legacy/profile image fields such as
+# `users.photo`. Those are cosmetic and regenerable by the user, so losing them on
+# redeploy is acceptable -- unlike a government ID, which is not.
 STORAGES = {
     "default": {
-        "BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage",
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
     },
     "staticfiles": {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
     },
 }
+
+MEDIA_ROOT = BASE_DIR / "media"
+MEDIA_URL = "media/"
 
 # PUP Community Webmail Validation (SRS Section 4.2)
 ALLOWED_STUDENT_EMAIL_DOMAIN = os.getenv(
@@ -212,3 +221,19 @@ ALLOWED_STUDENT_EMAIL_DOMAIN = os.getenv(
 ALLOWED_FACULTY_EMAIL_DOMAIN = os.getenv(
     "ALLOWED_FACULTY_EMAIL_DOMAIN", "pup.edu.ph"
 ).lower()
+
+# Scheduled Background Jobs (SRS Section 2.4 & 5.2, CONTRIBUTING.md 7.2 rule 6)
+# cron-job.org sends this as a bearer token on the job endpoints. Read here
+# rather than in the view so the secret has exactly one definition site.
+# Empty means "not configured" and the endpoints refuse to run (503) instead of
+# silently accepting every request.
+CRON_SECRET_TOKEN = os.getenv("CRON_SECRET_TOKEN", "")
+
+# Email delivery (CP-102)
+# EMAIL_BACKEND / DEFAULT_FROM_EMAIL come from .env; see .env.example.
+EMAIL_VERIFICATION_REDIRECT_URL = os.getenv(
+    "EMAIL_VERIFICATION_REDIRECT_URL", "brb://auth/verify-email"
+)
+# CP-102: an account that never verifies its email is removed after this many
+# days. Read through SystemConfig so it stays Admin-configurable (CP-1104).
+EMAIL_VERIFICATION_EXPIRY_DAYS = 7

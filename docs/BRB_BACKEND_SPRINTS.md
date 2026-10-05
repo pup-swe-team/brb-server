@@ -29,24 +29,37 @@ reassigned.
 
 ### CP-102 — Verify email address (simplified confirmation screen)
 > Note: can be omitted if time is short; add in a later sprint if time allows.
-- [ ] Send verification email on successful registration
-- [ ] Mark account email-verified and grant full access when link is clicked
-- [ ] Auto-deactivate account after 7 days unverified (scheduled job)
-- [ ] Require re-registration for deactivated accounts (no reactivation path)
+- [x] Send verification email on successful registration
+- [x] Mark account email-verified and grant full access when link is clicked
+- [x] Auto-deactivate account after 7 days unverified (scheduled job) — see deviation note below
+- [x] Require re-registration for deactivated accounts (no reactivation path)
+
+> **Deviation — CP-102 auto-deactivation deletes instead of flagging.** The
+> scheduled job hard-deletes unverified accounts rather than flipping them to a
+> deactivated status. An unconfirmed account has no verified contact channel, so a
+> "deactivated" row would be unreachable by the owner and would hold the email
+> hostage to a support ticket. Deleting releases the address for re-registration,
+> which is what the next bullet requires anyway. The 7-day window is
+> Admin-configurable via `SystemConfig`, and a mail outage cannot strand anyone
+> because the sweep is the safety net. Endpoint:
+> `POST /api/v1/jobs/deactivate-unverified/`.
 
 ### CP-103 — Log in to account
-- [ ] Authenticate credentials server-side
-- [ ] Return generic error (no email/password hint) from auth endpoint
-- [ ] Lock account for 15 min after 5 consecutive failed attempts (Admin-configurable)
-- [ ] Deny login for suspended/banned accounts
-- [ ] End session on logout or inactivity timeout
+- [x] Authenticate credentials server-side
+- [x] Return generic error (no email/password hint) from auth endpoint
+- [x] Lock account for 15 min after 5 consecutive failed attempts (Admin-configurable)
+- [x] Deny login for suspended/banned accounts
+- [x] End session on logout or inactivity timeout — logout blacklists the refresh
+      token; inactivity is bounded by the 15-minute access-token lifetime (see D-04)
 
 ### CP-105 — Submit identity verification document
-- [ ] Store uploaded document and submission record
-- [ ] Flag mismatches between registration info and submitted document for Admin check
-- [ ] Reject submission if ID number already linked to another account
-- [ ] Require explicit consent captured before accepting submission
-- [ ] Block listing creation and item requests until user is verified
+- [x] Store uploaded document and submission record
+- [x] Flag mismatches between registration info and submitted document for Admin check
+- [x] Reject submission if ID number already linked to another account
+- [x] Require explicit consent captured before accepting submission
+- [ ] Block listing creation and item requests until user is verified — **blocked on
+      CP-301/CP-501**: the `IsIdentityVerified` permission exists and is tested, but
+      no listing or request endpoint has been built yet to attach it to.
 
 ### CP-106 — Admin review of identity verification
 - [ ] Persist approve/reject decision + reason — *Ezekiel*

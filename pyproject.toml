@@ -6,11 +6,9 @@ readme = "README.md"
 
 requires-python = ">=3.12"
 dependencies = [
-    "cloudinary>=1.46.2",
     "dj-database-url>=3.1.2",
     "django>=5.1,<5.2",
     "django-allauth[headless]>=65.19.7",
-    "django-cloudinary-storage>=0.3.0",
     "djangorestframework>=3.15",
     "djangorestframework-simplejwt>=5.5.1",
     "pillow>=12.3.0",
@@ -42,3 +40,11 @@ extend-exclude = [
 ignore = [
     "EXE001",  # Windows git checkouts do not maintain POSIX executable bits
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# RUF012 wants every class attribute to be immutable, but two framework
+# idioms are container attributes by contract, not by accident:
+#   - Django reads `Meta.constraints` / `Meta.indexes` as plain lists.
+#   - DRF merges `default_error_messages` across the serializer hierarchy.
+"**/models.py" = ["RUF012"]
+"**/serializers.py" = ["RUF012"]

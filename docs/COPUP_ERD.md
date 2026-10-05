@@ -38,10 +38,13 @@ this document for exact field-level edits.
    this level of address normalization is actually needed, since the SRS only
    asks for a single "home address" field. **Still open.** The tables exist in
    the schema today; nothing has been removed.
-6. **Not previously tracked:** the ERD lists `student, alumni, faculty, staff`
-   for `affiliation`, but `Alumni` has never been implemented in the code, and
-   student and alumni share the same email domain so they cannot be inferred
-   from it. Needs a team decision — see DECISIONS.md.
+6. **RESOLVED — `Alumni` is out of scope permanently.** This ERD previously listed
+   `student, alumni, faculty, staff` for `affiliation`. The team has since
+   removed `Alumni` from the project entirely (D-15). The authoritative enum is
+   **`student, faculty, staff`**, which is what the code has always implemented.
+   Do not reintroduce `Alumni`, do not add it to `AffiliationChoices`, and do not
+   treat `@iskolarngbayan.pup.edu.ph` as a student-or-alumni domain — it is the
+   student domain only.
 
 Each domain is written as a [Mermaid](https://mermaid.js.org/syntax/entityRelationshipDiagram.html)
 `erDiagram` block. Fields that are fixed state machines (not Admin-editable
@@ -67,26 +70,44 @@ erDiagram
         string email
         string password_hash
         string contact_number
-        string affiliation "enum: student, faculty, staff — Admin removed; admin authority is is_staff (DECISIONS.md D-03). TODO: alumni still undecided"
+        string affiliation "enum: student, faculty, staff — these are the ONLY three values (D-15 removed Alumni permanently). Admin affiliation removed; admin authority is is_staff (D-03)"
         bool is_staff "inherited from AbstractUser — carries Administrator authority (FR3). Replaces the proposed is_admin."
         text bio
         string photo
-        datetime email_verified_at
+        datetime email_verified_at "set by CP-102 click-to-verify; NULL blocks login while unverified"
+        int failed_login_attempts "CP-103. Consecutive failures; reset to 0 on success or when a lockout expires"
+        datetime locked_until "CP-103. Non-NULL means locked out; compared against now() at login"
         string account_status "enum: active, suspended, pending_review, banned, deactivated"
         string lender_status "enum: none, active, revoked"
         datetime created_at
+        datetime updated_at
         string street_address
-        string municipality
-        string province
+        int municipality_id FK "nullable. FK to the MUNICIPALITIES lookup table, not a free-text string"
+        int province_id FK "nullable. FK to the PROVINCES lookup table, not a free-text string"
+    }
+
+    PROVINCES {
+        int id PK
+        string name "unique. Standardized Philippine provinces"
+    }
+
+    MUNICIPALITIES {
+        int id PK
+        string name
+        int province_id FK "a municipality belongs to exactly one province"
     }
 
     IDENTITY_DOCUMENTS {
         int id PK
         int user_id FK
-        string document_type "enum: pup_id, government_id"
-        string id_number
-        string file_reference
-        string status "enum: pending, approved, rejected"
+        string document_type "FK to identity_document_types, not a text enum. Seeded by migration 0004 (D-02)"
+        string id_number "case-insensitive; NOT unique - the rule is one per account, enforced in the serializer so CP-106 resubmission stays legal (D-11)"
+        binary document_data "CP-105. The uploaded ID bytes, stored in the row as Postgres bytea rather than a file path - Render's filesystem is ephemeral (D-13). FR3: never exposed by any API serializer"
+        string status "FK to identity_document_statuses, not a text enum. Seeded by migration 0004 (D-02)"
+        string name_on_document "CP-105. Name as written on the ID; compared against users.full_name to set the mismatch flag (D-10)"
+        bool has_profile_mismatch "CP-105. Advisory only - routes the submission to Admin review, never auto-rejects (D-10)"
+        bool consent_given "CP-105. Must be true to submit; a DB constraint ties this to consented_at"
+        datetime consented_at "CP-105. DB constraint requires non-NULL whenever consent_given is true"
         text rejection_reason
         int reviewed_by FK
         datetime reviewed_at
@@ -112,7 +133,17 @@ erDiagram
     IDENTITY_DOCUMENTS ||--o{ ADMIN_ACCESS_LOGS : "is viewed via"
     USERS ||--o{ ADMIN_ACCESS_LOGS : "views as admin"
     USERS ||--o{ SYSTEM_CONFIGS : "updates as admin"
+    USERS }o--|| MUNICIPALITIES : "lives in (municipality_id)"
+    USERS }o--|| PROVINCES : "lives in (province_id)"
+    PROVINCES ||--o{ MUNICIPALITIES : "contains"
 ```
+
+> **Table-name note (verified against Render `copup_db`, 2026-10-05).** The
+> `PROVINCES` and `MUNICIPALITIES` lookup tables are physically named
+> `user_provinces` and `user_municipalities` because they are declared in the
+> `users` app. This is the same lookup-table pattern as D-02, not a separate
+> entity: an earlier revision of this ERD drew `municipality` and `province` as
+> free-text strings on `USERS`, which is what the code never did.
 
 ---
 
@@ -495,8 +526,9 @@ erDiagram
   `is_active`, `last_login`, `date_joined`, `password` — plus the M2M tables
   `users_groups` and `users_user_permissions`. None are drawn above because
   this is a simplified diagram; they do exist in the database.
-- `users.affiliation` does **not** include "Alumni" either, even though the
-  original enum in this diagram listed it. Undecided — see DECISIONS.md.
+- `users.affiliation` is exactly `student, faculty, staff`. "Alumni" appeared in
+  the original enum in this diagram; it has been removed from the project and
+  must not be reintroduced — see D-15.
 - Stub tables (PK-only boxes) in Domains 2–7 exist only so each diagram
   renders independently; they are not separate tables in the actual database.
   The real, full-column table is defined once, in its home domain.
@@ -522,7 +554,8 @@ Master ERD stops disagreeing with the code.
    - Do **not** add an `is_admin` field. Administrator authority is
      `users.is_staff` (inherited from `AbstractUser`). See DECISIONS.md D-03
      for why a separate `is_admin` was rejected.
-   - Still undecided: whether to add `Alumni` to the enum.
+   - `Alumni` is **removed from the project**, not merely unimplemented. Leave
+     the enum as `[Student, Faculty, Staff]`; do not add it back. See D-15.
 
 2. **`reviews` table** — **done in code.** `reviewee_id` (Int, FK →
    `users.id`) now exists directly after `reviewer_id`. Mirror it in draw.io.
