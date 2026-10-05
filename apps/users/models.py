@@ -66,7 +66,9 @@ class UserManager(BaseUserManager):
     def create_superuser(self, email: str, password: str | None = None, **extra_fields):
         extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", True)
-        extra_fields.setdefault("affiliation", User.AffiliationChoices.ADMIN)
+        # Administrator authority is carried by is_staff, not by affiliation.
+        # Affiliation only records the user's relationship to PUP (FR1).
+        extra_fields.setdefault("affiliation", User.AffiliationChoices.FACULTY)
         extra_fields.setdefault("account_status", User.AccountStatusChoices.ACTIVE)
 
         if extra_fields.get("is_staff") is not True:
@@ -81,13 +83,16 @@ class User(AbstractUser):
     """
     Custom user model for BRB platform (FR1, FR2, FR4, FR5, FR13).
     Restricted to PUP webmail addresses (@iskolarngbayan.pup.edu.ph, @pup.edu.ph).
+
+    `affiliation` records only the user's relationship to PUP. Platform
+    authority (including Administrator access to identity documents, FR3) is
+    carried by Django's `is_staff` flag, never by `affiliation`.
     """
 
     class AffiliationChoices(models.TextChoices):
         STUDENT = "Student", "Student"
         FACULTY = "Faculty", "Faculty"
         STAFF = "Staff", "Staff"
-        ADMIN = "Admin", "Admin"
 
     class AccountStatusChoices(models.TextChoices):
         ACTIVE = "active", "Active"
