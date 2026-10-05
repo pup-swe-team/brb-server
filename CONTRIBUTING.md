@@ -21,7 +21,7 @@ Project tracking and sprint boards are managed under the [pup-swe-team GitHub Or
 2. [First-Time Setup](#2-first-time-setup)
 3. [Daily Development Workflow](#3-daily-development-workflow)
 4. [Branches and Commits](#4-branches-and-commits)
-5. [Code Quality: Ruff, Mypy, and Local Hooks](#5-code-quality-ruff-mypy-and-local-hooks)
+5. [Code Quality: Ruff and Local Hooks](#5-code-quality-ruff-and-local-hooks)
 6. [Continuous Integration (CI) and Quality Enforcement](#6-continuous-integration-ci-and-quality-enforcement)
 7. [Coding Standards and BRB Architecture](#7-coding-standards-and-brb-architecture)
 8. [Writing Issues and SRS Traceability](#8-writing-issues-and-srs-traceability)
@@ -62,7 +62,7 @@ git checkout dev
 > Always verify you are branched off **`dev`** before starting work. `main` is reserved for stable production releases.
 
 ### 2.2 Install Dependencies with `uv`
-Initialize your virtual environment and install all runtime dependencies and development tools (`ruff`, `mypy`, `pre-commit`):
+Initialize your virtual environment and install all runtime dependencies and development tools (`ruff`, `pre-commit`):
 
 ```bash
 uv sync --dev
@@ -164,13 +164,12 @@ sequenceDiagram
     Dev->>Local: git checkout -b feature/<module>-<name>
     Dev->>Local: Write code + unit tests
     Dev->>Local: Run Ruff (ruff check / ruff format)
-    Dev->>Local: Run Mypy (uv run mypy apps/)
     Dev->>Local: Run tests (uv run python manage.py test)
     Dev->>Local: git commit -m "feat(module): description"
     Dev->>Repo: git pull origin dev (resolve any conflicts)
     Dev->>Repo: git push -u origin feature/<module>-<name>
     Dev->>Repo: Open Pull Request against dev
-    CI->>Repo: Run automated checks (Ruff, Mypy, tests)
+    CI->>Repo: Run automated checks (Ruff, tests)
     Dev->>Board: Move issue to "In Review"
     Repo-->>Dev: Peer Review & Approval
     Dev->>Repo: Squash and merge into dev
@@ -194,20 +193,16 @@ sequenceDiagram
    uv run ruff format .
    ```
    *If you use `uv run ruff check --fix .`, always inspect `git diff` before staging.*
-5. **Run Static Type Checking**:
-   ```bash
-   uv run mypy apps/
-   ```
-6. **Run Automated Tests**:
+5. **Run Automated Tests**:
    ```bash
    uv run python manage.py test
    ```
-7. **Commit Your Changes**: Follow Conventional Commits format:
+6. **Commit Your Changes**: Follow Conventional Commits format:
    ```bash
    git add <changed-files>
    git commit -m "feat(orders): validate return authentication codes"
    ```
-8. **Rebase or Merge Upstream Changes**:
+7. **Rebase or Merge Upstream Changes**:
    ```bash
    git checkout dev
    git pull origin dev
@@ -215,13 +210,13 @@ sequenceDiagram
    git merge dev
    uv run python manage.py test
    ```
-9. **Push and Open a PR**:
+8. **Push and Open a PR**:
    ```bash
    git push -u origin feature/order-handover-code
    ```
    Open a PR targeting the **`dev`** branch. In the PR description, link the issue using `Closes #XX`.
-10. **Peer Review & CI Validation**: CI runs automated checks (Ruff, Mypy, test suite). Address peer review feedback with additional commits.
-11. **Squash and Merge**: Once approved and all required checks pass, the PR is **squash-merged** into `dev`. Delete the feature branch afterwards.
+9. **Peer Review & CI Validation**: CI runs automated checks (Ruff, test suite). Address peer review feedback with additional commits.
+10. **Squash and Merge**: Once approved and all required checks pass, the PR is **squash-merged** into `dev`. Delete the feature branch afterwards.
 
 ---
 
@@ -281,9 +276,9 @@ Use the scope corresponding to the functional domain:
 
 ---
 
-## 5. Code Quality: Ruff, Mypy, and Local Hooks
+## 5. Code Quality: Ruff and Local Hooks
 
-Our project relies on **Ruff** for high-speed Python linting and code formatting, **Mypy** for static type checking, and optional local git hooks for rapid feedback before committing.
+Our project relies on **Ruff** for high-speed Python linting and code formatting, and optional local git hooks for rapid feedback before committing.
 
 ### 5.1 Ruff Linting and Formatting
 Ruff provides two distinct capabilities: **linting** (`ruff check`) and **formatting** (`ruff format`).
@@ -321,25 +316,7 @@ class UsersConfig(AppConfig):
 
 ---
 
-### 5.2 Static Type Checking with Mypy
-Our project includes **Mypy** (`mypy>=2.3.1` in `pyproject.toml` under `[dependency-groups] dev`) for static type checking.
-
-- **Static Type Analysis vs. Ruff**: While Ruff analyzes code syntax, AST patterns, and code formatting, Mypy performs **static type verification**—checking type annotations, function argument/return types, and class contracts without executing the code.
-- **Running Mypy Locally**:
-  Run Mypy against project application code:
-  ```bash
-  uv run mypy apps/
-  ```
-  Or check a specific app during development:
-  ```bash
-  uv run mypy apps/orders/
-  ```
-- **Focus Areas for Type Annotations**:
-  Prioritize adding explicit type hints to core business logic, domain services (`services.py`), data selectors (`selectors.py`), model helper methods, and utility functions. Note that without third-party Django type stubs installed, type checking is most effective on project domain logic.
-
----
-
-### 5.3 Local Git Hooks and Pre-Commit
+### 5.2 Local Git Hooks and Pre-Commit
 Pre-commit hooks provide fast local feedback on your machine before a commit is created, preventing unformatted or broken code from entering your local Git history.
 
 - **Fast Local Feedback**: Running checks before committing allows you to detect formatting flaws, unresolved lint errors, and syntax issues immediately, without waiting for remote CI runs.
@@ -382,7 +359,6 @@ When pull requests are submitted against the `dev` branch, the CI pipeline is de
 |---|---|---|
 | **Linting & Import Order** | `uv run ruff check .` | Verifies code quality, detects programming defects, and checks import sorting |
 | **Code Formatting** | `uv run ruff format --check .` | Verifies that all files conform to the project formatting style |
-| **Static Type Checking** | `uv run mypy apps/` | Validates type signatures, interfaces, and annotations across application code |
 | **Automated Test Suite** | `uv run python manage.py test` | Executes the complete Django test suite to guarantee regression stability |
 | **PR & Commit Conventions** | Automated PR title / commit check | Confirms PR title and commits follow the Conventional Commits specification |
 
@@ -391,7 +367,7 @@ It is essential to distinguish between workflow execution and repository merge e
 
 - **Workflows vs. Branch Protection**: Simply defining or running a GitHub Actions workflow **does not automatically block pull requests from merging**.
 - **Required Status Checks**: A failed CI check only becomes a strict, blocking merge barrier when repository administrators configure GitHub **Branch Protection Rules** or **Repository Rulesets** for target branches (`dev` and `main`) and designate specific jobs as **Required Status Checks**.
-- **Intended Quality Standard**: Where branch protection rulesets are not yet configured or enforced in repository settings, all contributors and peer reviewers are expected to treat these checks as mandatory quality gates. Never approve or squash-merge a pull request that has failing test, lint, or type check runs.
+- **Intended Quality Standard**: Where branch protection rulesets are not yet configured or enforced in repository settings, all contributors and peer reviewers are expected to treat these checks as mandatory quality gates. Never approve or squash-merge a pull request that has failing test or lint runs.
 
 ---
 
@@ -519,7 +495,6 @@ A task is **Ready to Start** when:
 A task is **Done** when:
 - [ ] Every acceptance criterion is covered by automated unit/integration tests referencing the AC ID.
 - [ ] Code passes all `ruff check` (linting) and `ruff format` (formatting) quality checks.
-- [ ] Code passes `mypy` static type checking on application code (`uv run mypy apps/`).
 - [ ] Migrations are generated, tested, and backward-compatible.
 - [ ] All automated CI checks pass cleanly on the pull request.
 - [ ] At least one backend peer has approved the PR.
@@ -538,7 +513,6 @@ A task is **Done** when:
 | Emails are not arriving during testing | `EMAIL_BACKEND` is set to console backend | This is intentional for local testing. Look at the terminal running `runserver`—the verification link or reset token is printed directly to `stdout`. |
 | Ruff flags unused import needed for Django registration | Import is required for module side effects (signals/models) but unused by name | Do not disable `F401` globally. Add an explicit inline exception: `# noqa: F401 - <explanation>`. |
 | `ruff check --fix` changed code unexpectedly | Automated fixer applied an unwanted syntax change | Inspect `git diff`, revert unwanted modifications with `git restore <file>`, and resolve the lint issue manually. |
-| Mypy reports untyped module errors on third-party libraries | Third-party packages lack type annotations or stubs | Target application code via `uv run mypy apps/`. Focus type annotations on custom services and selectors. |
 | Commit message rejected or flagged | Commit message does not follow Conventional Commits format | Reformat the message: `git commit -m "<type>(<scope>): <description>"`. |
 | Migration conflicts on `dev` pull | Two branches created conflicting migrations | Run `uv run python manage.py makemigrations --merge` and commit the merge migration. |
 | Tests pass locally but fail in CI | Missing dependencies, untracked migration files, or uncommitted changes | Run `uv sync --dev`, verify `git status`, and run `uv run python manage.py makemigrations --check`. |

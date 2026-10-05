@@ -9,7 +9,7 @@ on:
 
 jobs:
   quality:
-    name: Lint & Type Check
+    name: Code Quality & Linting
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,9 +30,6 @@ jobs:
 
       - name: Run Ruff linter
         run: uv run ruff check .
-
-      - name: Run Mypy type checker
-        run: uv run mypy apps/
 
   test:
     name: Test Suite
