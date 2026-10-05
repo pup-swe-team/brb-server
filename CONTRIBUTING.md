@@ -15,137 +15,47 @@ Project tracking and sprint boards are managed under the [pup-swe-team GitHub Or
 
 ---
 
+## Which document do I need?
+
+Setup and running instructions live in exactly one place. This guide does not
+repeat them.
+
+| I want to… | Read |
+|---|---|
+| Install, configure, run, test, or debug the project | **[`README.md`](README.md)** — the only place setup is documented |
+| Understand a decision and why it was made | [`docs/DECISIONS.md`](docs/DECISIONS.md) |
+| See the data model | [`docs/COPUP_ERD.md`](docs/COPUP_ERD.md) |
+| See what a sprint ticket requires | [`docs/BRB_BACKEND_SPRINTS.md`](docs/BRB_BACKEND_SPRINTS.md) |
+| Know how this team branches, commits, and reviews | **This file** |
+| Know the SRS domain rules we cannot break | **This file** §5.3 |
+
+> **If setup steps change, change them in `README.md` only.** This file used to
+> carry its own copy of the setup guide, and the two copies drifted apart — it
+> went on instructing people to configure Cloudinary after Cloudinary was
+> deleted. Keeping setup in one place is what stops that recurring.
+
+---
+
 ## Contents
 
-1. [Prerequisites](#1-prerequisites)
-2. [First-Time Setup](#2-first-time-setup)
-3. [Daily Development Workflow](#3-daily-development-workflow)
-4. [Branches and Commits](#4-branches-and-commits)
-5. [Code Quality: Ruff and Local Hooks](#5-code-quality-ruff-and-local-hooks)
-6. [Continuous Integration (CI) and Quality Enforcement](#6-continuous-integration-ci-and-quality-enforcement)
-7. [Coding Standards and BRB Architecture](#7-coding-standards-and-brb-architecture)
-8. [Writing Issues and SRS Traceability](#8-writing-issues-and-srs-traceability)
-9. [Definition of Ready and Done](#9-definition-of-ready-and-done)
-10. [Troubleshooting](#10-troubleshooting)
+1. [Daily Development Workflow](#1-daily-development-workflow)
+2. [Branches and Commits](#2-branches-and-commits)
+3. [Code Quality: Ruff and Local Hooks](#3-code-quality-ruff-and-local-hooks)
+4. [Continuous Integration (CI) and Quality Enforcement](#4-continuous-integration-ci-and-quality-enforcement)
+5. [Coding Standards and BRB Architecture](#5-coding-standards-and-brb-architecture)
+6. [Writing Issues and SRS Traceability](#6-writing-issues-and-srs-traceability)
+7. [Definition of Ready and Done](#7-definition-of-ready-and-done)
+
+Prerequisites, First-Time Setup and Troubleshooting were removed from this file
+and now live in [`README.md`](README.md). AI assistants should read
+[`AGENTS.md`](AGENTS.md) as well.
 
 ---
 
-## 1. Prerequisites
+## 1. Daily Development Workflow
 
-Ensure the following tools are installed on your workstation:
-
-| Tool | Minimum Version | Verification Command | Notes |
-|---|---|---|---|
-| **Git** | 2.40+ | `git --version` | Configured with your PUP student/faculty email |
-| **Python** | 3.12 | `python --version` | Managed via `uv` or system Python |
-| **[uv](https://docs.astral.sh/uv/)** | 0.7+ (Recommended 0.12+) | `uv --version` | Ultra-fast Python package and project manager |
-
-### Operating System & Shell Guidelines
-- **Windows**: Use **Git Bash** or **PowerShell**. Avoid Command Prompt (`cmd.exe`).
-- **macOS / Linux**: Use your standard POSIX terminal (`zsh` or `bash`).
-- Commands throughout this guide are prefixed with `uv run`, which guarantees execution inside the managed virtual environment (`.venv`).
-
----
-
-## 2. First-Time Setup
-
-### 2.1 Clone the Repository
-Clone `brb-server` and navigate into the project directory:
-
-```bash
-git clone git@github.com:pup-swe-team/brb-server.git
-cd brb-server
-git checkout dev
-```
-
-> [!IMPORTANT]
-> Always verify you are branched off **`dev`** before starting work. `main` is reserved for stable production releases.
-
-### 2.2 Install Dependencies with `uv`
-Initialize your virtual environment and install all runtime dependencies and development tools (`ruff`, `pre-commit`):
-
-```bash
-uv sync --dev
-```
-
-This creates `.venv` and locks dependencies in `uv.lock`.
-
-### 2.3 Install Pre-Commit Hooks
-Activate automated git checks to validate staged files locally before every commit:
-
-```bash
-uv run pre-commit install
-```
-
-### 2.4 Configure Local Environment
-Create your local environment file by copying the template:
-
-```bash
-# Git Bash / Linux / macOS:
-cp .env.example .env
-
-# Windows PowerShell:
-Copy-Item .env.example .env
-```
-
-Open `.env` and review the local development values:
-
-| Environment Variable | Local Default | Purpose |
-|---|---|---|
-| `DEBUG` | `True` | Enables Django debug mode and detailed error pages |
-| `SECRET_KEY` | *(Generated dev secret)* | Secret key for cryptographic signing |
-| `ALLOWED_HOSTS` | `localhost,127.0.0.1` | Comma-separated list of allowed host/domain names |
-| `DATABASE_URL` | `sqlite:///db.sqlite3` | Zero-configuration local database (or PostgreSQL connection string for Render parity) |
-| `DATABASE_PASSWORD` | `yourpassword` | Database password when connecting to local or remote PostgreSQL |
-| `JWT_SECRET` | *(Dev JWT secret)* | Key used for signing authentication tokens |
-| `ALLOWED_STUDENT_EMAIL_DOMAIN` | `iskolarngbayan.pup.edu.ph` | Validates student registration domain (SRS FR1, NFR 4.2). Students only — `Alumni` was removed from the project (DECISIONS.md D-15) |
-| `ALLOWED_FACULTY_EMAIL_DOMAIN` | `pup.edu.ph` | Validates faculty/staff registration domain (SRS FR1, NFR 4.2) |
-| `CRON_SECRET_TOKEN` | `local-dev-cron-token-brb` | Bearer token for protected scheduled endpoints (SRS Section 2.4 & 5.2) |
-| `EMAIL_BACKEND` | `django.core.mail.backends.console.EmailBackend` | Dumps verification/reset emails to terminal in local development |
-| `DEFAULT_FROM_EMAIL` | `no-reply@brb.pup.edu.ph` | Default email sender address |
-| `CLOUDINARY_CLOUD_NAME` | *(Your Cloudinary cloud name)* | Cloudinary cloud identifier for media/document uploads |
-| `CLOUDINARY_API_KEY` | *(Your Cloudinary API key)* | Cloudinary API key for storage authentication |
-| `CLOUDINARY_API_SECRET` | *(Your Cloudinary API secret)* | Cloudinary API secret key |
-
-> [!CAUTION]
-> `.env` is ignored by Git. Never commit `.env` or paste real secrets or credentials into issues, pull requests, or chat messages.
-
-### 2.5 Apply Database Migrations
-Initialize the local database schema:
-
-```bash
-uv run python manage.py migrate
-```
-
-### 2.6 Create an Administrator Account
-Create a local superuser to access the Django Admin portal:
-
-```bash
-uv run python manage.py createsuperuser
-```
-
-Provide a name and a PUP webmail address (e.g., `admin@iskolarngbayan.pup.edu.ph` or `admin@pup.edu.ph`).
-
-### 2.7 Verify Setup and Run the Server
-Run Django's system check to confirm there are no configuration issues:
-
-```bash
-uv run python manage.py check
-```
-
-Start the development server:
-
-```bash
-uv run python manage.py runserver
-```
-
-Open your browser to verify:
-- **Django Admin Portal**: [http://127.0.0.1:8000/admin/](http://127.0.0.1:8000/admin/)
-- **API Root / Documentation**: [http://127.0.0.1:8000/api/](http://127.0.0.1:8000/api/)
-
----
-
-## 3. Daily Development Workflow
+> Setup, tooling and troubleshooting are in [`README.md`](README.md). This
+> section covers only the day-to-day loop.
 
 Follow this step-by-step workflow for all contributions:
 
@@ -159,70 +69,70 @@ sequenceDiagram
     participant Repo as Upstream dev Branch
 
     Dev->>Board: Pick issue from "Ready" column & move to "In Progress"
-    Dev->>Local: git checkout dev && git pull origin dev
+    Dev->>Local: git fetch origin && git checkout <integration-branch>
     Dev->>Local: uv sync --dev (ensure dependencies & tools are current)
     Dev->>Local: git checkout -b feature/sprint-<n>_cp<ticket>-<desc>
     Dev->>Local: Write code + unit tests
-    Dev->>Local: Run Ruff (ruff check / ruff format)
-    Dev->>Local: Run tests (uv run python manage.py test)
+    Dev->>Local: Run the four quality gates (see README)
     Dev->>Local: git commit -m "feat(module): description"
-    Dev->>Repo: git pull origin dev (resolve any conflicts)
+    Dev->>Repo: Sync with upstream, resolve conflicts
     Dev->>Repo: git push -u origin feature/sprint-<n>_cp<ticket>-<desc>
-    Dev->>Repo: Open Pull Request against dev
-    CI->>Repo: Run automated checks (Ruff, tests)
+    Dev->>Repo: Open Pull Request against the integration branch
+    CI->>Repo: Run automated checks
     Dev->>Board: Move issue to "In Review"
     Repo-->>Dev: Peer Review & Approval
-    Dev->>Repo: Squash and merge into dev
+    Dev->>Repo: Merge into the integration branch
 ```
+
+> **Ask the lead which branch to base your work on.** It is not always `dev`.
+> During Sprint 1 the integration branch is `test/sprint-1_for-merging`, because
+> CP-106 and CP-107 are still outstanding. `dev` currently holds no feature
+> commits, so branching off it would silently discard your teammates' work.
 
 1. **Pick an Issue**: Select an assigned issue from the **Ready** column on the board. Assign yourself and move it to **In Progress**.
 2. **Sync Dependencies and Branch**:
    ```bash
-   git checkout dev
-   git pull origin dev
+   git fetch origin
+   git checkout test/sprint-1_for-merging   # or dev, once it has been merged
+   git pull origin test/sprint-1_for-merging
    uv sync --dev
    git checkout -b feature/sprint-3_cp504-handover-code
    ```
 3. **Develop in Small Commits**: Write clean code backed by unit tests.
-4. **Run Ruff Linting and Formatting**:
-   ```bash
-   # Linting (detects code errors, dead code, import order):
-   uv run ruff check .
-
-   # Formatting (applies uniform styling):
-   uv run ruff format .
-   ```
-   *If you use `uv run ruff check --fix .`, always inspect `git diff` before staging.*
-5. **Run Automated Tests**:
-   ```bash
-   uv run python manage.py test
-   ```
+4. **Run the quality gates** — the exact commands live in
+   [`README.md` §Quality gates](README.md#quality-gates). Run those four; they
+   are deliberately not duplicated here.
+5. **Migrations are never partial.** Always run the bare
+   `uv run python manage.py migrate`, with no app labels. See §5.2.
 6. **Commit Your Changes**: Follow Conventional Commits format:
    ```bash
    git add <changed-files>
    git commit -m "feat(orders): validate return authentication codes"
    ```
-7. **Rebase or Merge Upstream Changes**:
+7. **Sync Upstream Changes**:
    ```bash
-   git checkout dev
-   git pull origin dev
+   git checkout test/sprint-1_for-merging
+   git pull origin test/sprint-1_for-merging
    git checkout feature/sprint-3_cp504-handover-code
-   git merge dev
+   git merge test/sprint-1_for-merging
    uv run python manage.py test
    ```
 8. **Push and Open a PR**:
    ```bash
    git push -u origin feature/sprint-3_cp504-handover-code
    ```
-   Open a PR targeting the **`dev`** branch. In the PR description, link the issue using `Closes #XX`.
-9. **Peer Review & CI Validation**: CI runs automated checks (Ruff, test suite). Address peer review feedback with additional commits.
-10. **Squash and Merge**: Once approved and all required checks pass, the PR is **squash-merged** into `dev`. Delete the feature branch afterwards.
+   Open a PR targeting the same integration branch you branched from. In the PR
+   description, link the issue using `Closes #XX`.
+9. **Peer Review & CI Validation**: CI runs automated checks. Address peer
+   review feedback with additional commits.
+10. **Merge**: Once approved and all required checks pass, merge into the
+    integration branch. Delete the feature branch afterwards.
 
 ---
 
-## 4. Branches and Commits
+## 2. Branches and Commits
 
-### 4.1 Branch Naming Conventions
+### 2.1 Branch Naming Conventions
 Branch names must be lowercase, hyphen-separated, and prefixed by category.
 
 Every branch that does work on a sprint ticket carries **both** the sprint number and the ticket number, so a branch can be traced back to `docs/BRB_BACKEND_SPRINTS.md` without opening the tracker:
@@ -259,7 +169,7 @@ Some work has no CP ticket: infrastructure, dependency bumps, CI changes, docume
 | `feature/sprint-1_no-ticket-simplejwt-setup` | Prerequisite infrastructure with no ticket |
 | `chore/sprint-0_no-ticket-dependency-bumps` | Maintenance outside any sprint (`sprint-0` = pre-sprint) |
 
-### 4.2 Conventional Commits
+### 2.2 Conventional Commits
 All commit messages and PR titles must adhere to the **Conventional Commits** specification:
 
 ```
@@ -300,11 +210,11 @@ Use the scope corresponding to the functional domain:
 
 ---
 
-## 5. Code Quality: Ruff and Local Hooks
+## 3. Code Quality: Ruff and Local Hooks
 
-Our project relies on **Ruff** for high-speed Python linting and code formatting, and optional local git hooks for rapid feedback before committing.
+Our project relies on **Ruff** for high-speed Python linting and code formatting, and local git hooks for rapid feedback before committing. The commands are listed in [`README.md` §Quality gates](README.md#quality-gates); the policy is below.
 
-### 5.1 Ruff Linting and Formatting
+### 3.1 Ruff Linting and Formatting
 Ruff provides two distinct capabilities: **linting** (`ruff check`) and **formatting** (`ruff format`).
 
 | Tool Command | Purpose | What It Does |
@@ -340,7 +250,7 @@ class UsersConfig(AppConfig):
 
 ---
 
-### 5.2 Local Git Hooks and Pre-Commit
+### 3.2 Local Git Hooks and Pre-Commit
 Pre-commit hooks provide fast local feedback on your machine before a commit is created, preventing unformatted or broken code from entering your local Git history.
 
 - **Fast Local Feedback**: Running checks before committing allows you to detect formatting flaws, unresolved lint errors, and syntax issues immediately, without waiting for remote CI runs.
@@ -365,41 +275,76 @@ Pre-commit hooks provide fast local feedback on your machine before a commit is 
   - `check-yaml`: Validates the syntax of all YAML files.
   - `check-added-large-files`: Prevents accidental commits of large binary files (>500KB).
   - `detect-private-key`: Blocks accidental commits of private cryptographic keys.
-  - `ruff` (`v0.6.9`): Checks staged Python files for lint errors and improper imports.
+  - `ruff` (`v0.6.9`, per `.pre-commit-config.yaml`): Checks staged Python files for lint errors and improper imports.
     - *Intentional Safety Design*: `args: [--fix]` is intentionally **omitted** so that Ruff never automatically deletes Django imports needed for runtime side effects (e.g., signal handlers or model registration).
     - *Migrations Excluded*: Excludes `^apps/.*/migrations/` so that auto-generated Django migration files are not flagged.
   - `ruff-format` (`v0.6.9`): Enforces consistent Python code formatting on staged files (excluding migrations).
 
+> **The hook's Ruff and the project's Ruff are different versions.**
+> `.pre-commit-config.yaml` pins its own isolated `ruff v0.6.9`, while
+> `pyproject.toml` installs a much newer Ruff (0.16.x) for local and CI use.
+> That is why `uv run ruff check .` can report rules the hook never sees. Run the
+> project's own gates — the hook alone is not sufficient.
+>
+> `check-yaml` reports **Skipped** because the repository currently contains no
+> YAML files. Harmless, and worth keeping for when CI config lands.
+
 ---
 
-## 6. Continuous Integration (CI) and Quality Enforcement
+## 4. Continuous Integration (CI) and Quality Enforcement
 
-While local checks and git hooks provide fast personal feedback to individual developers, **GitHub Actions CI is the authoritative verification platform** for the repository.
+Local checks give fast personal feedback; **GitHub Actions CI is the
+authoritative verification platform** because it runs in a clean container.
 
-### 6.1 Intended CI Pipeline Checks
-When pull requests are submitted against the `dev` branch, the CI pipeline is designed to execute the authoritative project checks in a clean environment:
+### 4.1 What CI Actually Runs
 
-| Quality Gate | Tool / Command | Purpose |
+`.github/workflows/ci.yaml` defines exactly two jobs. This is the complete
+list — there is **no** commit-message or PR-title check, contrary to what an
+earlier revision of this guide claimed.
+
+| Job | Step | Purpose |
 |---|---|---|
-| **Linting & Import Order** | `uv run ruff check .` | Verifies code quality, detects programming defects, and checks import sorting |
-| **Code Formatting** | `uv run ruff format --check .` | Verifies that all files conform to the project formatting style |
-| **Automated Test Suite** | `uv run python manage.py test` | Executes the complete Django test suite to guarantee regression stability |
-| **PR & Commit Conventions** | Automated PR title / commit check | Confirms PR title and commits follow the Conventional Commits specification |
+| `quality` | `uv run ruff format --check .` | Formatting is consistent |
+| `quality` | `uv run ruff check .` | No lint errors |
+| `test` | `uv run python manage.py makemigrations --check` | Models and migrations agree |
+| `test` | `uv run python manage.py test` | Test suite passes (CI uses SQLite) |
 
-### 6.2 Merge Requirements and Branch Protection
+Conventional Commits (§2.2) are therefore **enforced by peer review, not by
+automation**. Nothing mechanically rejects a badly-named commit or PR title.
+
+### 4.2 CI Only Runs on Some Branches
+
+```yaml
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+```
+
+A PR from `test/sprint-1_for-merging` — or any `feature/*` branch — triggers
+**no CI run at all**. There is not even a pending "waiting for status" check,
+because no statuses are produced. Practically:
+
+- You cannot rely on CI to tell you a branch is green. Run the gates locally.
+- Nothing mechanically blocks merging a broken branch, so reviewers must check.
+- To get CI on every branch, change `branches:` to `- '**'`, or drop the key
+  entirely (which defaults to all branches).
+
+### 4.3 Merge Requirements and Branch Protection
 It is essential to distinguish between workflow execution and repository merge enforcement:
 
-- **Workflows vs. Branch Protection**: Simply defining or running a GitHub Actions workflow **does not automatically block pull requests from merging**.
+- **Workflow vs. Branch Protection**: Simply defining or running a GitHub Actions workflow **does not automatically block pull requests from merging**.
 - **Required Status Checks**: A failed CI check only becomes a strict, blocking merge barrier when repository administrators configure GitHub **Branch Protection Rules** or **Repository Rulesets** for target branches (`dev` and `main`) and designate specific jobs as **Required Status Checks**.
 - **Intended Quality Standard**: Where branch protection rulesets are not yet configured or enforced in repository settings, all contributors and peer reviewers are expected to treat these checks as mandatory quality gates. Never approve or squash-merge a pull request that has failing test or lint runs.
 
 ---
 
-## 7. Coding Standards and BRB Architecture
+## 5. Coding Standards and BRB Architecture
 
 To maintain clarity, scalability, and maintainability across the team, all backend code must conform to the architectural guidelines below.
 
-### 7.1 Django REST Framework Architecture
+### 5.1 Django REST Framework Architecture
 Organize features by modular Django apps:
 
 ```
@@ -424,9 +369,32 @@ brb_server/
 - **`services.py` / `selectors.py`**: Encapsulate core business logic, complex database queries, atomic transactions, and transitions here.
 - **`views.py` / `viewsets.py`**: Keep views thin. Views must only authenticate, check permissions, invoke services/selectors, and return standard HTTP responses.
 
----
+### 5.2 Migrations are never partial
 
-### 7.2 Non-Negotiable BRB Domain Rules (SRS Compliance)
+Always run the bare command:
+
+```bash
+uv run python manage.py migrate
+```
+
+**Never pass app labels.** Migrating a subset of apps is unsafe in this project,
+and it fails in a way that does not look like a migration problem:
+
+```
+ProgrammingError: relation "listings" does not exist
+```
+
+CP-102's expiry sweep deletes unverified accounts, and Django's delete collector
+walks *every* reverse relation on `User`. All the Sprint 2+ apps hold FKs to
+`AUTH_USER_MODEL`, so with those tables missing, deleting a user crashes. This
+was discovered the hard way, when the shared database was populated Sprint 1
+only. Full rationale in `docs/DECISIONS.md` D-14.
+
+A table existing is not the same as a feature being implemented. The Sprint 2+
+tables are created and empty on purpose; the sprint boundary lives in what we
+implement and test, not in which tables exist.
+
+### 5.3 Non-Negotiable BRB Domain Rules (SRS Compliance)
 
 #### 1. PUP Webmail Domain Validation (FR1, NFR 4.2)
 - Registrations are strictly restricted to PUP webmail addresses:
@@ -442,9 +410,10 @@ brb_server/
 
 #### 3. Identity Verification Privacy (FR3, NFR 4.2)
 - ID pictures and supporting documents submitted during verification are strictly confidential.
-- Stored securely and encrypted at rest.
+- Stored in Postgres as `bytea` (`identity_documents.document_data`). **Cloudinary is removed** — never reintroduce external object storage for documents (D-13).
+- *SRS requires encryption at rest. **Not yet implemented** — that is CP-107, still outstanding. Today the only limit is the 5 MB cap.*
 - **Accessible exclusively to Administrators**. Identity documents must never be served or exposed to Borrowers, Lenders, or unauthenticated users.
-- Every administrative view or download of an identity document must automatically create an immutable entry in the audit log (`FR14`).
+- Every administrative view or download of an identity document must automatically create an immutable entry in the audit log (`FR14`). *The `admin_access_logs` table exists; writing to it is CP-107.*
 
 #### 4. Handover & Return Authentication Codes (FR8, NFR 4.4)
 - **Handover**: Generated for Lender $\rightarrow$ Borrower enters code in app to set order to `Active`.
@@ -461,7 +430,10 @@ brb_server/
 
 #### 6. Scheduled Background Jobs Security (Section 2.4 & 5.2)
 - Order status transitions for **Overdue** and **Unreturned** items are triggered by scheduled webhooks (e.g., `cron-job.org`).
-- **Security Rule**: The background endpoint (e.g., `POST /api/v1/jobs/check-overdue/`) must require a secret token in the `Authorization` header matching `CRON_SECRET_TOKEN`. Unauthenticated requests must be rejected with `401 Unauthorized`.
+- **Security Rule**: a scheduled endpoint must require a secret token in the `Authorization` header matching `CRON_SECRET_TOKEN`. Unauthenticated requests must be rejected with `401 Unauthorized`.
+- **Fail closed**: if `CRON_SECRET_TOKEN` is unset on the server, the endpoint must return `503` and run nothing. Accepting every caller because one env var is missing turns a deployment mistake into an open endpoint.
+- Accept the token bare or as `Bearer <token>`, since cron-job.org can be configured either way.
+- **Existing endpoint**: `POST /api/v1/jobs/deactivate-unverified/` (CP-102, removes accounts that never confirmed their email). The `/jobs/check-overdue/` path named in the sprint doc belongs to CP-506 and does not exist yet. Both use the same shared secret and can share one cron schedule later.
 
 #### 7. Read-Only Administrator Audit Logs (FR14, NFR 4.2)
 - All administrative actions—approving/rejecting IDs, banning users, removing listings, viewing ID files, configuring parameters, and resolving disputes—must be recorded in a read-only audit log table.
@@ -476,22 +448,22 @@ brb_server/
 
 ---
 
-## 8. Writing Issues and SRS Traceability
+## 6. Writing Issues and SRS Traceability
 
 Every piece of work must be tracked as an issue on GitHub and traced back to the [SWE 2 | Group 3 - CoPUP (BRB SRS) - Google Docs](https://docs.google.com/document/d/19IqMZtnkvHDsBknI9umnIGfUrbnB-FxTYbEhW-_3rWE/edit?tab=t.xb7tp8rsiwyr).
 
-### 8.1 Issue Titles and Prefixes
+### 6.1 Issue Titles and Prefixes
 - **User Story**: `[US-XX] <User capability>` (e.g., `[US-04] Lender confirms item return with authentication code`)
 - **Bug Fix**: `[BUG-XX] <Clear failure description>` (e.g., `[BUG-12] Expired borrow requests do not release calendar dates`)
 - **Technical Task**: `[TASK-XX] <Imperative task statement>` (e.g., `[TASK-08] Setup DRF throttle classes for code verification`)
 
-### 8.2 Labeling System
+### 6.2 Labeling System
 Every issue must carry at least three labels:
 1. **`type:`**: `type:feature`, `type:bug`, `type:task`, `type:docs`
 2. **`area:`**: `area:auth`, `area:listings`, `area:orders`, `area:codes`, `area:admin`
 3. **`priority:`**: `priority:high`, `priority:medium`, `priority:low`
 
-### 8.3 Issue Template Structure
+### 6.3 Issue Template Structure
 ```markdown
 ### SRS Traceability
 - **Requirement Reference**: FR8 (Order Scheduling and Confirmation Sequence)
@@ -508,7 +480,7 @@ As a verified Lender, I want to enter the Borrower's return code so that the ite
 
 ---
 
-## 9. Definition of Ready and Done
+## 7. Definition of Ready and Done
 
 ### Definition of Ready (DoR)
 A task is **Ready to Start** when:
@@ -522,26 +494,9 @@ A task is **Done** when:
 - [ ] Every acceptance criterion is covered by automated unit/integration tests referencing the AC ID.
 - [ ] Code passes all `ruff check` (linting) and `ruff format` (formatting) quality checks.
 - [ ] Migrations are generated, tested, and backward-compatible.
-- [ ] All automated CI checks pass cleanly on the pull request.
+- [ ] All automated CI checks pass cleanly on the pull request. *Note: CI only runs on `dev` and `main` (§4.2), so for a feature branch this means running the four gates locally.*
 - [ ] At least one backend peer has approved the PR.
-- [ ] The pull request is squash-merged into `dev`, and the linked issue is closed automatically.
-
----
-
-## 10. Troubleshooting
-
-| Issue / Symptom | Possible Cause | Solution |
-|---|---|---|
-| `uv: command not found` | `uv` is not installed or not in system `PATH` | Install `uv` following [official docs](https://docs.astral.sh/uv/getting-started/installation/) or restart your terminal. |
-| `File ... cannot be loaded because running scripts is disabled` (PowerShell) | Windows PowerShell Execution Policy restricts script execution | Run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned` in PowerShell. |
-| `django.db.utils.OperationalError: no such table` | Unapplied database migrations | Run `uv run python manage.py migrate`. |
-| Port 8000 already in use | Another service is using port 8000 | Run on a different port: `uv run python manage.py runserver 8001`. |
-| Emails are not arriving during testing | `EMAIL_BACKEND` is set to console backend | This is intentional for local testing. Look at the terminal running `runserver`—the verification link or reset token is printed directly to `stdout`. |
-| Ruff flags unused import needed for Django registration | Import is required for module side effects (signals/models) but unused by name | Do not disable `F401` globally. Add an explicit inline exception: `# noqa: F401 - <explanation>`. |
-| `ruff check --fix` changed code unexpectedly | Automated fixer applied an unwanted syntax change | Inspect `git diff`, revert unwanted modifications with `git restore <file>`, and resolve the lint issue manually. |
-| Commit message rejected or flagged | Commit message does not follow Conventional Commits format | Reformat the message: `git commit -m "<type>(<scope>): <description>"`. |
-| Migration conflicts on `dev` pull | Two branches created conflicting migrations | Run `uv run python manage.py makemigrations --merge` and commit the merge migration. |
-| Tests pass locally but fail in CI | Missing dependencies, untracked migration files, or uncommitted changes | Run `uv sync --dev`, verify `git status`, and run `uv run python manage.py makemigrations --check`. |
+- [ ] The pull request is merged into the integration branch, and the linked issue is closed automatically.
 
 ---
 
@@ -550,3 +505,6 @@ If you are blocked or have questions regarding architecture, database schemas, o
 1. Check the [SWE 2 | Group 3 - CoPUP (BRB SRS) - Google Docs](https://docs.google.com/document/d/19IqMZtnkvHDsBknI9umnIGfUrbnB-FxTYbEhW-_3rWE/edit?tab=t.xb7tp8rsiwyr).
 2. Comment directly on your issue or open a discussion thread in the team channel.
 3. Tag the team lead or product owner for resolution.
+
+Setup problems and error messages are covered in
+[`README.md` §Troubleshooting](README.md#troubleshooting).

@@ -53,6 +53,7 @@ contradicts it.
 | D-13 | Identity document bytes are Postgres `bytea`. **Cloudinary is removed.** Never reintroduce external object storage for documents. |
 | D-14 | Full migration set only. |
 | D-15 | `Alumni` removed from the project. |
+| D-16 | `README.md` owns setup. `CONTRIBUTING.md` owns process. Never duplicate setup steps across them. |
 
 ## Scope
 
@@ -101,3 +102,14 @@ uv run pre-commit run --all-files
 
 Record anything non-obvious in `docs/DECISIONS.md` as a new `D-nn` entry, and
 add user-visible changes to `docs/changelog-updating.md`.
+
+## Where documentation goes
+
+Do not duplicate. If you change how someone installs, configures, runs, tests or
+debugs the project, it belongs in `README.md` only (D-16). If it is about how
+the team branches, commits, reviews, or the SRS domain rules, it belongs in
+`CONTRIBUTING.md`. Reasoning and trade-offs go in `docs/DECISIONS.md`; data
+shape in `docs/COPUP_ERD.md`.
+
+Cloudinary was deleted from this project. If you find a document still telling
+someone to configure `CLOUDINARY_*`, correct it rather than following it.

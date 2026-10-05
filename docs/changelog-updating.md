@@ -170,6 +170,44 @@ list view.
 - [ ] Commit and open a PR
 - [ ] Team review of D-07 (sweep deletes rather than deactivates), D-13 (bytea storage) and D-14 (full migration set)
 
+## 2026-10-05 - Documentation restructured (D-16)
+
+`CONTRIBUTING.md` and `README.md` both documented setup, and they had drifted
+into actively misleading guidance. Split by audience, no duplication:
+
+| Document | Owns |
+|---|---|
+| `README.md` | Install, configure, run, test, debug |
+| `CONTRIBUTING.md` | Branch naming, commits, SRS traceability, DoR/DoD, domain rules |
+
+**`CONTRIBUTING.md`** went from 552 to ~490 lines. Prerequisites, First-Time
+Setup and Troubleshooting were deleted (all now in `README.md`), sections were
+renumbered 1–7, and a routing table was added at the top. Factual errors fixed:
+
+- Removed the three `CLOUDINARY_*` rows — Cloudinary was deleted in D-13.
+- Removed the `DATABASE_PASSWORD` row — the password lives inside
+  `DATABASE_URL`, and the standalone variable does nothing.
+- CI section now lists only the four steps that exist in `ci.yaml`. The claimed
+  "PR & Commit Conventions" job never existed.
+- Added §4.2: CI fires on `dev` and `main` only, so a `feature/*` PR gets no CI
+  run at all.
+- Clarified the Ruff version split: pre-commit pins an isolated `v0.6.9` while
+  the project runs `0.16.x`.
+- §5.3 rule 3 no longer claims documents are "encrypted at rest" — that is
+  CP-107 and is not implemented. It now says so.
+- §5.3 rule 6 now names the real `/api/v1/jobs/deactivate-unverified/`
+  endpoint, plus the fail-closed `503` when `CRON_SECRET_TOKEN` is unset.
+- New §5.2: migrations are never partial, with the D-14 failure mode.
+- The daily workflow no longer tells everyone to branch off `dev`, which is
+  currently empty of feature commits.
+
+**`README.md`** gained a Troubleshooting entry for the D-14 partial-migration
+error, the CI branch caveat, the current integration branch name, and a Further
+reading table.
+
+`AGENTS.md` and `docs/DECISIONS.md` (D-16) record the split so AI assistants do
+not reintroduce duplication.
+
 **Closed on 2026-10-05:**
 
 - [x] Rotate the Render database password that was pasted into chat

@@ -398,6 +398,40 @@ serializer or test is claimed by this pass, and every Sprint 2+ table is empty.
 real cascades and must be revisited every sprint); switching CP-102 to a soft
 delete (breaks the email-reuse requirement that motivated D-07).
 
+### D-16 - README is the single source of truth for setup
+
+**Problem:** `CONTRIBUTING.md` (552 lines) and `README.md` (224 lines) both
+documented setup. They drifted, and the drift was actively harmful: after
+Cloudinary was deleted in D-13, `CONTRIBUTING.md` still instructed new
+contributors to set `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY` and
+`CLOUDINARY_API_SECRET`. It also described a CI commit-message gate that does
+not exist, an encryption guarantee that was never implemented, and a scheduled
+endpoint path that does not exist yet.
+
+**Decision:** Split by audience, and never duplicate.
+
+| Document | Owns |
+|---|---|
+| `README.md` | Install, configure, run, test, debug. Everything operational. |
+| `CONTRIBUTING.md` | Branch naming, commit conventions, SRS traceability, DoR/DoD, domain rules. Everything process. |
+
+`CONTRIBUTING.md` was reduced from 552 to ~490 lines by deleting Prerequisites,
+First-Time Setup and Troubleshooting, and now opens with a routing table
+telling readers which file answers what. Setup instructions exist in exactly one
+place.
+
+**Rejected:** moving `CONTRIBUTING.md` into `docs/` — GitHub only surfaces the
+root `CONTRIBUTING.md`, and the contribution guide UI would break. Merging
+everything into `README.md` — the two have different readers (anyone cloning
+vs. a teammate joining a sprint) and different update cadences.
+
+**Also corrected in `CONTRIBUTING.md`:** the Ruff version note (pre-commit pins
+its own isolated `v0.6.9` while the project runs `0.16.x`); the CI section now
+lists only the four steps that actually exist and warns that CI fires on `dev`
+and `main` only; §5.3 rule 3 now says encryption-at-rest is **not** implemented
+(CP-107) instead of claiming it is; §5.3 rule 6 now names the real
+`/api/v1/jobs/deactivate-unverified/` endpoint and the fail-closed `503`.
+
 ### D-15 - `Alumni` is removed from the project, permanently
 
 **Decision (lead, 2026-10-05):** `Alumni` is out of scope. `users.affiliation`

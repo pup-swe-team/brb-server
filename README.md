@@ -190,7 +190,10 @@ Or let pre-commit do it:
 uv run pre-commit run --all-files
 ```
 
-The same four gates run in CI on every push.
+CI runs these same four checks — but **only on `dev` and `main`**
+(`.github/workflows/ci.yaml`). A PR from a `feature/*` or `test/*` branch
+triggers no CI run at all, so run the gates locally. Details in
+`CONTRIBUTING.md` §4.2.
 
 ---
 
@@ -198,7 +201,10 @@ The same four gates run in CI on every push.
 
 1. **Read the ticket's acceptance criteria** in `docs/BRB_BACKEND_SPRINTS.md` and
    tick the boxes as you verify each one.
-2. **Branch with the team convention** (see `CONTRIBUTING.md` §4.1):
+2. **Ask the lead which branch to base your work on.** It is not always `dev` —
+   during Sprint 1 it is `test/sprint-1_for-merging`, because CP-106 and CP-107
+   are outstanding. Branch with the team convention
+   (see `CONTRIBUTING.md` §2.1):
 
    ```
    feature/sprint-<n>_cp<ticket>-<short-description>
@@ -302,9 +308,41 @@ You are pointed at the shared database. See the SQLite override above.
 **Email link does not arrive**
 Console backend prints to the terminal running `runserver`, not to an inbox.
 
+**`ProgrammingError: relation "listings" does not exist`**
+You ran a *partial* migration — passing app labels to `migrate`. Every app in
+this project must be migrated together, because deleting a `User` walks reverse
+relations across all of them. Run the bare `uv run python manage.py migrate`.
+Full explanation in `docs/DECISIONS.md` D-14.
+
+**`uv: command not found`**
+Install `uv`, or restart your terminal so `PATH` picks it up.
+
+**PowerShell: "running scripts is disabled"**
+`Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned`
+
+**Port 8000 already in use**
+`uv run python manage.py runserver 8001`
+
+**Migration conflicts after pulling**
+Two branches created conflicting migrations:
+`uv run python manage.py makemigrations --merge`
+
+**Tests pass locally but fail in CI**
+Usually untracked migration files. Run `uv sync --dev`, check `git status`, then
+`uv run python manage.py makemigrations --check`.
+
 ---
 
 ## Further reading
+
+| Document | What it answers |
+|---|---|
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | How this team branches, commits, reviews, and the SRS rules we cannot break |
+| [`AGENTS.md`](AGENTS.md) | Standing decisions for AI coding assistants |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | Why each architectural decision was made (D-01 onward) |
+| [`docs/COPUP_ERD.md`](docs/COPUP_ERD.md) | The data model, per domain |
+| [`docs/BRB_BACKEND_SPRINTS.md`](docs/BRB_BACKEND_SPRINTS.md) | Ticket scope and acceptance criteria |
+| [`docs/changelog-updating.md`](docs/changelog-updating.md) | Chronological record of what changed |
 
 - `CONTRIBUTING.md` — conventions, quality gates, branch naming
 - `docs/BRB_BACKEND_SPRINTS.md` — tickets and acceptance criteria
