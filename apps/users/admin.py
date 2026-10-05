@@ -1,4 +1,8 @@
 from django.contrib import admin
+from django.urls import reverse
+from django.utils.html import format_html
+
+from apps.audit.services import log_admin_document_access
 
 from .models import IdentityDocument, IdentityDocumentStatus, IdentityDocumentType
 
@@ -29,19 +33,14 @@ class IdentityDocumentStatusAdmin(admin.ModelAdmin):
 @admin.register(IdentityDocument)
 class IdentityDocumentAdmin(admin.ModelAdmin):
     """
-    Administrator-only view of submitted identity documents (FR3).
+    Administrator-only view of submitted identity documents (FR3, FR14, NFR 4.2).
 
-    This is the *only* surface that may expose the document itself. The mobile
-    API deliberately omits `document_data` from every response, so a reviewer has
-    to come here to see what was actually uploaded.
-
-    Note for whoever picks up CP-107: this admin is not yet the audited,
-    encrypted-at-rest document store the ticket asks for. Access is not yet logged
-    to `AdminAccessLog`, and the bytes are not application-level encrypted.
+    Raw document bytes are stored encrypted at rest (CP-107).
+    Viewing an identity document record or downloading its bytes is logged to
+    AdminAccessLog (FR14). The raw blob is omitted from list display and detail
+    fields in favor of a secure, logged download link.
     """
 
-    # `document_data` is intentionally absent from list_display: listing a 5MB
-    # blob per row would make the changelist unusable.
     list_display = (
         "id",
         "user",
@@ -59,7 +58,7 @@ class IdentityDocumentAdmin(admin.ModelAdmin):
         "user",
         "document_type",
         "id_number",
-        "document_data",
+        "download_link",
         "status",
         "name_on_document",
         "has_profile_mismatch",
@@ -73,6 +72,17 @@ class IdentityDocumentAdmin(admin.ModelAdmin):
     date_hierarchy = "submitted_at"
     actions = ("approve_selected_documents",)
 
+    def change_view(self, request, object_id, form_url="", extra_context=None):
+        document = self.get_object(request, object_id)
+        if document is not None:
+            log_admin_document_access(
+                document=document,
+                admin=request.user,
+                action="view",
+                request=request,
+            )
+        return super().change_view(request, object_id, form_url, extra_context)
+
     @admin.action(description="Approve selected identity documents")
     def approve_selected_documents(self, request, queryset):
         from .services import review_identity_document
@@ -83,6 +93,7 @@ class IdentityDocumentAdmin(admin.ModelAdmin):
                 document=doc,
                 reviewer=request.user,
                 action="approve",
+                request=request,
             )
             count += 1
         self.message_user(request, f"Approved {count} identity document(s).")
@@ -101,6 +112,19 @@ class IdentityDocumentAdmin(admin.ModelAdmin):
         data = obj.document_data
         size = len(bytes(data)) if data else 0
         return f"{size:,} bytes"
+
+    @admin.display(description="Download Document")
+    def download_link(self, obj: IdentityDocument):
+        if not obj or not obj.pk or not obj.document_data:
+            return "No document uploaded"
+        url = reverse("identity-document-download", args=[obj.pk])
+        size = len(bytes(obj.document_data))
+        size_str = f"{size:,} bytes"
+        return format_html(
+            '<a href="{}" target="_blank">Download Document ({})</a>',
+            url,
+            size_str,
+        )
 
 
 admin.site.register(IdentityDocumentType, IdentityDocumentTypeAdmin)

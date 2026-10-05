@@ -30,6 +30,7 @@ from .constants import (
     PHILIPPINES_MOBILE_REGEX,
     normalize_name,
 )
+from .encryption import encrypt_document_data
 from .models import (
     IdentityDocument,
     IdentityDocumentStatus,
@@ -331,7 +332,8 @@ class IdentityDocumentSubmissionSerializer(serializers.Serializer):
             # The upload was already validated for type and size by
             # `document_file`; read it into the row rather than handing it to a
             # storage backend (see IdentityDocument.document_data).
-            document_data=attrs["document_file"].read(),
+            # CP-107: store encrypted at rest.
+            document_data=encrypt_document_data(attrs["document_file"].read()),
             status=pending_status,
             name_on_document=attrs["name_on_document"].strip(),
             has_profile_mismatch=has_mismatch,
@@ -606,3 +608,15 @@ class LogoutSerializer(serializers.Serializer):
                 self.error_messages["invalid_token"], code="invalid_token"
             )
         return {}
+
+
+class IdentityDocumentOwnerInfoSerializer(serializers.ModelSerializer):
+    """
+    Release name and contact details of a document owner (CP-107, FR3).
+    Omits document_data, id_number, and sensitive auth fields.
+    """
+
+    class Meta:
+        model = User
+        fields = ("id", "full_name", "email", "contact_number", "affiliation")
+        read_only_fields = fields

@@ -1,14 +1,21 @@
 import logging
 
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from rest_framework import permissions, status
+from rest_framework.authentication import SessionAuthentication
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.authentication import JWTAuthentication
 
+from apps.audit.services import log_admin_document_access
+
+from .encryption import decrypt_document_data
 from .models import IdentityDocument
 from .serializers import (
     EmailVerificationSerializer,
+    IdentityDocumentOwnerInfoSerializer,
     IdentityDocumentResponseSerializer,
     IdentityDocumentReviewSerializer,
     IdentityDocumentSubmissionSerializer,
@@ -240,6 +247,7 @@ class IdentityDocumentReviewView(APIView):
             reviewer=request.user,
             action=serializer.validated_data["action"],
             rejection_reason=serializer.validated_data.get("rejection_reason", ""),
+            request=request,
         )
 
         return Response(
@@ -249,3 +257,97 @@ class IdentityDocumentReviewView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class IdentityDocumentDownloadView(APIView):
+    """
+    Secure document download for Administrators only (CP-107, FR3, NFR 4.2).
+    GET /api/v1/identity/documents/<int:pk>/download/
+
+    Requires administrator authority (request.user.is_staff is True per D-03).
+    Supports both JWTAuthentication and SessionAuthentication so links clicked
+    from the Django Admin browser interface work smoothly.
+    Decrypts the stored document bytes and logs the access with IP to AdminAccessLog.
+    """
+
+    authentication_classes = (
+        JWTAuthentication,
+        SessionAuthentication,
+    )
+    permission_classes = (permissions.IsAdminUser,)
+
+    def get(self, request: Request, pk: int) -> HttpResponse | Response:
+        document = get_object_or_404(
+            IdentityDocument.objects.select_related("user"),
+            pk=pk,
+        )
+
+        if not document.document_data:
+            return Response(
+                {"detail": "No document content found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        log_admin_document_access(
+            document=document,
+            admin=request.user,
+            action="download",
+            request=request,
+        )
+
+        raw_bytes = decrypt_document_data(document.document_data)
+
+        # Infer content type from signature
+        content_type = "application/octet-stream"
+        ext = ".bin"
+        if raw_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+            content_type = "image/png"
+            ext = ".png"
+        elif raw_bytes.startswith(b"\xff\xd8\xff"):
+            content_type = "image/jpeg"
+            ext = ".jpg"
+        elif raw_bytes.startswith(b"%PDF"):
+            content_type = "application/pdf"
+            ext = ".pdf"
+
+        filename = f"identity_doc_{document.id}_{document.id_number}{ext}"
+        response = HttpResponse(raw_bytes, content_type=content_type)
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        response["Content-Length"] = len(raw_bytes)
+        return response
+
+
+class IdentityDocumentOwnerInfoView(APIView):
+    """
+    Release name and contact details of a document owner (CP-107, FR3).
+    GET /api/v1/identity/documents/<int:pk>/owner-info/
+
+    Requires administrator authority (request.user.is_staff is True per D-03).
+    Returns only the user's full_name, email, contact_number, and affiliation.
+    Never includes document_data or id_number.
+    Logs the access to AdminAccessLog (action='contact_release').
+    """
+
+    authentication_classes = (
+        JWTAuthentication,
+        SessionAuthentication,
+    )
+    permission_classes = (permissions.IsAdminUser,)
+
+    def get(self, request: Request, pk: int) -> Response:
+        document = get_object_or_404(
+            IdentityDocument.objects.select_related("user"),
+            pk=pk,
+        )
+
+        log_admin_document_access(
+            document=document,
+            admin=request.user,
+            action="contact_release",
+            request=request,
+        )
+
+        serializer = IdentityDocumentOwnerInfoSerializer(
+            document.user, context={"request": request}
+        )
+        return Response(serializer.data, status=status.HTTP_200_OK)

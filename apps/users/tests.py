@@ -2,9 +2,11 @@ from datetime import timedelta
 from unittest import mock
 from urllib.parse import parse_qs
 
+from cryptography.fernet import Fernet, InvalidToken
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core import mail
+from django.core.exceptions import ImproperlyConfigured
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from django.urls import reverse
@@ -12,8 +14,10 @@ from django.utils import timezone
 from rest_framework import serializers, status
 from rest_framework.test import APITestCase
 
+from apps.audit.models import AdminAccessLog
 from apps.core.models import SystemConfig
 
+from .encryption import decrypt_document_data, encrypt_document_data
 from .models import IdentityDocument, IdentityDocumentStatus, IdentityDocumentType
 from .permissions import IsIdentityVerified
 from .serializers import IdentityDocumentSubmissionSerializer
@@ -277,6 +281,8 @@ def make_user(
     verified: bool = True,
     account_status: str | None = None,
     age_days: int = 0,
+    is_staff: bool = False,
+    contact_number: str = "09171234567",
 ) -> User:
     """
     Create a user directly, bypassing the registration endpoint.
@@ -289,7 +295,7 @@ def make_user(
         email=email,
         password=password,
         full_name=full_name,
-        contact_number="09171234567",
+        contact_number=contact_number,
         affiliation=affiliation or User.AffiliationChoices.STUDENT,
     )
 
@@ -302,6 +308,9 @@ def make_user(
 
     if account_status is not None:
         user.account_status = account_status
+
+    if is_staff:
+        user.is_staff = True
 
     if age_days:
         # created_at is auto_now_add, so it has to be written after the insert.
@@ -1553,7 +1562,7 @@ class IdentityDocumentAdminTests(APITestCase):
             "user",
             "document_type",
             "id_number",
-            "document_data",
+            "download_link",
             "name_on_document",
         ):
             self.assertIn(field, readonly)
@@ -1793,3 +1802,381 @@ class IdentityDocumentReviewTests(APITestCase):
         self.assertEqual(self.document.status.name, "approved")
         self.assertEqual(self.document.reviewed_by, self.admin)
         self.assertIsNotNone(self.document.reviewed_at)
+
+
+# ---------------------------------------------------------------------------
+# CP-107 — Document protection, encryption at rest, and audit logging
+# ---------------------------------------------------------------------------
+
+
+class IdentityDocumentEncryptionTests(APITestCase):
+    """
+    CP-107 / FR3 / NFR 4.2: Fernet symmetric encryption for document bytes at rest.
+    """
+
+    def setUp(self) -> None:
+        self.key = Fernet.generate_key().decode()
+
+    def test_encrypt_decrypt_round_trip(self) -> None:
+        """Data encrypted with configured key decrypts back to original bytes."""
+        with override_settings(IDENTITY_DOCUMENT_ENCRYPTION_KEY=self.key):
+            encrypted = encrypt_document_data(PNG_BYTES)
+            self.assertNotEqual(encrypted, PNG_BYTES)
+            self.assertTrue(encrypted.startswith(b"gAAAAA"))
+            decrypted = decrypt_document_data(encrypted)
+            self.assertEqual(decrypted, PNG_BYTES)
+
+    def test_tampered_ciphertext_raises_invalid_token(self) -> None:
+        """Tampered bytes are detected and raise InvalidToken."""
+        with override_settings(IDENTITY_DOCUMENT_ENCRYPTION_KEY=self.key):
+            encrypted = bytearray(encrypt_document_data(PNG_BYTES))
+            encrypted[-5] ^= 0xFF
+            with self.assertRaises(InvalidToken):
+                decrypt_document_data(bytes(encrypted))
+
+    def test_decrypt_with_wrong_key_raises_invalid_token(self) -> None:
+        """Decrypting with a different key raises InvalidToken."""
+        other_key = Fernet.generate_key().decode()
+        with override_settings(IDENTITY_DOCUMENT_ENCRYPTION_KEY=self.key):
+            encrypted = encrypt_document_data(PNG_BYTES)
+        with (
+            override_settings(IDENTITY_DOCUMENT_ENCRYPTION_KEY=other_key),
+            self.assertRaises(InvalidToken),
+        ):
+            decrypt_document_data(encrypted)
+
+    def test_empty_or_none_bytes_pass_through_cleanly(self) -> None:
+        """Empty inputs return empty bytes."""
+        with override_settings(IDENTITY_DOCUMENT_ENCRYPTION_KEY=self.key):
+            self.assertEqual(encrypt_document_data(b""), b"")
+            self.assertEqual(encrypt_document_data(None), b"")
+            self.assertEqual(decrypt_document_data(b""), b"")
+            self.assertEqual(decrypt_document_data(None), b"")
+
+    def test_no_key_in_dev_test_passes_through_plaintext(self) -> None:
+        """When key is unconfigured in development/test, bytes pass through."""
+        with override_settings(IDENTITY_DOCUMENT_ENCRYPTION_KEY="", DEBUG=True):
+            self.assertEqual(encrypt_document_data(PNG_BYTES), PNG_BYTES)
+            self.assertEqual(decrypt_document_data(PNG_BYTES), PNG_BYTES)
+
+    def test_missing_key_in_production_fails_closed(self) -> None:
+        """In production (DEBUG=False, non-sqlite DB) unset key raises ImproperlyConfigured."""
+        with (
+            override_settings(
+                IDENTITY_DOCUMENT_ENCRYPTION_KEY="",
+                DEBUG=False,
+                DATABASES={"default": {"ENGINE": "django.db.backends.postgresql"}},
+            ),
+            self.assertRaises(ImproperlyConfigured),
+        ):
+            encrypt_document_data(PNG_BYTES)
+
+    def test_invalid_key_raises_improperly_configured(self) -> None:
+        """A malformed encryption key raises ImproperlyConfigured."""
+        with (
+            override_settings(IDENTITY_DOCUMENT_ENCRYPTION_KEY="not-a-fernet-key"),
+            self.assertRaises(ImproperlyConfigured),
+        ):
+            encrypt_document_data(PNG_BYTES)
+
+
+@in_memory_storage
+class IdentityDocumentSubmissionEncryptionTests(APITestCase):
+    """
+    CP-107: Verification that document submission stores encrypted ciphertext in DB.
+    """
+
+    def setUp(self) -> None:
+        self.key = Fernet.generate_key().decode()
+        self.submit_url = reverse("identity-document-submit")
+        self.user = make_user("encrypted-submitter@iskolarngbayan.pup.edu.ph")
+        self.client.force_authenticate(self.user)
+
+    def test_submission_stores_encrypted_bytes_when_key_configured(self) -> None:
+        with override_settings(IDENTITY_DOCUMENT_ENCRYPTION_KEY=self.key):
+            payload = {
+                "document_type": "pup_id",
+                "id_number": "2024-99991",
+                "name_on_document": "Juan Dela Cruz",
+                "document_file": png_upload(),
+                "consent_given": "true",
+            }
+            response = self.client.post(self.submit_url, payload, format="multipart")
+            self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+            doc = IdentityDocument.objects.get(user=self.user)
+            raw_stored = bytes(doc.document_data)
+            self.assertNotEqual(raw_stored, PNG_BYTES)
+            self.assertTrue(raw_stored.startswith(b"gAAAAA"))
+            self.assertEqual(decrypt_document_data(raw_stored), PNG_BYTES)
+
+
+class IdentityDocumentDownloadTests(APITestCase):
+    """
+    CP-107: Secure document download endpoint (admin-only, logged).
+    GET /api/v1/identity/documents/<pk>/download/
+    """
+
+    def setUp(self) -> None:
+        self.key = Fernet.generate_key().decode()
+        self.admin = make_user(
+            "admin-doc-viewer@iskolarngbayan.pup.edu.ph", is_staff=True
+        )
+        self.regular_user = make_user("regular-user@iskolarngbayan.pup.edu.ph")
+        self.owner = make_user("owner@iskolarngbayan.pup.edu.ph")
+
+        with override_settings(IDENTITY_DOCUMENT_ENCRYPTION_KEY=self.key):
+            encrypted_data = encrypt_document_data(PNG_BYTES)
+
+        self.document = IdentityDocument.objects.create(
+            user=self.owner,
+            document_type=IdentityDocumentType.objects.get(name="pup_id"),
+            id_number="2024-88888",
+            document_data=encrypted_data,
+            status=IdentityDocumentStatus.objects.get(name="pending"),
+        )
+        self.url = reverse("identity-document-download", args=[self.document.pk])
+
+    def test_admin_can_download_and_decrypts_document(self) -> None:
+        """Admin receives the original plaintext bytes with proper content headers."""
+        self.client.force_authenticate(self.admin)
+        with override_settings(IDENTITY_DOCUMENT_ENCRYPTION_KEY=self.key):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.content, PNG_BYTES)
+        self.assertEqual(response["Content-Type"], "image/png")
+        self.assertIn("attachment;", response["Content-Disposition"])
+        self.assertIn("2024-88888", response["Content-Disposition"])
+
+    def test_download_supports_session_authentication(self) -> None:
+        """Admin authenticated via session (e.g. Django Admin browser) can download."""
+        self.client.force_login(self.admin)
+        with override_settings(IDENTITY_DOCUMENT_ENCRYPTION_KEY=self.key):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.content, PNG_BYTES)
+
+    def test_download_content_type_detection(self) -> None:
+        """MIME type is detected from file signatures (JPEG, PDF)."""
+        with override_settings(IDENTITY_DOCUMENT_ENCRYPTION_KEY=self.key):
+            doc_jpg = IdentityDocument.objects.create(
+                user=self.owner,
+                document_type=IdentityDocumentType.objects.get(name="government_id"),
+                id_number="2024-88889",
+                document_data=encrypt_document_data(b"\xff\xd8\xff\xe0\x00\x10JFIF"),
+                status=IdentityDocumentStatus.objects.get(name="pending"),
+            )
+        url_jpg = reverse("identity-document-download", args=[doc_jpg.pk])
+        self.client.force_authenticate(self.admin)
+        with override_settings(IDENTITY_DOCUMENT_ENCRYPTION_KEY=self.key):
+            res = self.client.get(url_jpg)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res["Content-Type"], "image/jpeg")
+
+    def test_download_creates_audit_log_entry(self) -> None:
+        """Admin download creates an immutable AdminAccessLog row with action='download'."""
+        self.client.force_authenticate(self.admin)
+        with override_settings(IDENTITY_DOCUMENT_ENCRYPTION_KEY=self.key):
+            response = self.client.get(self.url, REMOTE_ADDR="198.51.100.42")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        log = AdminAccessLog.objects.filter(
+            document=self.document, admin=self.admin
+        ).first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.action, "download")
+        self.assertEqual(log.ip_address, "198.51.100.42")
+
+    def test_non_admin_cannot_download_document(self) -> None:
+        """Regular authenticated user gets 403 Forbidden."""
+        self.client.force_authenticate(self.regular_user)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(AdminAccessLog.objects.filter(document=self.document).exists())
+
+    def test_document_owner_cannot_download_via_admin_endpoint(self) -> None:
+        """Even the owner of the document cannot access the admin download endpoint."""
+        self.client.force_authenticate(self.owner)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unauthenticated_cannot_download(self) -> None:
+        """Anonymous caller gets 401 Unauthorized."""
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_non_existent_document_returns_404(self) -> None:
+        """Request for non-existent pk returns 404."""
+        self.client.force_authenticate(self.admin)
+        missing_url = reverse("identity-document-download", args=[999999])
+        response = self.client.get(missing_url)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_document_without_data_returns_404(self) -> None:
+        """Document with empty document_data returns 404."""
+        empty_doc = IdentityDocument.objects.create(
+            user=self.regular_user,
+            document_type=IdentityDocumentType.objects.get(name="pup_id"),
+            id_number="2024-00000",
+            document_data=b"",
+            status=IdentityDocumentStatus.objects.get(name="pending"),
+        )
+        url = reverse("identity-document-download", args=[empty_doc.pk])
+        self.client.force_authenticate(self.admin)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class IdentityDocumentOwnerInfoTests(APITestCase):
+    """
+    CP-107: Admin-mediated contact release endpoint (FR3).
+    GET /api/v1/identity/documents/<pk>/owner-info/
+    """
+
+    def setUp(self) -> None:
+        self.admin = make_user("admin-contact@iskolarngbayan.pup.edu.ph", is_staff=True)
+        self.regular_user = make_user("regular-user2@iskolarngbayan.pup.edu.ph")
+        self.owner = make_user(
+            "owner2@iskolarngbayan.pup.edu.ph",
+            full_name="Maria Santos",
+            contact_number="09171234567",
+        )
+        self.document = IdentityDocument.objects.create(
+            user=self.owner,
+            document_type=IdentityDocumentType.objects.get(name="pup_id"),
+            id_number="2024-77777",
+            document_data=b"secret-bytes",
+            status=IdentityDocumentStatus.objects.get(name="approved"),
+        )
+        self.url = reverse("identity-document-owner-info", args=[self.document.pk])
+
+    def test_admin_can_retrieve_owner_contact_info(self) -> None:
+        """Admin receives owner's name and contact details, never document or ID number."""
+        self.client.force_authenticate(self.admin)
+        response = self.client.get(self.url, REMOTE_ADDR="203.0.113.195")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["full_name"], "Maria Santos")
+        self.assertEqual(response.data["email"], "owner2@iskolarngbayan.pup.edu.ph")
+        self.assertEqual(response.data["contact_number"], "09171234567")
+        self.assertEqual(response.data["affiliation"], "Student")
+
+        # Confidential / auth fields must never be exposed
+        self.assertNotIn("document_data", response.data)
+        self.assertNotIn("id_number", response.data)
+        self.assertNotIn("password", response.data)
+
+        log = AdminAccessLog.objects.filter(
+            document=self.document, admin=self.admin, action="contact_release"
+        ).first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.ip_address, "203.0.113.195")
+
+    def test_non_admin_cannot_access_owner_info(self) -> None:
+        """Regular users cannot access owner info."""
+        self.client.force_authenticate(self.regular_user)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unauthenticated_cannot_access_owner_info(self) -> None:
+        """Anonymous callers get 401."""
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class AdminAccessLogTests(APITestCase):
+    """
+    CP-107 / FR14: Audit logging of administrative access to identity documents.
+    """
+
+    def setUp(self) -> None:
+        self.admin = make_user("admin-audit@iskolarngbayan.pup.edu.ph", is_staff=True)
+        self.submitter = make_user("submitter-audit@iskolarngbayan.pup.edu.ph")
+        self.document = IdentityDocument.objects.create(
+            user=self.submitter,
+            document_type=IdentityDocumentType.objects.get(name="pup_id"),
+            id_number="2024-33333",
+            document_data=PNG_BYTES,
+            status=IdentityDocumentStatus.objects.get(name="pending"),
+        )
+
+    def test_review_endpoint_creates_audit_log(self) -> None:
+        """Calling the review endpoint records an AdminAccessLog with action='review'."""
+        self.client.force_authenticate(self.admin)
+        url = reverse("identity-document-review", args=[self.document.pk])
+        response = self.client.post(
+            url,
+            {"action": "approve"},
+            REMOTE_ADDR="192.0.2.1",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        log = AdminAccessLog.objects.filter(
+            document=self.document, admin=self.admin, action="review"
+        ).first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.ip_address, "192.0.2.1")
+
+    def test_django_admin_change_view_creates_audit_log(self) -> None:
+        """Opening document detail in Django Admin logs an action='view'."""
+        from django.contrib import admin
+        from django.test import RequestFactory
+
+        model_admin = admin.site._registry[IdentityDocument]
+        request = RequestFactory().get(
+            f"/admin/users/identitydocument/{self.document.pk}/change/"
+        )
+        request.user = self.admin
+        request.META["REMOTE_ADDR"] = "192.0.2.100"
+
+        with (
+            mock.patch.object(model_admin, "get_object", return_value=self.document),
+            mock.patch(
+                "django.contrib.admin.ModelAdmin.change_view",
+                return_value=mock.MagicMock(),
+            ),
+        ):
+            model_admin.change_view(request, str(self.document.pk))
+
+        log = AdminAccessLog.objects.filter(
+            document=self.document, admin=self.admin, action="view"
+        ).first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.ip_address, "192.0.2.100")
+
+    def test_admin_download_link_renders_html_link(self) -> None:
+        """download_link on IdentityDocumentAdmin produces expected HTML anchor."""
+        from django.contrib import admin
+
+        model_admin = admin.site._registry[IdentityDocument]
+        html = model_admin.download_link(self.document)
+        self.assertIn("Download Document", str(html))
+        self.assertIn(
+            f"/api/v1/identity/documents/{self.document.pk}/download/", str(html)
+        )
+
+    def test_admin_access_log_admin_is_immutable(self) -> None:
+        """AdminAccessLogAdmin blocks add, change, and delete operations."""
+        from django.contrib import admin
+
+        model_admin = admin.site._registry[AdminAccessLog]
+        request = _request_for(self.admin)
+
+        self.assertFalse(model_admin.has_add_permission(request))
+        self.assertFalse(model_admin.has_change_permission(request))
+        self.assertFalse(model_admin.has_delete_permission(request))
+
+    def test_admin_access_log_model_str(self) -> None:
+        """String representation of access log is human readable."""
+        log = AdminAccessLog.objects.create(
+            document=self.document,
+            admin=self.admin,
+            action="view",
+            ip_address="127.0.0.1",
+        )
+        s = str(log)
+        self.assertIn("View", s)
+        self.assertIn(str(self.document.id), s)
+        self.assertIn(self.admin.full_name, s)

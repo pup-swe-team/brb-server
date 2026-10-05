@@ -15,6 +15,27 @@ Related documents:
 | `docs/DECISIONS.md` | Decisions and their rationale |
 | `docs/changelog-updating.md` | **This file** — what changed |
 
+## 2026-10-06 — Protect and log access to identity documents (CP-107)
+
+Branch: `feature/sprint-1_cp107-identity-document-protection`.
+
+### Added
+
+- `cryptography` dependency for Fernet symmetric authenticated encryption.
+- `IDENTITY_DOCUMENT_ENCRYPTION_KEY` setting in `brb_server/settings.py` (documented in `.env.example` and `README.md`).
+- `apps/users/encryption.py`: `encrypt_document_data()`, `decrypt_document_data()`, and `get_fernet()` with fail-closed behavior in production.
+- `apps/users/migrations/0005_encrypt_existing_documents.py`: data migration encrypting existing identity documents at rest.
+- `apps/audit/models.py`: Added `action` and `ip_address` fields to `AdminAccessLog`.
+- `apps/audit/migrations/0003_alter_adminaccesslog_options_adminaccesslog_action_and_more.py`: schema migration for audit fields.
+- `apps/audit/services.py`: `log_admin_document_access()` and `get_client_ip()` helpers for FR14 audit compliance.
+- `apps/audit/admin.py`: Read-only `AdminAccessLogAdmin` enforcing immutability.
+- `GET /api/v1/identity/documents/<int:pk>/download/`: Administrator-only secure download endpoint that decrypts document bytes, detects MIME type, and logs access with IP (supports both JWT and Session auth).
+- `GET /api/v1/identity/documents/<int:pk>/owner-info/`: Administrator-mediated contact release endpoint that releases only owner name and contact details, never documents or ID numbers.
+- `apps/users/admin.py`: Removed raw `document_data` display; added `download_link` and audit logging on `change_view()`.
+- `apps/users/tests.py`: 25 new tests across 5 test classes (`IdentityDocumentEncryptionTests`, `IdentityDocumentSubmissionEncryptionTests`, `IdentityDocumentDownloadTests`, `IdentityDocumentOwnerInfoTests`, `AdminAccessLogTests`).
+
+---
+
 ## 2026-10-06 — Admin review of identity verification (CP-106)
 
 Branch: `feature/sprint-1_cp106-admin-identity-review`.

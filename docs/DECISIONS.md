@@ -532,3 +532,23 @@ Branch: `feature/sprint-1_cp106-admin-identity-review`.
 4. Notifications are dual-channel: an immutable in-app `Notification` with type `verification_result` is recorded in the transaction, and an email notification is dispatched outside the transaction with mail server errors caught and logged so SMTP issues do not abort the review.
 5. Approval immediately activates `user.has_verified_identity()`, satisfying the `IsIdentityVerified` permission gate. Rejection preserves the `rejection_reason` and enables the user to submit a fresh document.
 6. A batch action `approve_selected_documents` is registered on `IdentityDocumentAdmin` to support bulk approval directly in `/admin/`.
+
+---
+
+## 2026-10-06 — Identity Document Protection & Access Logging (CP-107)
+
+Branch: `feature/sprint-1_cp107-identity-document-protection`.
+
+### D-18 — Document encryption at rest, secure download, and immutable audit logging
+
+**Context:**
+SRS FR3, FR14, and NFR 4.2 require confidential identity documents to be stored encrypted at rest, document access restricted strictly to Administrators, every admin access logged immutably with timestamp and IP, and admin-mediated contact release to only provide name/contact details (never the document itself).
+
+**Decisions:**
+1. **Fernet Symmetric Encryption:** Used Fernet (AES-128-CBC + HMAC-SHA256 authenticated encryption) from the standard `cryptography` package. Documents are encrypted on submission write path before persisting to `bytea` in Postgres, and decrypted only when requested by an authorized Admin.
+2. **Dedicated Encryption Key (`IDENTITY_DOCUMENT_ENCRYPTION_KEY`):** Separate environment variable from `SECRET_KEY` so rotating web secret keys does not invalidate stored documents and vice versa.
+3. **Fail-Closed in Production:** In production (`DEBUG=False` with PostgreSQL), an unset or malformed encryption key raises `ImproperlyConfigured` (fails closed). In local development and tests, an empty key gracefully passes through plaintext bytes to avoid breaking developers' setups unless encryption testing is explicitly configured.
+4. **Dual Authentication on Download Endpoint:** `GET /api/v1/identity/documents/<int:pk>/download/` accepts both `JWTAuthentication` and `SessionAuthentication` with `IsAdminUser` permission. This allows Administrators clicking download links from the Django Admin browser interface (session auth) as well as API callers (JWT auth) to download decrypted documents securely.
+5. **Django Admin Hardening:** Removed raw `document_data` byte display from `IdentityDocumentAdmin.readonly_fields` to prevent accidental exposure or large binary dump in the DOM. Replaced it with a safe `download_link` pointing to the secure download endpoint.
+6. **Immutable Audit Trail (`AdminAccessLog`):** Every administrative touch creates an immutable `AdminAccessLog` record tracking `document`, `admin`, `action` (`view`, `download`, `review`, `contact_release`), `ip_address`, and `accessed_at`. `AdminAccessLogAdmin` explicitly disallows add, change, and delete operations.
+7. **Admin-Mediated Contact Release:** Added `GET /api/v1/identity/documents/<int:pk>/owner-info/` returning exclusively `full_name`, `email`, `contact_number`, and `affiliation`. Raw document bytes, `id_number`, and credential fields are never exposed. Access is logged with `action="contact_release"`.

@@ -411,9 +411,9 @@ implement and test, not in which tables exist.
 #### 3. Identity Verification Privacy (FR3, NFR 4.2)
 - ID pictures and supporting documents submitted during verification are strictly confidential.
 - Stored in Postgres as `bytea` (`identity_documents.document_data`). **Cloudinary is removed** — never reintroduce external object storage for documents (D-13).
-- *SRS requires encryption at rest. **Not yet implemented** — that is CP-107, still outstanding. Today the only limit is the 5 MB cap.*
+- Stored encrypted at rest using Fernet symmetric encryption (`IDENTITY_DOCUMENT_ENCRYPTION_KEY`, CP-107, D-18). Capped at 5 MB.
 - **Accessible exclusively to Administrators**. Identity documents must never be served or exposed to Borrowers, Lenders, or unauthenticated users.
-- Every administrative view or download of an identity document must automatically create an immutable entry in the audit log (`FR14`). *The `admin_access_logs` table exists; writing to it is CP-107.*
+- Every administrative view, download, review, or contact release of an identity document automatically creates an immutable entry in the audit log with timestamp and IP address (`FR14`, CP-107).
 
 #### 4. Handover & Return Authentication Codes (FR8, NFR 4.4)
 - **Handover**: Generated for Lender $\rightarrow$ Borrower enters code in app to set order to `Active`.

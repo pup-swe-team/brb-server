@@ -68,10 +68,10 @@ reassigned.
 - [x] Unlock listing/requesting functions when status becomes Verified — *Ezekiel*
 
 ### CP-107 — Protect and log access to identity documents
-- [ ] Store identity documents encrypted — *Ezekiel*
-- [ ] Restrict document visibility to Admins only — *Ezekiel*
-- [ ] Log every Admin access to a document — *Ezekiel*
-- [ ] Release only name/contact details (never the document) via Admin-mediated process — *Ezekiel*
+- [x] Store identity documents encrypted — *Ezekiel*
+- [x] Restrict document visibility to Admins only — *Ezekiel*
+- [x] Log every Admin access to a document — *Ezekiel*
+- [x] Release only name/contact details (never the document) via Admin-mediated process — *Ezekiel*
 
 ---
 

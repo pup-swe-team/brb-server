@@ -237,3 +237,8 @@ EMAIL_VERIFICATION_REDIRECT_URL = os.getenv(
 # CP-102: an account that never verifies its email is removed after this many
 # days. Read through SystemConfig so it stays Admin-configurable (CP-1104).
 EMAIL_VERIFICATION_EXPIRY_DAYS = 7
+
+# CP-107: Application-level encryption key for identity document bytes.
+# Must be a valid Fernet key (32 url-safe base64-encoded bytes).
+# Generate one with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+IDENTITY_DOCUMENT_ENCRYPTION_KEY = os.getenv("IDENTITY_DOCUMENT_ENCRYPTION_KEY", "")

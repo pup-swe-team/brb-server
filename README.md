@@ -241,6 +241,7 @@ triggers no CI run at all, so run the gates locally. Details in
 | `EMAIL_BACKEND` | no | console | Console prints confirmation links to the terminal |
 | `DEFAULT_FROM_EMAIL` | no | `no-reply@brb.pup.edu.ph` | Sender address |
 | `EMAIL_VERIFICATION_REDIRECT_URL` | no | `brb://auth/verify-email` | CP-102 link target |
+| `IDENTITY_DOCUMENT_ENCRYPTION_KEY` | no (dev) / yes (prod) | empty | CP-107: Fernet encryption key for documents. Unset ⇒ pass-through in dev/test, fails closed in prod |
 
 ### File storage
 

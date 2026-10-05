@@ -220,12 +220,14 @@ def review_identity_document(
     reviewer: User,
     action: str,
     rejection_reason: str = "",
+    request: object = None,
 ) -> IdentityDocument:
     """
     Approve or reject a submitted identity document (CP-106).
 
     Persists the decision with reviewer audit information (reviewed_by, reviewed_at),
-    records an in-app Notification (FR11), and dispatches an email notification.
+    records an in-app Notification (FR11), creates an audit log entry (CP-107, FR14),
+    and dispatches an email notification.
     """
     if action == "approve":
         status_row = IdentityDocumentStatus.objects.get(
@@ -256,6 +258,15 @@ def review_identity_document(
             user=document.user,
             type=notification_type,
             reference_id=str(document.id),
+        )
+
+        from apps.audit.services import log_admin_document_access
+
+        log_admin_document_access(
+            document=document,
+            admin=reviewer,
+            action="review",
+            request=request,
         )
 
     try:
