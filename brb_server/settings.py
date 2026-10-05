@@ -164,3 +164,22 @@ STORAGES = {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
     },
 }
+
+# PUP Community Webmail Validation (SRS Section 4.2)
+ALLOWED_STUDENT_EMAIL_DOMAIN = os.getenv(
+    "ALLOWED_STUDENT_EMAIL_DOMAIN", "iskolarngbayan.pup.edu.ph"
+).lower()
+ALLOWED_FACULTY_EMAIL_DOMAIN = os.getenv(
+    "ALLOWED_FACULTY_EMAIL_DOMAIN", "pup.edu.ph"
+).lower()
+
+# Django REST Framework
+REST_FRAMEWORK = {
+    "DEFAULT_RENDERER_CLASSES": [
+        "rest_framework.renderers.JSONRenderer",
+        "rest_framework.renderers.BrowsableAPIRenderer",
+    ],
+    "DEFAULT_PARSER_CLASSES": [
+        "rest_framework.parsers.JSONParser",
+    ],
+}
