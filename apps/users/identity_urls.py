@@ -7,7 +7,11 @@ keeps the public auth surface obvious at a glance.
 
 from django.urls import path
 
-from .views import IdentityDocumentListView, IdentityDocumentSubmissionView
+from .views import (
+    IdentityDocumentListView,
+    IdentityDocumentReviewView,
+    IdentityDocumentSubmissionView,
+)
 
 urlpatterns = [
     path(
@@ -19,5 +23,10 @@ urlpatterns = [
         "documents/list/",
         IdentityDocumentListView.as_view(),
         name="identity-document-list",
+    ),
+    path(
+        "documents/<int:pk>/review/",
+        IdentityDocumentReviewView.as_view(),
+        name="identity-document-review",
     ),
 ]

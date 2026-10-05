@@ -50,6 +50,8 @@ class IdentityDocumentAdmin(admin.ModelAdmin):
         "status",
         "has_profile_mismatch",
         "submitted_at",
+        "reviewed_by",
+        "reviewed_at",
     )
     list_filter = ("status", "document_type", "has_profile_mismatch", "submitted_at")
     search_fields = ("id_number", "user__email", "user__full_name", "name_on_document")
@@ -63,9 +65,27 @@ class IdentityDocumentAdmin(admin.ModelAdmin):
         "has_profile_mismatch",
         "consent_given",
         "consented_at",
+        "rejection_reason",
+        "reviewed_by",
+        "reviewed_at",
         "submitted_at",
     )
     date_hierarchy = "submitted_at"
+    actions = ("approve_selected_documents",)
+
+    @admin.action(description="Approve selected identity documents")
+    def approve_selected_documents(self, request, queryset):
+        from .services import review_identity_document
+
+        count = 0
+        for doc in queryset.filter(status__name="pending"):
+            review_identity_document(
+                document=doc,
+                reviewer=request.user,
+                action="approve",
+            )
+            count += 1
+        self.message_user(request, f"Approved {count} identity document(s).")
 
     def get_queryset(self, request):
         # select_related avoids an N+1 query per row for user/document_type/status.

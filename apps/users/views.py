@@ -1,5 +1,6 @@
 import logging
 
+from django.shortcuts import get_object_or_404
 from rest_framework import permissions, status
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -9,6 +10,7 @@ from .models import IdentityDocument
 from .serializers import (
     EmailVerificationSerializer,
     IdentityDocumentResponseSerializer,
+    IdentityDocumentReviewSerializer,
     IdentityDocumentSubmissionSerializer,
     LoginSerializer,
     LogoutSerializer,
@@ -16,7 +18,12 @@ from .serializers import (
     UserRegistrationSerializer,
     UserResponseSerializer,
 )
-from .services import register_user, send_email_verification, verify_user_email
+from .services import (
+    register_user,
+    review_identity_document,
+    send_email_verification,
+    verify_user_email,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +207,45 @@ class IdentityDocumentListView(APIView):
                 "results": IdentityDocumentResponseSerializer(
                     documents, many=True
                 ).data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class IdentityDocumentReviewView(APIView):
+    """
+    Administrator review of a submitted identity verification document (CP-106).
+    POST /api/v1/identity/documents/<int:pk>/review/
+
+    Requires administrator authority (request.user.is_staff is True per D-03).
+    Approves or rejects the document, persists the decision with reviewer info,
+    creates an in-app notification, and dispatches an email notification.
+    """
+
+    permission_classes = (permissions.IsAdminUser,)
+
+    def post(self, request: Request, pk: int) -> Response:
+        document = get_object_or_404(
+            IdentityDocument.objects.select_related("user", "status", "document_type"),
+            pk=pk,
+        )
+
+        serializer = IdentityDocumentReviewSerializer(
+            instance=document, data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+
+        updated_document = review_identity_document(
+            document=document,
+            reviewer=request.user,
+            action=serializer.validated_data["action"],
+            rejection_reason=serializer.validated_data.get("rejection_reason", ""),
+        )
+
+        return Response(
+            {
+                "message": f"Document {updated_document.status.name} successfully.",
+                "document": IdentityDocumentResponseSerializer(updated_document).data,
             },
             status=status.HTTP_200_OK,
         )

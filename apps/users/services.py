@@ -13,8 +13,14 @@ from apps.core.constants import (
     EMAIL_VERIFICATION_EXPIRY_DAYS,
 )
 from apps.core.selectors import get_int_config
+from apps.notifications.constants import NOTIFICATION_TYPE_VERIFICATION_RESULT
+from apps.notifications.models import Notification, NotificationType
 
-from .models import User
+from .constants import (
+    IDENTITY_DOCUMENT_STATUS_APPROVED,
+    IDENTITY_DOCUMENT_STATUS_REJECTED,
+)
+from .models import IdentityDocument, IdentityDocumentStatus, User
 from .tokens import EmailVerificationTokenGenerator
 
 logger = logging.getLogger(__name__)
@@ -174,3 +180,90 @@ def deactivate_unverified_users(*, now=None) -> list[int]:
         "CP-102: removed %d unverified account(s): %s", len(expired_ids), expired_ids
     )
     return expired_ids
+
+
+def send_identity_review_email(document: IdentityDocument) -> None:
+    """Send approval or rejection notification email for identity review (CP-106)."""
+    user = document.user
+    if document.status.name == IDENTITY_DOCUMENT_STATUS_APPROVED:
+        subject = "BRB Identity Verification Approved"
+        message = (
+            f"Hi {user.full_name},\n\n"
+            "Your identity verification document has been approved by an administrator. "
+            "You now have full access to list items and request borrows on the BRB platform.\n\n"
+            "Thank you,\n"
+            "BRB Team\n"
+        )
+    else:
+        subject = "BRB Identity Verification Update - Action Required"
+        message = (
+            f"Hi {user.full_name},\n\n"
+            "Your identity verification document was reviewed and could not be approved "
+            f"for the following reason:\n\n{document.rejection_reason}\n\n"
+            "You may submit a new document for review at any time through your account settings.\n\n"
+            "Thank you,\n"
+            "BRB Team\n"
+        )
+
+    send_mail(
+        subject=subject,
+        message=message,
+        from_email=None,  # falls back to settings.DEFAULT_FROM_EMAIL
+        recipient_list=[user.email],
+        fail_silently=False,
+    )
+
+
+def review_identity_document(
+    *,
+    document: IdentityDocument,
+    reviewer: User,
+    action: str,
+    rejection_reason: str = "",
+) -> IdentityDocument:
+    """
+    Approve or reject a submitted identity document (CP-106).
+
+    Persists the decision with reviewer audit information (reviewed_by, reviewed_at),
+    records an in-app Notification (FR11), and dispatches an email notification.
+    """
+    if action == "approve":
+        status_row = IdentityDocumentStatus.objects.get(
+            name=IDENTITY_DOCUMENT_STATUS_APPROVED
+        )
+        reason = ""
+    elif action == "reject":
+        status_row = IdentityDocumentStatus.objects.get(
+            name=IDENTITY_DOCUMENT_STATUS_REJECTED
+        )
+        reason = rejection_reason.strip()
+    else:
+        raise ValueError(f"Unknown identity review action: {action}")
+
+    with transaction.atomic():
+        document.status = status_row
+        document.rejection_reason = reason
+        document.reviewed_by = reviewer
+        document.reviewed_at = timezone.now()
+        document.save(
+            update_fields=["status", "rejection_reason", "reviewed_by", "reviewed_at"]
+        )
+
+        notification_type, _ = NotificationType.objects.get_or_create(
+            name=NOTIFICATION_TYPE_VERIFICATION_RESULT
+        )
+        Notification.objects.create(
+            user=document.user,
+            type=notification_type,
+            reference_id=str(document.id),
+        )
+
+    try:
+        send_identity_review_email(document)
+    except Exception:
+        logger.exception(
+            "CP-106: failed to send identity review notification email to %s",
+            document.user.email,
+        )
+
+    return document

@@ -218,6 +218,7 @@ class IdentityDocumentResponseSerializer(serializers.ModelSerializer):
             "has_profile_mismatch",
             "consent_given",
             "consented_at",
+            "rejection_reason",
             "submitted_at",
             "reviewed_at",
         )
@@ -340,6 +341,42 @@ class IdentityDocumentSubmissionSerializer(serializers.Serializer):
         document.save()
 
         attrs["created_document"] = document
+        return attrs
+
+
+class IdentityDocumentReviewSerializer(serializers.Serializer):
+    """
+    Validate and process an Administrator's review of an identity document (CP-106).
+    """
+
+    action = serializers.ChoiceField(choices=["approve", "reject"])
+    rejection_reason = serializers.CharField(
+        required=False, allow_blank=True, max_length=1000
+    )
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        action = attrs.get("action")
+        rejection_reason = attrs.get("rejection_reason", "").strip()
+
+        if action == "reject" and not rejection_reason:
+            raise serializers.ValidationError(
+                {"rejection_reason": "A reason is required when rejecting a document."}
+            )
+
+        document = self.instance
+        if (
+            document is not None
+            and document.status.name != IDENTITY_DOCUMENT_STATUS_PENDING
+        ):
+            raise serializers.ValidationError(
+                {
+                    "detail": (
+                        f"This document has already been reviewed (current status: {document.status.name})."
+                    )
+                }
+            )
+
+        attrs["rejection_reason"] = rejection_reason
         return attrs
 
 

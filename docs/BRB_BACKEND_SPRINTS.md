@@ -62,10 +62,10 @@ reassigned.
       no listing or request endpoint has been built yet to attach it to.
 
 ### CP-106 — Admin review of identity verification
-- [ ] Persist approve/reject decision + reason — *Ezekiel*
-- [ ] Allow resubmission after rejection — *Ezekiel*
-- [ ] Send in-app + email notification on decision — *Ezekiel*
-- [ ] Unlock listing/requesting functions when status becomes Verified — *Ezekiel*
+- [x] Persist approve/reject decision + reason — *Ezekiel*
+- [x] Allow resubmission after rejection — *Ezekiel*
+- [x] Send in-app + email notification on decision — *Ezekiel*
+- [x] Unlock listing/requesting functions when status becomes Verified — *Ezekiel*
 
 ### CP-107 — Protect and log access to identity documents
 - [ ] Store identity documents encrypted — *Ezekiel*

@@ -516,3 +516,19 @@ someone remembering to insert rows).
 with a missing, malformed and correct token; a token in either bare or `Bearer`
 form is accepted, and an unset `CRON_SECRET_TOKEN` fails closed with `503` rather
 than running the sweep unprotected.
+
+---
+
+## 2026-10-06 — Identity Document Review (CP-106)
+
+Branch: `feature/sprint-1_cp106-admin-identity-review`.
+
+### D-17 — Admin review workflow and dual notification
+
+**Decision:**
+1. Document review authority is strictly restricted to Administrators (`is_staff=True`), conforming to D-03.
+2. Endpoint: `POST /api/v1/identity/documents/<int:pk>/review/` accepting `action: "approve" | "reject"` and mandatory `rejection_reason` when rejecting.
+3. Review decisions are final for that submission instance; once approved or rejected, the record cannot be re-reviewed.
+4. Notifications are dual-channel: an immutable in-app `Notification` with type `verification_result` is recorded in the transaction, and an email notification is dispatched outside the transaction with mail server errors caught and logged so SMTP issues do not abort the review.
+5. Approval immediately activates `user.has_verified_identity()`, satisfying the `IsIdentityVerified` permission gate. Rejection preserves the `rejection_reason` and enables the user to submit a fresh document.
+6. A batch action `approve_selected_documents` is registered on `IdentityDocumentAdmin` to support bulk approval directly in `/admin/`.

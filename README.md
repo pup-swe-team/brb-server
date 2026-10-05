@@ -18,6 +18,7 @@ Sprint 1 onboarding is implemented and under review:
 | CP-103 | Log in to account | Done |
 | CP-104 | Recover forgotten password | **Not started** — Sprint 2 |
 | CP-105 | Submit identity verification document | Done, minus the listing gate |
+| CP-106 | Admin review of identity verification | Done |
 
 See [`docs/changelog-updating.md`](docs/changelog-updating.md) for the full list of
 changes and [`docs/BRB_BACKEND_SPRINTS.md`](docs/BRB_BACKEND_SPRINTS.md) for

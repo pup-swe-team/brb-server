@@ -15,6 +15,20 @@ Related documents:
 | `docs/DECISIONS.md` | Decisions and their rationale |
 | `docs/changelog-updating.md` | **This file** — what changed |
 
+## 2026-10-06 — Admin review of identity verification (CP-106)
+
+Branch: `feature/sprint-1_cp106-admin-identity-review`.
+
+### Added
+
+- `POST /api/v1/identity/documents/<int:pk>/review/` — administrator endpoint to approve or reject submitted identity documents.
+- `apps/users/serializers.py`: `IdentityDocumentReviewSerializer` (enforces mandatory rejection reason on reject, and checks pending document status). Added `rejection_reason` to `IdentityDocumentResponseSerializer`.
+- `apps/users/services.py`: `review_identity_document` and `send_identity_review_email` (atomic decision persistence with reviewer audit info, in-app notification dispatch, and fail-safe email notifications).
+- `apps/notifications/constants.py`: `NOTIFICATION_TYPE_VERIFICATION_RESULT` and default lookup list.
+- `apps/notifications/migrations/0003_seed_notification_types.py`: data migration seeding standard `NotificationType` lookup rows.
+- `apps/users/admin.py`: `approve_selected_documents` action and review audit fields in `IdentityDocumentAdmin`.
+- `apps/users/tests.py`: `IdentityDocumentReviewTests` (12 tests covering auth, approval, rejection, notifications, resubmission, permission gating, and error resilience).
+
 ---
 
 ## 2026-10-05 — Sprint 1 onboarding: CP-102, CP-103, CP-105

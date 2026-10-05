@@ -1557,3 +1557,239 @@ class IdentityDocumentAdminTests(APITestCase):
             "name_on_document",
         ):
             self.assertIn(field, readonly)
+
+
+# ---------------------------------------------------------------------------
+# CP-106 — Admin review of identity verification
+# ---------------------------------------------------------------------------
+
+
+class IdentityDocumentReviewTests(APITestCase):
+    """
+    Test suite for CP-106: Admin review of identity verification.
+    Covers approve/reject transitions, rejection reason requirements,
+    reviewer audit stamping, notifications (in-app & email), unlock of
+    IsIdentityVerified gate, and resubmission allowance after rejection.
+    """
+
+    def setUp(self) -> None:
+        self.submitter = make_user("submitter@iskolarngbayan.pup.edu.ph")
+        self.admin = make_user(
+            "admin@pup.edu.ph", affiliation=User.AffiliationChoices.FACULTY
+        )
+        self.admin.is_staff = True
+        self.admin.save(update_fields=["is_staff"])
+
+        self.pending_status = IdentityDocumentStatus.objects.get(name="pending")
+        self.approved_status = IdentityDocumentStatus.objects.get(name="approved")
+        self.rejected_status = IdentityDocumentStatus.objects.get(name="rejected")
+        self.doc_type = IdentityDocumentType.objects.get(name="pup_id")
+
+        self.document = IdentityDocument.objects.create(
+            user=self.submitter,
+            document_type=self.doc_type,
+            id_number="2024-00123",
+            document_data=PNG_BYTES,
+            status=self.pending_status,
+            name_on_document="Juan Dela Cruz",
+            consent_given=True,
+            consented_at=timezone.now(),
+        )
+        self.review_url = reverse(
+            "identity-document-review", kwargs={"pk": self.document.pk}
+        )
+
+    def review(self, payload: dict, as_user: User | None = None):
+        if as_user:
+            self.client.force_authenticate(as_user)
+        return self.client.post(self.review_url, payload, format="json")
+
+    # --- Authorization (FR3, Decision D-03) ---
+
+    def test_unauthenticated_request_is_denied(self) -> None:
+        """Unauthenticated caller cannot review documents."""
+        self.client.force_authenticate(user=None)
+        response = self.client.post(
+            self.review_url, {"action": "approve"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_non_staff_user_is_forbidden(self) -> None:
+        """Regular borrower/lender accounts cannot review documents (D-03)."""
+        response = self.review({"action": "approve"}, as_user=self.submitter)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    # --- Approval (AC-106.1, AC-106.4) ---
+
+    def test_admin_approval_persists_decision_and_audit(self) -> None:
+        """AC-106.1: Approving sets status=approved and records reviewer + timestamp."""
+        mail.outbox.clear()
+        response = self.review({"action": "approve"}, as_user=self.admin)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status.name, "approved")
+        self.assertEqual(self.document.reviewed_by, self.admin)
+        self.assertIsNotNone(self.document.reviewed_at)
+        self.assertEqual(self.document.rejection_reason, "")
+
+    def test_approval_unlocks_identity_verified_gate(self) -> None:
+        """AC-106.4: Approval makes user.has_verified_identity() True and unlocks gate."""
+        self.assertFalse(self.submitter.has_verified_identity())
+
+        self.review({"action": "approve"}, as_user=self.admin)
+
+        self.submitter.refresh_from_db()
+        self.assertTrue(self.submitter.has_verified_identity())
+
+        request = _request_for(self.submitter)
+        self.assertTrue(IsIdentityVerified().has_permission(request, None))
+
+    def test_approval_sends_in_app_and_email_notification(self) -> None:
+        """AC-106.3: Approval dispatches an in-app Notification and email."""
+        from apps.notifications.constants import NOTIFICATION_TYPE_VERIFICATION_RESULT
+        from apps.notifications.models import Notification
+
+        mail.outbox.clear()
+        Notification.objects.all().delete()
+
+        self.review({"action": "approve"}, as_user=self.admin)
+
+        # In-app notification
+        notification = Notification.objects.filter(user=self.submitter).first()
+        self.assertIsNotNone(notification)
+        self.assertEqual(notification.type.name, NOTIFICATION_TYPE_VERIFICATION_RESULT)
+        self.assertEqual(notification.reference_id, str(self.document.pk))
+
+        # Email notification
+        self.assertEqual(len(mail.outbox), 1)
+        sent_email = mail.outbox[0]
+        self.assertIn("Approved", sent_email.subject)
+        self.assertIn(self.submitter.email, sent_email.to)
+        self.assertIn("approved", sent_email.body.lower())
+
+    # --- Rejection (AC-106.1, AC-106.2) ---
+
+    def test_rejection_without_reason_is_rejected(self) -> None:
+        """Rejecting requires a non-empty reason."""
+        response = self.review(
+            {"action": "reject", "rejection_reason": "   "},
+            as_user=self.admin,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("rejection_reason", response.data)
+
+    def test_admin_rejection_persists_decision_and_reason(self) -> None:
+        """AC-106.1: Rejection persists status=rejected, reason, reviewer, and timestamp."""
+        mail.outbox.clear()
+        reason = "Photo is blurry and the ID expiration date is illegible."
+        response = self.review(
+            {"action": "reject", "rejection_reason": reason},
+            as_user=self.admin,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status.name, "rejected")
+        self.assertEqual(self.document.rejection_reason, reason)
+        self.assertEqual(self.document.reviewed_by, self.admin)
+        self.assertIsNotNone(self.document.reviewed_at)
+
+        # User is still unverified
+        self.assertFalse(self.submitter.has_verified_identity())
+
+    def test_rejection_sends_in_app_and_email_notification_with_reason(self) -> None:
+        """AC-106.3: Rejection notification includes the rejection reason."""
+        from apps.notifications.constants import NOTIFICATION_TYPE_VERIFICATION_RESULT
+        from apps.notifications.models import Notification
+
+        mail.outbox.clear()
+        reason = "Blurry photo. Please retake in good lighting."
+        self.review(
+            {"action": "reject", "rejection_reason": reason},
+            as_user=self.admin,
+        )
+
+        # In-app notification
+        notification = Notification.objects.filter(user=self.submitter).first()
+        self.assertIsNotNone(notification)
+        self.assertEqual(notification.type.name, NOTIFICATION_TYPE_VERIFICATION_RESULT)
+
+        # Email notification
+        self.assertEqual(len(mail.outbox), 1)
+        sent_email = mail.outbox[0]
+        self.assertIn(reason, sent_email.body)
+
+    def test_resubmission_after_rejection_is_allowed(self) -> None:
+        """AC-106.2: A rejected user may submit a new document."""
+        # 1. Reject first document
+        self.review(
+            {"action": "reject", "rejection_reason": "Expired ID"},
+            as_user=self.admin,
+        )
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status.name, "rejected")
+
+        # 2. User resubmits with new document
+        self.client.force_authenticate(self.submitter)
+        submit_url = reverse("identity-document-submit")
+        new_payload = {
+            "document_type": "pup_id",
+            "id_number": "2024-00123",
+            "name_on_document": "Juan Dela Cruz",
+            "document_file": png_upload("new_pup_id.png"),
+            "consent_given": "true",
+        }
+        resubmit_response = self.client.post(
+            submit_url, new_payload, format="multipart"
+        )
+        self.assertEqual(resubmit_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(resubmit_response.data["status"], "pending")
+
+        # Both records exist, latest is pending
+        docs = IdentityDocument.objects.filter(user=self.submitter).order_by(
+            "submitted_at"
+        )
+        self.assertEqual(docs.count(), 2)
+        self.assertEqual(docs[0].status.name, "rejected")
+        self.assertEqual(docs[1].status.name, "pending")
+
+    def test_cannot_review_already_reviewed_document(self) -> None:
+        """Attempting to re-review a finalized document returns 400 Bad Request."""
+        self.review({"action": "approve"}, as_user=self.admin)
+
+        # Try to review again
+        second_response = self.review(
+            {"action": "reject", "rejection_reason": "Changed mind"},
+            as_user=self.admin,
+        )
+        self.assertEqual(second_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("already been reviewed", str(second_response.data))
+
+    def test_mail_outage_does_not_abort_review_transaction(self) -> None:
+        """An email delivery failure is logged and swallowed; the review succeeds."""
+        with mock.patch(
+            "apps.users.services.send_mail", side_effect=OSError("smtp down")
+        ):
+            response = self.review({"action": "approve"}, as_user=self.admin)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status.name, "approved")
+
+    def test_admin_approve_selected_documents_action(self) -> None:
+        """IdentityDocumentAdmin batch action approves pending documents."""
+        from django.contrib import admin
+
+        model_admin = admin.site._registry[IdentityDocument]
+        qs = IdentityDocument.objects.filter(pk=self.document.pk)
+
+        request = _request_for(self.admin)
+        model_admin.message_user = mock.MagicMock()
+
+        model_admin.approve_selected_documents(request, qs)
+
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status.name, "approved")
+        self.assertEqual(self.document.reviewed_by, self.admin)
+        self.assertIsNotNone(self.document.reviewed_at)
