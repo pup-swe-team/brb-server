@@ -145,6 +145,42 @@ and was not part of the original TODO list.
 
 ---
 
+## Merge notes
+
+### M-01 — `feat(users)/registration` (CP-101) merged into this branch
+
+CP-101 was developed on `origin/feat(users)/registration` and merged into
+`test/aaron-scratch` rather than into `dev` directly, since a single PR will
+carry the Sprint 1 prerequisite work together. The branch contains one commit
+(`5eef8f5` by Kim) adding `constants.py`, `serializers.py`, `services.py`,
+`urls.py`, `views.py`, tests, and the `/api/v1/auth/` route.
+
+**Resolved a silent settings collision.** Both branches defined a
+`REST_FRAMEWORK` dict in `brb_server/settings.py`. Git merged the file without
+a conflict because the two blocks sat in different regions, but Python takes
+the *last* assignment — so CP-101's block (renderers + parsers only) would have
+silently discarded `DEFAULT_AUTHENTICATION_CLASSES` and
+`DEFAULT_PERMISSION_CLASSES`. Dropping the default-deny permission classes
+would have made every endpoint publicly accessible, directly contradicting FR3
+(identity documents are private) and FR5 (per-endpoint ownership checks).
+
+Verified after the merge that the effective config keeps JWTAuthentication and
+IsAuthenticated, with `DEFAULT_PARSER_CLASSES` folded into the single
+canonical block.
+
+**Lesson worth keeping:** adding a second settings key of the same name to a
+shared file is invisible to `git merge` and to CI, and only shows up as a
+security regression at runtime. Any further branch that needs to extend
+`REST_FRAMEWORK` should edit the existing block instead of adding another.
+
+### CP-102 is not on that branch yet
+
+`feat(users)/registration` contains **CP-101 only** — a single commit, and the
+view is explicitly labelled CP-101. There is no verification email, no
+verification token, no click-to-verify handler and no 7-day auto-deactivation
+anywhere in the branch, which is all CP-102 scope. Sprint 1 remains
+0 completed / 6 in progress.
+
 ## Fixes and issues found along the way
 
 - **`JWT_SECRET` in `.env.example` was too short.** HS256 (the configured
@@ -174,7 +210,7 @@ All four CI gates from `.github/workflows/ci.yaml` pass, plus the local hooks:
 | `uv run ruff format --check .` | 71 files already formatted |
 | `uv run ruff check .` | All checks passed |
 | `uv run python manage.py makemigrations --check` | No changes detected |
-| `uv run python manage.py test` | Ran 0 tests — every `tests.py` is still the empty Django stub |
+| `uv run python manage.py test` | 15 tests, all passing (CP-101 suite) |
 | `uv run pre-commit run --all-files` | all 7 hooks passed |
 
 Schema and JWT wiring were additionally smoke-tested against the real
@@ -183,6 +219,9 @@ database: the `reviewee_id` column is `NOT NULL`, the
 token issued through `RefreshToken.for_user()` validates through
 `JWTAuthentication`.
 
-**No automated tests exist yet** (`tests.py` in all 10 apps is the 1-line stub),
-so the above is a manual smoke test rather than a regression suite. Writing
-real tests is tracked by the DoD in `CONTRIBUTING.md` §9.
+**No automated tests exist yet** was true before CP-101 landed. The merged
+`apps/users/tests.py` now provides 15 tests covering the CP-101 acceptance
+criteria (domain rejection, domain-affiliation matching, Admin self-registration
+prohibition, duplicate email, required fields, password mismatch, weak
+password, contact-number format, and affiliation not gating Borrower/Lender
+defaults). All 15 pass. The other nine apps still have stub `tests.py` files.
