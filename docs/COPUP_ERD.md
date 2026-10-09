@@ -23,10 +23,12 @@ this document for exact field-level edits.
    `users` now inherits `is_staff`, `is_superuser` and the rest of
    `AbstractUser`'s columns, which this simplified diagram omits. draw.io
    should drop both the `Admin` enum value and the `is_admin` field.
-2. ~~`reviews` is missing `reviewee_id`~~ — **fixed.** `Review.reviewee` now
-   exists (`related_name="received_reviews"`), added in
-   `reviews/migrations/0003_review_reviewee.py` together with a
-   `review_reviewer_not_reviewee` check constraint.
+2. ~~`reviews` is missing `reviewee_id`~~ — **added then removed before merge.**
+   A tentative `Review.reviewee` migration (`reviews/0003_review_reviewee.py`)
+   was created then **deleted before merge — it never shipped** (D-19): the
+   reviewed user is derived from the order's borrower/lender, not stored. Do
+   **not** add `reviewee_id` to draw.io; the reviews table has `order_id` +
+   `reviewer_id` only.
 3. ~~`order_status_overrides` is missing `new_status`~~ — **fixed.**
    `OrderStatusOverride.new_status` added in
    `orders/migrations/0003_orderstatusoverride_new_status.py`, matching the
@@ -369,7 +371,6 @@ erDiagram
         int id PK
         int order_id FK
         int reviewer_id FK
-        int reviewee_id FK
         int rating "1 to 5"
         text comment
         datetime created_at
@@ -379,7 +380,7 @@ erDiagram
 
     ORDERS ||--o{ REVIEWS : "generates (max 2)"
     USERS ||--o{ REVIEWS : "writes as (reviewer_id)"
-    USERS ||--o{ REVIEWS : "receives as (reviewee_id)"
+    # reviewee is derived from the order's other party, not stored (D-19)
 ```
 
 ---
@@ -557,8 +558,11 @@ Master ERD stops disagreeing with the code.
    - `Alumni` is **removed from the project**, not merely unimplemented. Leave
      the enum as `[Student, Faculty, Staff]`; do not add it back. See D-15.
 
-2. **`reviews` table** — **done in code.** `reviewee_id` (Int, FK →
-   `users.id`) now exists directly after `reviewer_id`. Mirror it in draw.io.
+2. **`reviews` table** — **do not add `reviewee_id`.** It was tentatively added
+   to code (`reviews/0003_review_reviewee.py`) but **deleted before merge — never
+   shipped** (D-19): the reviewed user is derived from the order's
+   borrower/lender, not stored. Keep the table as `order_id` + `reviewer_id` in
+   draw.io.
 
 3. **`order_status_overrides` table** — **done in code.** `new_status` exists
    immediately after `previous_status`, same type. Mirror it in draw.io.

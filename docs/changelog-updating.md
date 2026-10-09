@@ -15,6 +15,35 @@ Related documents:
 | `docs/DECISIONS.md` | Decisions and their rationale |
 | `docs/changelog-updating.md` | **This file** — what changed |
 
+## 2026-10-09 — Review reviewee derived from order (D-19)
+
+Branch: `test/sprint-1_for-merging`.
+
+### Changed
+
+- `apps/reviews/models.py`: removed the `Review.reviewee` FK. The reviewee is now
+  a model property derived from the order's counterparty (borrower ↔ lender),
+  with a `clean()` guard against self-review.
+- `apps/reviews/migrations/0003_review_reviewee.py`: **deleted before merge** —
+  never shipped; the tentative `reviewee` add and its check constraint never
+  reach a database. `reviews` history is `0001` → `0002` only.
+- `apps/users/migrations/0002_alter_user_affiliation.py`: **deleted before
+  merge** — the `Admin`-free affiliation enum is folded directly into
+  `users/0001_initial.py` (per PR review: fix the initial migration, don't ship
+  fix migrations; the shared database is empty and re-migrated from scratch).
+- `docs/COPUP_ERD.md`, `docs/DECISIONS.md`: ERD/diagram notes updated — do not
+  add `reviewee_id` to draw.io.
+
+### Why
+
+PR review flagged `reviewee_id` as redundant: the reviewee is always the order
+party who did not write the review. Removing an unused, un-ratified denormalized
+column is cheapest while the `reviews` table is still empty. The reviewer also
+directed that fixes live in the initial migration rather than new migration
+files since the shared database is recreated from scratch.
+
+---
+
 ## 2026-10-06 — Protect and log access to identity documents (CP-107)
 
 Branch: `feature/sprint-1_cp107-identity-document-protection`.

@@ -81,10 +81,11 @@ authority is carried by Django's built-in `is_staff` (inherited from
    superuser. No new setup step is introduced.
 
 **Changes:** `AffiliationChoices.ADMIN` deleted; `create_superuser` now
-defaults `affiliation` to `FACULTY`. Migration
-`users/0002_alter_user_affiliation.py` includes a data step that promotes any
-pre-existing `affiliation="Admin"` row to `is_staff=True` + `affiliation="Faculty"`
-so no administrator silently loses access when the enum narrows.
+defaults `affiliation` to `FACULTY`. The initial migration
+`users/0001_initial.py` carries the narrowed enum directly — the `Admin` value
+is simply not part of the initial schema. No data step is needed because the
+team re-migrates from scratch (PR review directive): there are no pre-existing
+`affiliation="Admin"` rows anywhere.
 
 **Verified:** a superuser created via `create_superuser` now reports
 `affiliation=Faculty, is_staff=True` and passes `full_clean()`; the enum is
@@ -123,8 +124,8 @@ All three were confirmed missing in the schema and are now closed.
 
 | TODO | Fix | Migration |
 |---|---|---|
-| 1. `Admin` in `affiliation` | removed; admin authority moved to `is_staff` (see D-03) | `users/0002_alter_user_affiliation.py` |
-| 2. `reviews.reviewee_id` missing | added `Review.reviewee` FK (`related_name="received_reviews"`), plus a `review_reviewer_not_reviewee` check constraint | `reviews/0003_review_reviewee.py` |
+| 1. `Admin` in `affiliation` | removed; admin authority moved to `is_staff` (see D-03) | folded into `users/0001_initial.py` (no separate migration) |
+| 2. `reviews.reviewee_id` missing | `Review.reviewee` FK + `review_reviewer_not_reviewee` check added in `reviews/0003_…` — **never shipped, removed before merge, see D-19** | `reviews/0003_review_reviewee.py` deleted (not merged) |
 | 3. `order_status_overrides.new_status` missing | added `OrderStatusOverride.new_status` as `CharField(max_length=50)`, matching `previous_status` | `orders/0003_orderstatusoverride_new_status.py` |
 | 4. `disputes.status` unconfirmed | confirmed `open, resolved, escalated`, now enforced by `Dispute.StatusChoices` | `orders/0004_alter_dispute_status.py` |
 
@@ -134,10 +135,12 @@ required by `CONTRIBUTING.md` §9 ("migrations are backward-compatible"). All
 tables are currently empty, so the backfill is a no-op today but will do the
 right thing if rows exist elsewhere:
 
-- review backfill derives the reviewee from the order's other party
-  (borrower ↔ lender)
 - status-override backfill falls back to the order's current status
-- affiliation narrowing promotes any surviving `Admin` row to `is_staff`
+
+(Note: the affiliation narrowing has **no** backfill — `users/0001_initial.py`
+already omits `Admin`, and the team re-migrates from scratch per the PR review.
+The failed `reviews.reviewee` experiment also left no migration behind — see
+D-19.)
 
 **TODO 5 (`user_municipalities` / `user_provinces`) remains open** — still a
 team decision, nothing removed.
@@ -432,6 +435,12 @@ and `main` only; §5.3 rule 3 now says encryption-at-rest is **not** implemented
 (CP-107) instead of claiming it is; §5.3 rule 6 now names the real
 `/api/v1/jobs/deactivate-unverified/` endpoint and the fail-closed `503`.
 
+> **Update (2026-10-10, team review):** the README rewrite itself is **deferred**
+> out of the Sprint-1 merge ("wala muna"). The split-by-audience decision stands,
+> but the rewritten `README.md` does not ship in this PR; it will be reintroduced
+> in a later one. `AGENTS.md` is likewise kept as a local-only file and is not
+> part of the PR (`.gitignore`).
+
 ### D-15 - `Alumni` is removed from the project, permanently
 
 **Decision (lead, 2026-10-05):** `Alumni` is out of scope. `users.affiliation`
@@ -552,3 +561,15 @@ SRS FR3, FR14, and NFR 4.2 require confidential identity documents to be stored 
 5. **Django Admin Hardening:** Removed raw `document_data` byte display from `IdentityDocumentAdmin.readonly_fields` to prevent accidental exposure or large binary dump in the DOM. Replaced it with a safe `download_link` pointing to the secure download endpoint.
 6. **Immutable Audit Trail (`AdminAccessLog`):** Every administrative touch creates an immutable `AdminAccessLog` record tracking `document`, `admin`, `action` (`view`, `download`, `review`, `contact_release`), `ip_address`, and `accessed_at`. `AdminAccessLogAdmin` explicitly disallows add, change, and delete operations.
 7. **Admin-Mediated Contact Release:** Added `GET /api/v1/identity/documents/<int:pk>/owner-info/` returning exclusively `full_name`, `email`, `contact_number`, and `affiliation`. Raw document bytes, `id_number`, and credential fields are never exposed. Access is logged with `action="contact_release"`.
+
+---
+
+## 2026-10-09 — Review reviewee is derived, not stored (D-19)
+
+**Context:** PR review raised that `reviews.reviewee_id` is redundant — an order has exactly two participants (borrower and lender), so whichever party did not write the review is always the reviewee. The column was recorded pre-emptively in D-05 without full team sign-off.
+
+**Decision:** Remove the `Review.reviewee` column and its `review_reviewer_not_reviewee` check constraint. The reviewee is exposed as a model `@property` derived from the order (borrower ↔ lender), with an application-level `clean()` guard against self-review. Relevant for "average rating by user" queries (CP-601) — those now join through `order` rather than using a direct FK.
+
+**Migration:** none. `reviews/0003_review_reviewee.py` (the tentative add) was **deleted before merge** — never shipped. The `reviews` history is `0001` → `0002` (order + reviewer only); no `reviewee` column ever lands.
+
+**Why no forward migration:** PR review asked the team to stop shipping "fix" migration files and instead keep the initial migration correct, because the shared database is empty and everyone re-migrates from scratch. `reviews/0003` was reverted to a private branch and removed; clean history, no backward-compat churn needed for an empty table.

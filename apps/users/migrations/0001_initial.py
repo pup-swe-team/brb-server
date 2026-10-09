@@ -78,7 +78,7 @@ class Migration(migrations.Migration):
                 ('email', models.EmailField(max_length=254, unique=True)),
                 ('full_name', models.CharField(max_length=255)),
                 ('contact_number', models.CharField(max_length=20)),
-                ('affiliation', models.CharField(choices=[('Student', 'Student'), ('Faculty', 'Faculty'), ('Staff', 'Staff'), ('Admin', 'Admin')], default='Student', max_length=20)),
+                ('affiliation', models.CharField(choices=[('Student', 'Student'), ('Faculty', 'Faculty'), ('Staff', 'Staff')], default='Student', max_length=20)),
                 ('bio', models.TextField(blank=True, null=True)),
                 ('photo', models.ImageField(blank=True, null=True, upload_to='profile_photos/')),
                 ('email_verified_at', models.DateTimeField(blank=True, null=True)),
