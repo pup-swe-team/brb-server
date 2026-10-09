@@ -1,7 +1,7 @@
 # Register your models here.
 from django.contrib import admin
 
-from .models import Listing
+from .models import Listing, PickupLocation
 
 
 class ListingAdmin(admin.ModelAdmin):
@@ -15,4 +15,14 @@ class ListingAdmin(admin.ModelAdmin):
     search_fields = ("title", "description")
 
 
+class PickupLocationAdmin(admin.ModelAdmin):
+    list_display = (
+        "name",
+        "description",
+        "deleted_at",
+    )
+    search_fields = ("name",)
+
+
 admin.site.register(Listing, ListingAdmin)
+admin.site.register(PickupLocation, PickupLocationAdmin)
