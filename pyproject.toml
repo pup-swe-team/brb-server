@@ -43,9 +43,6 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# RUF012 wants every class attribute to be immutable, but two framework
-# idioms are container attributes by contract, not by accident:
-#   - Django reads `Meta.constraints` / `Meta.indexes` as plain lists.
-#   - DRF merges `default_error_messages` across the serializer hierarchy.
 "**/models.py" = ["RUF012"]
 "**/serializers.py" = ["RUF012"]
+"tests/*" = ["S101", "ARG"]
