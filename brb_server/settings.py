@@ -230,7 +230,10 @@ ALLOWED_FACULTY_EMAIL_DOMAIN = os.getenv(
 CRON_SECRET_TOKEN = os.getenv("CRON_SECRET_TOKEN", "")
 
 # Email delivery (CP-102)
-# EMAIL_BACKEND / DEFAULT_FROM_EMAIL come from .env; see .env.example.
+EMAIL_BACKEND = os.getenv(
+    "EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend"
+)
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "webmaster@localhost")
 EMAIL_VERIFICATION_REDIRECT_URL = os.getenv(
     "EMAIL_VERIFICATION_REDIRECT_URL", "brb://auth/verify-email"
 )
