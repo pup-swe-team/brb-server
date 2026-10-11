@@ -573,3 +573,34 @@ SRS FR3, FR14, and NFR 4.2 require confidential identity documents to be stored 
 **Migration:** none. `reviews/0003_review_reviewee.py` (the tentative add) was **deleted before merge** — never shipped. The `reviews` history is `0001` → `0002` (order + reviewer only); no `reviewee` column ever lands.
 
 **Why no forward migration:** PR review asked the team to stop shipping "fix" migration files and instead keep the initial migration correct, because the shared database is empty and everyone re-migrates from scratch. `reviews/0003` was reverted to a private branch and removed; clean history, no backward-compat churn needed for an empty table.
+
+---
+
+## 2026-10-11 — CORS for the browser client (D-20)
+
+**Context:** The Expo Web build failed to log in. The Django dev server logged
+`OPTIONS /api/v1/auth/login/ 200` and then nothing: the browser's CORS preflight
+returned 200 from DRF's default `OPTIONS` handling, but with no
+`Access-Control-Allow-Origin` header the browser refused to send the real `POST`.
+The native iOS/Android app never hit this because it is not subject to the
+same-origin policy, which is why login worked on a device and not on web.
+
+**Decision:** Add `django-cors-headers` rather than hand-rolling a middleware or
+serving the API through a proxy.
+
+1. `corsheaders` is added to `INSTALLED_APPS`, and `CorsMiddleware` is placed
+   directly after `SecurityMiddleware` — above `CommonMiddleware`, which can
+   generate its own responses, so the headers must be attached before it runs.
+2. `CORS_ALLOW_ALL_ORIGINS = DEBUG`. Local development (the common case for
+   Expo Web, whose origin is the machine's LAN IP and port) needs no
+   configuration and no per-teammate origin list. Production (`DEBUG=False`)
+   falls back to the explicit `CORS_ALLOWED_ORIGINS` env var.
+3. `CORS_ALLOWED_ORIGINS` is read from the environment, comma-separated, so the
+   deployed web origin can be set on Render without a code change.
+4. `CORS_ALLOW_CREDENTIALS` is left off: authentication is a bearer JWT in the
+   `Authorization` header, not a cross-site cookie, and `authorization` is
+   already in django-cors-headers' default allowed request headers.
+
+**Why not a custom middleware:** the browser protocol (preflight, `Vary: Origin`,
+header allow-listing) has enough edge cases that the maintained package is
+cheaper and less error-prone than reimplementing it.

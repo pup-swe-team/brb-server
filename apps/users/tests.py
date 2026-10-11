@@ -743,6 +743,54 @@ class LoginTests(APITestCase):
         self.assertEqual(response.data["detail"], "Invalid email or password.")
 
 
+@override_settings(CORS_ALLOW_ALL_ORIGINS=False)
+class CorsTests(APITestCase):
+    """
+    Expo Web (a browser) enforces CORS where the native app does not (D-20).
+
+    `CORS_ALLOW_ALL_ORIGINS` is `DEBUG` evaluated when the settings module is
+    imported, so a developer's `DEBUG=True` is already baked in by the time the
+    test runner runs. These explicitly turn it off to exercise the
+    allow-list path that production uses.
+    """
+
+    ALLOWED_ORIGIN = "http://localhost:8081"
+
+    def preflight(self, origin: str):
+        return self.client.options(
+            reverse("auth-login"),
+            HTTP_ORIGIN=origin,
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD="POST",
+        )
+
+    @override_settings(CORS_ALLOWED_ORIGINS=[ALLOWED_ORIGIN])
+    def test_preflight_allows_a_configured_origin(self) -> None:
+        response = self.preflight(self.ALLOWED_ORIGIN)
+
+        self.assertEqual(
+            response.headers.get("Access-Control-Allow-Origin"), self.ALLOWED_ORIGIN
+        )
+        self.assertIn("POST", response.headers["Access-Control-Allow-Methods"])
+
+    def test_preflight_does_not_allow_an_unconfigured_origin(self) -> None:
+        response = self.preflight("http://evil.example.com")
+
+        self.assertNotIn("Access-Control-Allow-Origin", response.headers)
+
+    @override_settings(CORS_ALLOWED_ORIGINS=[ALLOWED_ORIGIN])
+    def test_simple_request_from_a_configured_origin_is_allowed(self) -> None:
+        response = self.client.post(
+            reverse("auth-login"),
+            {"email": "nobody@iskolarngbayan.pup.edu.ph", "password": "x"},
+            format="json",
+            HTTP_ORIGIN=self.ALLOWED_ORIGIN,
+        )
+
+        self.assertEqual(
+            response.headers.get("Access-Control-Allow-Origin"), self.ALLOWED_ORIGIN
+        )
+
+
 class LoginLockoutTests(APITestCase):
     """AC-103.3: 5 consecutive failures lock the account for 15 minutes."""
 

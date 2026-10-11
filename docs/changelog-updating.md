@@ -15,6 +15,28 @@ Related documents:
 | `docs/DECISIONS.md` | Decisions and their rationale |
 | `docs/changelog-updating.md` | **This file** — what changed |
 
+## 2026-10-11 — CORS headers for the browser client (D-20)
+
+Branch: `checking/sprint-1`.
+
+### Added
+
+- `django-cors-headers` dependency (`pyproject.toml`, `uv.lock`).
+- `corsheaders` in `INSTALLED_APPS` and `CorsMiddleware` in `MIDDLEWARE`
+  (`brb_server/settings.py`), placed above `CommonMiddleware`.
+- `CORS_ALLOW_ALL_ORIGINS = DEBUG` and an env-driven `CORS_ALLOWED_ORIGINS`
+  setting for production.
+- `CORS_ALLOWED_ORIGINS` documented in `.env.example`.
+
+### Why
+
+Expo Web runs in a browser and enforces the same-origin policy; the native app
+does not. The login preflight (`OPTIONS /api/v1/auth/login/`) returned 200 but
+carried no `Access-Control-Allow-Origin`, so the browser blocked the actual
+`POST` and login never reached the view. See `DECISIONS.md` D-20.
+
+---
+
 ## 2026-10-09 — Review reviewee derived from order (D-19)
 
 Branch: `test/sprint-1_for-merging`.

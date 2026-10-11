@@ -40,6 +40,7 @@ ALLOWED_HOSTS = [
 
 INSTALLED_APPS = [
     # Third-party apps
+    "corsheaders",
     "rest_framework",
     "rest_framework_simplejwt.token_blacklist",
     "django.contrib.admin",
@@ -63,6 +64,9 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # CORS must sit above CommonMiddleware so it can attach headers to every
+    # response, including the ones CommonMiddleware generates itself (D-20).
+    "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -193,6 +197,21 @@ SIMPLE_JWT = {
     "USER_ID_FIELD": "id",
     "USER_ID_CLAIM": "user_id",
 }
+
+# Cross-Origin Resource Sharing (django-cors-headers, D-20)
+# Expo Web runs in a browser and therefore enforces the same-origin policy; the
+# native iOS/Android app does not. Without these headers the login preflight
+# (`OPTIONS /api/v1/auth/login/`) succeeds but the browser blocks the real POST
+# because no `Access-Control-Allow-Origin` comes back. In local development
+# (DEBUG=True) every origin is accepted so the Metro/LAN host just works; in
+# production set CORS_ALLOWED_ORIGINS to the deployed web origin(s),
+# comma-separated (e.g. "https://brb.pup.edu.ph").
+CORS_ALLOW_ALL_ORIGINS = DEBUG
+CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+]
 
 # Media storage
 # CP-105 identity documents are NOT stored here: their bytes live in Postgres as
