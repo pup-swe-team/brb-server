@@ -71,6 +71,7 @@ class OrderStatusOverride(models.Model):
         related_name="order_status_overrides",
     )
     previous_status = models.CharField(max_length=50)
+    new_status = models.CharField(max_length=50)
     reason = models.TextField()
     overridden_at = models.DateTimeField(auto_now_add=True)
 
@@ -102,6 +103,11 @@ class Dispute(models.Model):
     Damage or missing parts dispute raised by the Lender upon return (FR8).
     """
 
+    class StatusChoices(models.TextChoices):
+        OPEN = "open", "Open"
+        RESOLVED = "resolved", "Resolved"
+        ESCALATED = "escalated", "Escalated"
+
     order = models.ForeignKey(
         Order,
         on_delete=models.CASCADE,
@@ -115,8 +121,10 @@ class Dispute(models.Model):
     description = models.TextField()
     borrower_response = models.TextField(blank=True, null=True)
     status = models.CharField(
-        max_length=50, default="open"
-    )  # open, resolved, escalated
+        max_length=50,
+        choices=StatusChoices.choices,
+        default=StatusChoices.OPEN,
+    )
     resolved_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,

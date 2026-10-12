@@ -18,12 +18,26 @@ class AdminAccessLog(models.Model):
         on_delete=models.PROTECT,
         related_name="identity_document_access_logs",
     )
+    action = models.CharField(
+        max_length=30,
+        default="view",
+        help_text="What the administrator did: view, download, review, contact_release.",
+    )
+    ip_address = models.GenericIPAddressField(
+        null=True,
+        blank=True,
+        help_text="IP address of the administrator at the time of access.",
+    )
     accessed_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = "admin_access_logs"
         verbose_name = "Admin Access Log"
         verbose_name_plural = "Admin Access Logs"
+        ordering = ["-accessed_at"]
 
     def __str__(self) -> str:
-        return f"Document #{self.document_id} accessed by {self.admin.full_name} at {self.accessed_at}"
+        return (
+            f"{self.action.capitalize()} on Document #{self.document_id} "
+            f"by {self.admin.full_name} at {self.accessed_at}"
+        )
