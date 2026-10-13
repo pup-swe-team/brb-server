@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
@@ -28,6 +29,22 @@ class Review(models.Model):
     edited_at = models.DateTimeField(null=True, blank=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
 
+    @property
+    def reviewee(self):
+        """
+        The counterparty being reviewed, derived from the order.
+
+        An order has exactly two participants, borrower and lender, so the
+        reviewee is always the party who did not write the review.
+        """
+        if self.reviewer_id == self.order.borrower_id:
+            return self.order.listing.lender
+        return self.order.borrower
+
+    @property
+    def reviewee_id(self):
+        return self.reviewee.pk
+
     class Meta:
         db_table = "reviews"
         verbose_name = "Review"
@@ -39,5 +56,9 @@ class Review(models.Model):
             ),
         )
 
+    def clean(self):
+        if self.reviewee_id == self.reviewer_id:
+            raise ValidationError("A reviewer cannot review themselves.")
+
     def __str__(self) -> str:
-        return f"{self.rating}★ review by {self.reviewer.full_name} for Order #{self.order_id}"
+        return f"{self.rating}★ review by {self.reviewer.full_name} for {self.reviewee.full_name} on Order #{self.order_id}"

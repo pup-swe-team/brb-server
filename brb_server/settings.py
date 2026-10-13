@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 
 import os
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 import dj_database_url
@@ -20,7 +21,7 @@ from dotenv import load_dotenv
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-load_dotenv(".env.dev")
+load_dotenv()
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
@@ -40,9 +41,9 @@ ALLOWED_HOSTS = [
 
 INSTALLED_APPS = [
     # Third-party apps
+    "corsheaders",
     "rest_framework",
-    "cloudinary_storage",
-    "cloudinary",
+    "rest_framework_simplejwt.token_blacklist",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -64,6 +65,9 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # CORS must sit above CommonMiddleware so it can attach headers to every
+    # response, including the ones CommonMiddleware generates itself (D-20).
+    "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -157,25 +161,115 @@ STATICFILES_DIRS = [BASE_DIR / "static"]
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "users.User"
 
-# Cloudinary Credentials
-CLOUDINARY_STORAGE = {
-    "CLOUD_NAME": os.getenv("CLOUDINARY_CLOUD_NAME"),
-    "API_KEY": os.getenv("CLOUDINARY_API_KEY"),
-    "API_SECRET": os.getenv("CLOUDINARY_API_SECRET"),
+# Django REST Framework
+# https://www.django-rest-framework.org/api-guide/settings/
+
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": (
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+    ),
+    # Default-deny: every endpoint must opt in explicitly, since SRS FR3
+    # requires identity documents to stay private and FR5 requires
+    # ownership checks on every request.
+    "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 20,
+    "DEFAULT_RENDERER_CLASSES": (
+        "rest_framework.renderers.JSONRenderer",
+        "rest_framework.renderers.BrowsableAPIRenderer",
+    ),
+    # CP-105 uploads an identity document, which requires multipart. Added to the
+    # single canonical block above rather than as a second REST_FRAMEWORK dict:
+    # Python takes the last assignment, so a duplicate key would silently drop
+    # the default-deny permission classes (see DECISIONS.md M-01).
+    "DEFAULT_PARSER_CLASSES": (
+        "rest_framework.parsers.JSONParser",
+        "rest_framework.parsers.MultiPartParser",
+        "rest_framework.parsers.FormParser",
+    ),
 }
 
-# Tell Django to use Cloudinary for all uploaded media files
+# JSON Web Tokens (djangorestframework-simplejwt)
+# Signed with JWT_SECRET so auth tokens can be rotated independently of
+# SECRET_KEY. The lifespan below is the inactivity timeout required by
+# CP-103 ("end session on logout or inactivity timeout").
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+    "UPDATE_LAST_LOGIN": True,
+    "ALGORITHM": "HS256",
+    "SIGNING_KEY": os.getenv("JWT_SECRET", SECRET_KEY),
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "USER_ID_FIELD": "id",
+    "USER_ID_CLAIM": "user_id",
+}
+
+# Cross-Origin Resource Sharing (django-cors-headers, D-20)
+# Expo Web runs in a browser and therefore enforces the same-origin policy; the
+# native iOS/Android app does not. Without these headers the login preflight
+# (`OPTIONS /api/v1/auth/login/`) succeeds but the browser blocks the real POST
+# because no `Access-Control-Allow-Origin` comes back. In local development
+# (DEBUG=True) every origin is accepted so the Metro/LAN host just works; in
+# production set CORS_ALLOWED_ORIGINS to the deployed web origin(s),
+# comma-separated (e.g. "https://brb.pup.edu.ph").
+CORS_ALLOW_ALL_ORIGINS = DEBUG
+CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+
+# Media storage
+# CP-105 identity documents are NOT stored here: their bytes live in Postgres as
+# `identity_documents.document_data`, because Render's filesystem is ephemeral and
+# the free tier has no persistent disk (DECISIONS.md D-13).
+#
+# The backend below only serves legacy/profile image fields such as
+# `users.photo`. Those are cosmetic and regenerable by the user, so losing them on
+# redeploy is acceptable -- unlike a government ID, which is not.
 STORAGES = {
     "default": {
-        "BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage",
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
     },
     "staticfiles": {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
     },
 }
 
-REST_FRAMEWORK = {
-    "DEFAULT_PERMISSION_CLASSES": [
-        "rest_framework.permissions.IsAuthenticated",
-    ],
-}
+MEDIA_ROOT = BASE_DIR / "media"
+MEDIA_URL = "media/"
+
+# PUP Community Webmail Validation (SRS Section 4.2)
+ALLOWED_STUDENT_EMAIL_DOMAIN = os.getenv(
+    "ALLOWED_STUDENT_EMAIL_DOMAIN", "iskolarngbayan.pup.edu.ph"
+).lower()
+ALLOWED_FACULTY_EMAIL_DOMAIN = os.getenv(
+    "ALLOWED_FACULTY_EMAIL_DOMAIN", "pup.edu.ph"
+).lower()
+
+# Scheduled Background Jobs (SRS Section 2.4 & 5.2, CONTRIBUTING.md 7.2 rule 6)
+# cron-job.org sends this as a bearer token on the job endpoints. Read here
+# rather than in the view so the secret has exactly one definition site.
+# Empty means "not configured" and the endpoints refuse to run (503) instead of
+# silently accepting every request.
+CRON_SECRET_TOKEN = os.getenv("CRON_SECRET_TOKEN", "")
+
+# Email delivery (CP-102)
+EMAIL_BACKEND = os.getenv(
+    "EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend"
+)
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "webmaster@localhost")
+EMAIL_VERIFICATION_REDIRECT_URL = os.getenv(
+    "EMAIL_VERIFICATION_REDIRECT_URL", "brb://auth/verify-email"
+)
+# CP-102: an account that never verifies its email is removed after this many
+# days. Read through SystemConfig so it stays Admin-configurable (CP-1104).
+EMAIL_VERIFICATION_EXPIRY_DAYS = 7
+
+# CP-107: Application-level encryption key for identity document bytes.
+# Must be a valid Fernet key (32 url-safe base64-encoded bytes).
+# Generate one with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+IDENTITY_DOCUMENT_ENCRYPTION_KEY = os.getenv("IDENTITY_DOCUMENT_ENCRYPTION_KEY", "")
