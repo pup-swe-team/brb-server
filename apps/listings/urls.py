@@ -2,7 +2,9 @@ from django.urls import path
 
 from .views import (
     ListingCreateView,
+    ListingDeactivateView,
     ListingDetailView,
+    ListingReactivateView,
     PickupLocationCreateRetrieveDestroyView,
     PickupLocationListView,
 )
@@ -13,6 +15,16 @@ urlpatterns = [
         "listings/<int:pk>/",
         ListingDetailView.as_view(),
         name="listing-detail-prefixed",
+    ),
+    path(
+        "listings/<int:pk>/deactivate/",
+        ListingDeactivateView.as_view(),
+        name="listing-deactivate",
+    ),
+    path(
+        "listings/<int:pk>/reactivate/",
+        ListingReactivateView.as_view(),
+        name="listing-reactivate",
     ),
     path("<int:pk>", ListingDetailView.as_view(), name="listing-detail"),
     path(

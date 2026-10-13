@@ -12,3 +12,12 @@ ALLOWED_LISTING_PHOTO_CONTENT_TYPES = (
 LISTING_STATUS_ACTIVE = "active"
 LISTING_STATUS_DEACTIVATED = "deactivated"
 LISTING_STATUS_DELETED = "deleted"
+
+# Order statuses that prevent listing deletion (CP-402)
+DELETION_BLOCKING_ORDER_STATUSES = (
+    "confirmed",
+    "active",
+    "overdue",
+    "unreturned",
+    "disputed",
+)

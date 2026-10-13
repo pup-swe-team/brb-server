@@ -10,6 +10,7 @@ from apps.users.models import User
 
 from .constants import (
     ALLOWED_LISTING_PHOTO_CONTENT_TYPES,
+    LISTING_STATUS_DELETED,
     MAX_LISTING_PHOTO_BYTES,
 )
 from .models import (
@@ -21,7 +22,7 @@ from .models import (
     PickupLocation,
 )
 from .selectors import get_lender_rating_stats, get_listing_reviews
-from .services import create_listing
+from .services import create_listing, update_listing
 
 
 class ListingCategorySerializer(serializers.ModelSerializer):
@@ -332,3 +333,151 @@ class ListingCreateSerializer(serializers.ModelSerializer):
             photos=validated_data["photos"],
             availability_windows=validated_data["availability_windows"],
         )
+
+
+class ListingUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for updating resource listing metadata, photos, or availability (CP-402)."""
+
+    title = serializers.CharField(max_length=200, required=False)
+    description = serializers.CharField(required=False)
+    condition = serializers.CharField(max_length=50, required=False)
+    rate_per_day = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        required=False,
+        allow_null=True,
+    )
+    category = serializers.PrimaryKeyRelatedField(
+        queryset=ListingCategory.objects.all(),
+        required=False,
+    )
+    pickup_location = serializers.PrimaryKeyRelatedField(
+        queryset=PickupLocation.objects.all(),
+        required=False,
+    )
+
+    class Meta:
+        model = Listing
+        fields = [
+            "title",
+            "description",
+            "condition",
+            "rate_per_day",
+            "category",
+            "pickup_location",
+        ]
+
+    def _parse_date(self, val: Any) -> date:
+        if isinstance(val, date):
+            return val
+        if isinstance(val, str):
+            try:
+                return date.fromisoformat(val.strip())
+            except ValueError:
+                raise serializers.ValidationError(
+                    f"Date '{val}' must be in YYYY-MM-DD format."
+                )
+        raise serializers.ValidationError("Invalid date value.")
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        if self.instance and self.instance.status.name == LISTING_STATUS_DELETED:
+            raise serializers.ValidationError("Cannot edit a deleted listing.")
+
+        pickup_location = attrs.get("pickup_location")
+        if pickup_location and pickup_location.deleted_at is not None:
+            raise serializers.ValidationError(
+                {"pickup_location": "Selected pickup location is not available."}
+            )
+
+        request = self.context.get("request")
+        photos = []
+        if request and request.FILES:
+            photos = request.FILES.getlist("photos")
+        if not photos and "photos" in self.initial_data:
+            initial_photos = self.initial_data.get("photos")
+            if isinstance(initial_photos, list):
+                photos = initial_photos
+            elif initial_photos:
+                photos = [initial_photos]
+
+        if photos:
+            for photo in photos:
+                if getattr(photo, "size", 0) > MAX_LISTING_PHOTO_BYTES:
+                    max_mb = MAX_LISTING_PHOTO_BYTES // (1024 * 1024)
+                    raise serializers.ValidationError(
+                        {"photos": f"Image must be {max_mb}MB or smaller."}
+                    )
+
+                content_type = (getattr(photo, "content_type", "") or "").lower()
+                if (
+                    content_type
+                    and content_type not in ALLOWED_LISTING_PHOTO_CONTENT_TYPES
+                ):
+                    allowed = ", ".join(
+                        t.split("/")[-1].upper()
+                        for t in ALLOWED_LISTING_PHOTO_CONTENT_TYPES
+                    )
+                    raise serializers.ValidationError(
+                        {"photos": f"Image must be one of: {allowed}."}
+                    )
+            attrs["photos"] = photos
+
+        raw_windows = self.initial_data.get("availability_windows")
+        windows_data = []
+        if isinstance(raw_windows, str):
+            try:
+                windows_data = json.loads(raw_windows)
+            except (json.JSONDecodeError, TypeError):
+                raise serializers.ValidationError(
+                    {
+                        "availability_windows": "Invalid JSON format for availability windows."
+                    }
+                )
+        elif isinstance(raw_windows, list):
+            windows_data = raw_windows
+        elif "start_date" in self.initial_data and "end_date" in self.initial_data:
+            windows_data = [
+                {
+                    "start_date": self.initial_data["start_date"],
+                    "end_date": self.initial_data["end_date"],
+                }
+            ]
+
+        if windows_data:
+            today = timezone.now().date()
+            parsed_windows = []
+            for win in windows_data:
+                if (
+                    not isinstance(win, dict)
+                    or "start_date" not in win
+                    or "end_date" not in win
+                ):
+                    raise serializers.ValidationError(
+                        {
+                            "availability_windows": "Each availability window must have start_date and end_date."
+                        }
+                    )
+                start_d = self._parse_date(win["start_date"])
+                end_d = self._parse_date(win["end_date"])
+
+                if start_d > end_d:
+                    raise serializers.ValidationError(
+                        {
+                            "availability_windows": "Start date must be before or equal to end date."
+                        }
+                    )
+
+                if start_d < today:
+                    raise serializers.ValidationError(
+                        {
+                            "availability_windows": "Availability dates cannot be in the past."
+                        }
+                    )
+
+                parsed_windows.append({"start_date": start_d, "end_date": end_d})
+            attrs["availability_windows"] = parsed_windows
+
+        return attrs
+
+    def update(self, instance: Listing, validated_data: dict[str, Any]) -> Listing:
+        return update_listing(listing=instance, validated_data=validated_data)

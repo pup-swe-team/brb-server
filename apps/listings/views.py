@@ -1,9 +1,9 @@
-# Create your views here.
-
+from django.shortcuts import get_object_or_404
 from rest_framework import generics, status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from apps.users.permissions import IsIdentityVerified
 
@@ -12,19 +12,65 @@ from .permissions import IsActiveLender, IsOwnerOrReadOnly
 from .serializers import (
     ListingCreateSerializer,
     ListingSerializer,
+    ListingUpdateSerializer,
     PickupLocationSerializer,
 )
+from .services import deactivate_listing, delete_listing, reactivate_listing
 
 
 class ListingDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """Retrieve, update, or soft-delete a resource listing (CP-303, CP-402)."""
+
     permission_classes = (IsOwnerOrReadOnly,)
-    serializer_class = ListingSerializer
     queryset = Listing.objects.select_related(
         "lender", "category", "pickup_location", "status"
     ).prefetch_related(
         "photos",
         "availability_windows",
     )
+
+    def get_serializer_class(self):
+        if self.request.method in ("PUT", "PATCH"):
+            return ListingUpdateSerializer
+        return ListingSerializer
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        listing = serializer.save()
+        response_data = ListingSerializer(listing, context={"request": request}).data
+        return Response(response_data, status=status.HTTP_200_OK)
+
+    def perform_destroy(self, instance):
+        delete_listing(listing=instance)
+
+
+class ListingDeactivateView(APIView):
+    """Soft-remove a listing from search by transitioning its status to 'deactivated' (CP-402)."""
+
+    permission_classes = (IsAuthenticated, IsOwnerOrReadOnly)
+
+    def post(self, request, pk: int):
+        listing = get_object_or_404(Listing, pk=pk)
+        self.check_object_permissions(request, listing)
+        updated_listing = deactivate_listing(listing=listing)
+        data = ListingSerializer(updated_listing, context={"request": request}).data
+        return Response(data, status=status.HTTP_200_OK)
+
+
+class ListingReactivateView(APIView):
+    """Restore a deactivated listing back to 'active' status (CP-402)."""
+
+    permission_classes = (IsAuthenticated, IsOwnerOrReadOnly)
+
+    def post(self, request, pk: int):
+        listing = get_object_or_404(Listing, pk=pk)
+        self.check_object_permissions(request, listing)
+        updated_listing = reactivate_listing(listing=listing)
+        data = ListingSerializer(updated_listing, context={"request": request}).data
+        return Response(data, status=status.HTTP_200_OK)
 
 
 class ListingCreateView(generics.CreateAPIView):

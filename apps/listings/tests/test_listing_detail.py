@@ -5,7 +5,7 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
 
-from apps.listings.models import Listing
+from apps.listings.models import Listing, PickupLocation
 from apps.listings.tests.base import BaseListingTestCase
 from apps.orders.models import Order, OrderStatus
 from apps.reviews.models import Review
@@ -329,16 +329,86 @@ class ListingDetailViewTests(BaseListingTestCase):
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     # =========================================================================
-    # DELETE Tests
+    # DELETE Tests (Soft-delete & Guard Checks - CP-402)
     # =========================================================================
 
     def test_delete_by_owner_success(self):
-        """Owner can delete their own listing."""
+        """Owner can delete their own listing without ongoing orders (soft delete)."""
         self.client.force_authenticate(user=self.owner)
         response = self.client.delete(self.detail_url)
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
-        self.assertFalse(Listing.objects.filter(pk=self.listing.pk).exists())
+        self.listing.refresh_from_db()
+        self.assertEqual(self.listing.status.name, "deleted")
+
+    def test_delete_blocked_when_listing_has_confirmed_order(self):
+        """Listing deletion is blocked when there is a Confirmed order."""
+        status_confirmed, _ = OrderStatus.objects.get_or_create(name="confirmed")
+        Order.objects.create(
+            listing=self.listing,
+            borrower=self.other_user,
+            start_date=date(2026, 10, 15),
+            end_date=date(2026, 10, 20),
+            status=status_confirmed,
+        )
+
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.delete(self.detail_url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("ongoing orders", str(response.data))
+        self.listing.refresh_from_db()
+        self.assertEqual(self.listing.status.name, "active")
+
+    def test_delete_blocked_when_listing_has_active_order(self):
+        """Listing deletion is blocked when there is an Active order."""
+        status_active_order, _ = OrderStatus.objects.get_or_create(name="active")
+        Order.objects.create(
+            listing=self.listing,
+            borrower=self.other_user,
+            start_date=date(2026, 10, 15),
+            end_date=date(2026, 10, 20),
+            status=status_active_order,
+        )
+
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.delete(self.detail_url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("ongoing orders", str(response.data))
+
+    def test_delete_blocked_when_listing_has_overdue_or_disputed_order(self):
+        """Listing deletion is blocked when there are overdue or disputed orders."""
+        status_overdue, _ = OrderStatus.objects.get_or_create(name="overdue")
+        Order.objects.create(
+            listing=self.listing,
+            borrower=self.other_user,
+            start_date=date(2026, 10, 1),
+            end_date=date(2026, 10, 5),
+            status=status_overdue,
+        )
+
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.delete(self.detail_url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_delete_allowed_when_listing_has_completed_order(self):
+        """Listing deletion is allowed when orders are completed (terminal state)."""
+        Order.objects.create(
+            listing=self.listing,
+            borrower=self.other_user,
+            start_date=date(2026, 10, 1),
+            end_date=date(2026, 10, 5),
+            status=self.order_status_completed,
+        )
+
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.delete(self.detail_url)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.listing.refresh_from_db()
+        self.assertEqual(self.listing.status.name, "deleted")
 
     def test_delete_by_non_owner_forbidden(self):
         """Non-owner cannot delete another user's listing."""
@@ -346,7 +416,8 @@ class ListingDetailViewTests(BaseListingTestCase):
         response = self.client.delete(self.detail_url)
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
-        self.assertTrue(Listing.objects.filter(pk=self.listing.pk).exists())
+        self.listing.refresh_from_db()
+        self.assertEqual(self.listing.status.name, "active")
 
     def test_delete_unauthenticated(self):
         """Unauthenticated request cannot delete listing."""
@@ -356,10 +427,84 @@ class ListingDetailViewTests(BaseListingTestCase):
             response.status_code,
             [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN],
         )
-        self.assertTrue(Listing.objects.filter(pk=self.listing.pk).exists())
 
     def test_delete_not_found(self):
         """Deleting non-existent listing returns 404."""
         self.client.force_authenticate(user=self.owner)
         response = self.client.delete(self.non_existent_url)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    # =========================================================================
+    # DEACTIVATE & REACTIVATE Tests (CP-402)
+    # =========================================================================
+
+    def test_deactivate_listing_by_owner_success(self):
+        """Owner can deactivate an active listing (soft-remove from search)."""
+        deactivate_url = reverse("listing-deactivate", kwargs={"pk": self.listing.pk})
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.post(deactivate_url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"]["name"], "deactivated")
+        self.listing.refresh_from_db()
+        self.assertEqual(self.listing.status.name, "deactivated")
+
+    def test_deactivate_listing_by_non_owner_forbidden(self):
+        """Non-owner cannot deactivate another user's listing."""
+        deactivate_url = reverse("listing-deactivate", kwargs={"pk": self.listing.pk})
+        self.client.force_authenticate(user=self.other_user)
+        response = self.client.post(deactivate_url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.listing.refresh_from_db()
+        self.assertEqual(self.listing.status.name, "active")
+
+    def test_reactivate_listing_by_owner_success(self):
+        """Owner can reactivate a deactivated listing."""
+        deactivate_url = reverse("listing-deactivate", kwargs={"pk": self.listing.pk})
+        reactivate_url = reverse("listing-reactivate", kwargs={"pk": self.listing.pk})
+        self.client.force_authenticate(user=self.owner)
+        self.client.post(deactivate_url)
+
+        response = self.client.post(reactivate_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"]["name"], "active")
+        self.listing.refresh_from_db()
+        self.assertEqual(self.listing.status.name, "active")
+
+    def test_deactivate_or_reactivate_deleted_listing_fails(self):
+        """Deleted listings cannot be deactivated or reactivated."""
+        self.client.force_authenticate(user=self.owner)
+        self.client.delete(self.detail_url)
+
+        deactivate_url = reverse("listing-deactivate", kwargs={"pk": self.listing.pk})
+        reactivate_url = reverse("listing-reactivate", kwargs={"pk": self.listing.pk})
+
+        resp_deact = self.client.post(deactivate_url)
+        self.assertEqual(resp_deact.status_code, status.HTTP_400_BAD_REQUEST)
+
+        resp_react = self.client.post(reactivate_url)
+        self.assertEqual(resp_react.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_update_deleted_listing_fails(self):
+        """Deleted listings cannot be edited."""
+        self.client.force_authenticate(user=self.owner)
+        self.client.delete(self.detail_url)
+
+        response = self.client.patch(self.detail_url, data={"title": "New Title"})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("deleted listing", str(response.data))
+
+    def test_update_with_soft_deleted_pickup_location_fails(self):
+        """Updating to a decommissioned pickup location fails."""
+        self.client.force_authenticate(user=self.owner)
+        deleted_loc = PickupLocation.objects.create(
+            name="Old Kiosk",
+            deleted_at=timezone.now(),
+        )
+
+        response = self.client.patch(
+            self.detail_url, data={"pickup_location": deleted_loc.id}
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("pickup_location", response.data)
