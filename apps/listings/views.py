@@ -1,10 +1,13 @@
 # Create your views here.
 
-from django.shortcuts import get_object_or_404
-from rest_framework import generics
+from rest_framework import generics, status
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
+from rest_framework.response import Response
 
-from .models import Listing, ListingStatus, PickupLocation
+from apps.users.permissions import IsIdentityVerified
+
+from .models import Listing, PickupLocation
 from .permissions import IsActiveLender, IsOwnerOrReadOnly
 from .serializers import (
     ListingCreateSerializer,
@@ -25,29 +28,20 @@ class ListingDetailView(generics.RetrieveUpdateDestroyAPIView):
 
 
 class ListingCreateView(generics.CreateAPIView):
+    """Publish an educational resource listing (FR6, FR7, CP-401)."""
+
     queryset = Listing.objects.all()
     serializer_class = ListingCreateSerializer
-    permission_classes = (IsActiveLender,)  # Only those that are approved
-
-    def perform_create(self, serializer):
-        pending_status = get_object_or_404(
-            ListingStatus,
-            name="Pending",
-        )
-
-        serializer.save(
-            lender=self.request.user,
-            status=pending_status,
-        )
+    permission_classes = (IsAuthenticated, IsIdentityVerified, IsActiveLender)
+    parser_classes = (MultiPartParser, FormParser, JSONParser)
 
     def create(self, request, *args, **kwargs):
-        response = super().create(request, *args, **kwargs)
-
-        if response.status_code == 201:
-            listing = self.get_queryset().get(pk=response.data["id"])
-            response.data = ListingSerializer(listing).data
-
-        return response
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        listing = serializer.save()
+        response_data = ListingSerializer(listing, context={"request": request}).data
+        headers = self.get_success_headers(response_data)
+        return Response(response_data, status=status.HTTP_201_CREATED, headers=headers)
 
 
 class PickupLocationListView(generics.ListAPIView):

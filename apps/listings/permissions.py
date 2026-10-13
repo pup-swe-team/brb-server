@@ -14,10 +14,13 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
 
 
 class IsActiveLender(permissions.BasePermission):
+    message = "Active lender status is required before you can post resources."
+
     def has_permission(self, request, view) -> bool:
+        user = getattr(request, "user", None)
         return bool(
-            request.user
-            and request.user.is_authenticated
-            and request.user.account_status == User.AccountStatusChoices.ACTIVE
-            and request.user.lender_status == User.LenderStatusChoices.ACTIVE
+            user
+            and user.is_authenticated
+            and user.account_status == User.AccountStatusChoices.ACTIVE
+            and user.lender_status == User.LenderStatusChoices.ACTIVE
         )
