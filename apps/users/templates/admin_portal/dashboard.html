@@ -1,0 +1,67 @@
+{% extends "admin_portal/shell.html" %}
+{% load humanize %}
+{% block title %}Dashboard &middot; CoPUPAdmin{% endblock %}
+{% block content %}
+<nav class="crumbs" aria-label="Breadcrumb"><span>Overview</span></nav>
+<div class="page-heading">
+  <h1>Dashboard</h1>
+</div>
+
+<div class="stat-grid">
+  <section class="card stat-card">
+    <span class="stat-label">Total Users</span>
+    <span class="stat-value">{{ stats.total_users|intcomma }}</span>
+    <span class="stat-note">+{{ stats.new_users_this_month }} this month</span>
+  </section>
+  <section class="card stat-card">
+    <span class="stat-label">Active Listings</span>
+    <span class="stat-value">{{ stats.active_listings|intcomma }}</span>
+    <span class="stat-note">{{ stats.listings_added_week }} added this week</span>
+  </section>
+  <section class="card stat-card">
+    <span class="stat-label">Open Reports</span>
+    <span class="stat-value">{{ stats.open_reports|intcomma }}</span>
+    <span class="stat-note">Awaiting review</span>
+  </section>
+  <section class="card stat-card">
+    <span class="stat-label">Pending Verifications</span>
+    <span class="stat-value">{{ stats.pending_verifications|intcomma }}</span>
+    <span class="stat-note">{% if stats.pending_days is None %}Nothing waiting{% else %}Oldest waiting {{ stats.pending_days }} day{{ stats.pending_days|pluralize }}{% endif %}</span>
+  </section>
+</div>
+
+<div class="dash-grid">
+  <section class="card dash-card">
+    <h2>Orders by Status</h2>
+    <div class="orders-list">
+      {% for row in orders_by_status_rows %}
+      <div class="order-row">
+        <span class="order-label">{{ row.name|title }}</span>
+        <div class="order-track"><i class="order-fill" style="width: {{ row.percent }}%"></i></div>
+        <span class="order-count">{{ row.total }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="card dash-card">
+    <h2>Recent Activity</h2>
+    {% if activity %}
+    <ul class="activity-list">
+      {% for event in activity %}
+      <li class="activity-row">
+        <span class="activity-badge activity-badge-{{ event.kind|lower }}"></span>
+        <span class="activity-body">
+          <strong>{{ event.title }}</strong>
+          <span>{{ event.detail }}</span>
+        </span>
+        <time class="activity-time">{{ event.time }}</time>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty-note">No activity yet.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

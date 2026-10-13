@@ -1,0 +1,33 @@
+{% extends "admin_portal/base.html" %}
+{% load static %}
+{% block body %}
+<main class="login-page">
+  <form class="login-card" method="post" novalidate>
+    {% csrf_token %}
+    <div class="login-brand">CoPUP<span>Admin</span></div>
+    <h1 class="login-title">CoPUPAdmin</h1>
+    <p class="login-sub">Sign in to the Administrator Portal</p>
+
+    {% if form.non_field_errors %}
+      <div class="message message-error" role="alert">{{ form.non_field_errors.0 }}</div>
+    {% endif %}
+
+    <div class="field">
+      <label for="id_username">Email <em>*</em></label>
+      <input class="field-input" type="text" name="username" id="id_username" value="{{ form.username.value|default:'' }}" placeholder="admin@pup.edu.ph" autocomplete="username" autofocus>
+    </div>
+
+    <div class="field">
+      <label for="id_password">Password <em>*</em></label>
+      <input class="field-input" type="password" name="password" id="id_password" placeholder="Password" autocomplete="current-password">
+    </div>
+
+    <label class="show-password"><input type="checkbox" data-show-password> Show password</label>
+
+    <button class="btn btn-primary btn-block" type="submit">Sign In</button>
+
+    <p class="login-note">Only administrator accounts can sign in here.</p>
+  </form>
+</main>
+<script src="{% static 'admin_portal/portal.js' %}" defer></script>
+{% endblock %}

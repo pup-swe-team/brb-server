@@ -2,6 +2,7 @@ import typing
 
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser, BaseUserManager
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
@@ -76,6 +77,18 @@ class UserManager(BaseUserManager):
             raise ValueError("Superuser must have is_staff=True.")
         if extra_fields.get("is_superuser") is not True:
             raise ValueError("Superuser must have is_superuser=True.")
+
+        # Administrator accounts are limited to the faculty/staff PUP domain
+        # (same rule the Django Admin "add user" form enforces via clean()).
+        admin_domain = getattr(
+            settings, "ALLOWED_FACULTY_EMAIL_DOMAIN", "pup.edu.ph"
+        ).lower()
+        email_domain = email.lower().rsplit("@", 1)[-1] if "@" in email else email
+        if email_domain != admin_domain:
+            raise ValueError(
+                f"Superuser email must use an @{admin_domain} address; "
+                f"got @{email_domain}."
+            )
 
         return self.create_user(email, password, **extra_fields)
 
@@ -159,7 +172,6 @@ class User(AbstractUser):
     REQUIRED_FIELDS: typing.ClassVar[list[str]] = [
         "full_name",
         "contact_number",
-        "affiliation",
     ]
 
     class Meta:
@@ -169,6 +181,24 @@ class User(AbstractUser):
 
     def __str__(self) -> str:
         return f"{self.full_name} ({self.email})"
+
+    def clean(self) -> None:
+        """Form-level validation (runs on every Django Admin add/edit user)."""
+        super().clean()
+        if self.is_staff and "@" in (self.email or ""):
+            admin_domain = getattr(
+                settings, "ALLOWED_FACULTY_EMAIL_DOMAIN", "pup.edu.ph"
+            ).lower()
+            email_domain = self.email.lower().rsplit("@", 1)[-1]
+            if email_domain != admin_domain:
+                raise ValidationError(
+                    {
+                        "email": (
+                            "Administrator accounts must use an @"
+                            f"{admin_domain} address."
+                        )
+                    }
+                )
 
     @property
     def is_email_verified(self) -> bool:

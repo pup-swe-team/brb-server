@@ -140,6 +140,27 @@ def verify_user_email(user: User) -> None:
         user.save(update_fields=["email_verified_at", "account_status", "updated_at"])
 
 
+def resend_email_verification(email: str) -> None:
+    """
+    Re-dispatch the CP-102 confirmation link to an account that still needs it.
+
+    Exists so a user who never received (or lost) the first email can ask for a
+    fresh one without re-registering (BE-BUG-0001). It is deliberately
+    non-committal: an unknown address, an already-verified account, or a
+    non-pending account all silently do nothing, and the caller always returns
+    the same generic message -- otherwise this public endpoint becomes a probe
+    for which addresses are registered (and which have confirmed).
+    """
+    user = User.objects.filter(email__iexact=email.strip()).first()
+    if user is None:
+        return
+    if user.email_verified_at is not None:
+        return
+    if user.account_status != User.AccountStatusChoices.PENDING_REVIEW:
+        return
+    send_email_verification(user)
+
+
 def deactivate_unverified_users(*, now=None) -> list[int]:
     """
     Remove accounts that never confirmed their email within the expiry window.

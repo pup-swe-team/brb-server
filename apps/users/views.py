@@ -6,12 +6,13 @@ from rest_framework import permissions, status
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.request import Request
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from apps.audit.services import log_admin_document_access
 
-from .encryption import decrypt_document_data
+from .encryption import decrypt_document_data, detect_document_content_type
 from .models import IdentityDocument
 from .serializers import (
     EmailVerificationSerializer,
@@ -22,11 +23,13 @@ from .serializers import (
     LoginSerializer,
     LogoutSerializer,
     RefreshSerializer,
+    ResendVerificationSerializer,
     UserRegistrationSerializer,
     UserResponseSerializer,
 )
 from .services import (
     register_user,
+    resend_email_verification,
     review_identity_document,
     send_email_verification,
     verify_user_email,
@@ -106,6 +109,41 @@ class EmailVerificationView(APIView):
         )
 
 
+class ResendVerificationView(APIView):
+    """
+    Re-send the confirmation link for an unverified account (BE-BUG-0001).
+    POST /api/v1/auth/resend-verification/
+
+    Accepts an email address; when it belongs to an account that is still
+    unverified and pending review, a fresh link is minted and emailed. Every
+    outcome returns the same generic 200 so the endpoint cannot be used as an
+    account-existence probe. Throttled to bound outbound mail volume.
+    """
+
+    permission_classes = (permissions.AllowAny,)
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = "resend-verification"
+
+    def post(self, request: Request) -> Response:
+        serializer = ResendVerificationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            resend_email_verification(serializer.validated_data["email"])
+        except Exception:
+            logger.exception("BE-BUG-0001: failed to resend a verification email")
+
+        return Response(
+            {
+                "message": (
+                    "If that email is registered and unverified, we have sent a "
+                    "new verification link."
+                )
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 class LoginView(APIView):
     """
     Exchange credentials for an access/refresh pair (CP-103).
@@ -124,6 +162,23 @@ class LoginView(APIView):
                 "tokens": serializer.validated_data["tokens"],
             },
             status=status.HTTP_200_OK,
+        )
+
+
+class MeView(APIView):
+    """
+    Return the authenticated caller's own account details (BE-BUG-0002).
+    GET /api/v1/auth/me/
+
+    Lets the client render the real basic account details (name, affiliation)
+    instead of placeholder data. Always reports `request.user`'s own row, so a
+    client cannot look at anyone else's profile through this endpoint. Requires
+    authentication (the project-wide IsAuthenticated default).
+    """
+
+    def get(self, request: Request) -> Response:
+        return Response(
+            UserResponseSerializer(request.user).data, status=status.HTTP_200_OK
         )
 
 
@@ -298,17 +353,7 @@ class IdentityDocumentDownloadView(APIView):
         raw_bytes = decrypt_document_data(document.document_data)
 
         # Infer content type from signature
-        content_type = "application/octet-stream"
-        ext = ".bin"
-        if raw_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
-            content_type = "image/png"
-            ext = ".png"
-        elif raw_bytes.startswith(b"\xff\xd8\xff"):
-            content_type = "image/jpeg"
-            ext = ".jpg"
-        elif raw_bytes.startswith(b"%PDF"):
-            content_type = "application/pdf"
-            ext = ".pdf"
+        content_type, ext = detect_document_content_type(raw_bytes)
 
         filename = f"identity_doc_{document.id}_{document.id_number}{ext}"
         response = HttpResponse(raw_bytes, content_type=content_type)

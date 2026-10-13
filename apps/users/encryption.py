@@ -17,9 +17,33 @@ from django.core.exceptions import ImproperlyConfigured
 __all__ = [
     "InvalidToken",
     "decrypt_document_data",
+    "detect_document_content_type",
     "encrypt_document_data",
     "get_fernet",
 ]
+
+# Signature sniffing for the three formats the identity document upload accepts
+# (JPEG, PNG, PDF). Kept here next to encryption because both deal with the raw
+# stored bytes; the download view and the portal document preview share it so
+# the two never disagree about what kind of file a submission is.
+_DOCUMENT_MAGIC_NUMBERS = (
+    (b"\x89PNG\r\n\x1a\n", "image/png", ".png"),
+    (b"\xff\xd8\xff", "image/jpeg", ".jpg"),
+    (b"%PDF", "application/pdf", ".pdf"),
+)
+
+
+def detect_document_content_type(raw_bytes: bytes) -> tuple[str, str]:
+    """
+    Infer (content_type, extension) for identity document bytes from their header.
+
+    Falls back to (application/octet-stream, .bin) when no signature matches, so
+    callers always get a usable pair.
+    """
+    for signature, content_type, extension in _DOCUMENT_MAGIC_NUMBERS:
+        if raw_bytes.startswith(signature):
+            return content_type, extension
+    return "application/octet-stream", ".bin"
 
 
 def get_fernet() -> Fernet | None:

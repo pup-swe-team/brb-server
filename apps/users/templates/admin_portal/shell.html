@@ -1,0 +1,78 @@
+{% extends "admin_portal/base.html" %}
+{% load static %}{% load portal_extras %}
+{% block body %}
+<div class="shell">
+  <aside class="sidebar">
+    <div class="sidebar-brand">CoPUP<span>Admin</span></div>
+    <nav class="sidebar-nav" aria-label="Admin navigation">
+      <p class="nav-group">Overview</p>
+      <a class="nav-item {% if active_nav == 'dashboard' %}is-active{% endif %}" href="{% url 'portal-dashboard' %}">
+        <svg class="nav-icon"><use href="#icon-dashboard"/></svg><span>Dashboard</span>
+      </a>
+      <p class="nav-group">Moderation</p>
+      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="Planned for a later sprint">
+        <svg class="nav-icon"><use href="#icon-users"/></svg><span>Users</span>
+      </a>
+      <a class="nav-item {% if active_nav == 'verification' %}is-active{% endif %}" href="{% url 'portal-verification-queue' %}">
+        <svg class="nav-icon"><use href="#icon-verification"/></svg><span>Verification Queue</span>
+        {% if nav_verification_count %}<span class="nav-badge">{{ nav_verification_count }}</span>{% endif %}
+      </a>
+      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="Planned for a later sprint">
+        <svg class="nav-icon"><use href="#icon-reports"/></svg><span>Reports</span>
+      </a>
+      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="Planned for a later sprint">
+        <svg class="nav-icon"><use href="#icon-unreturned"/></svg><span>Unreturned Cases</span>
+      </a>
+      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="Planned for a later sprint">
+        <svg class="nav-icon"><use href="#icon-disputes"/></svg><span>Disputes</span>
+      </a>
+      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="Planned for a later sprint">
+        <svg class="nav-icon"><use href="#icon-moderation"/></svg><span>Content Moderation</span>
+      </a>
+      <p class="nav-group">Configuration</p>
+      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="Planned for a later sprint">
+        <svg class="nav-icon"><use href="#icon-pickup"/></svg><span>Pickup Locations</span>
+      </a>
+      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="Planned for a later sprint">
+        <svg class="nav-icon"><use href="#icon-settings"/></svg><span>System Settings</span>
+      </a>
+      <p class="nav-group">Audit</p>
+      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="Planned for a later sprint">
+        <svg class="nav-icon"><use href="#icon-audit"/></svg><span>Audit Log</span>
+      </a>
+    </nav>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="searchbox" aria-hidden="true">
+        <svg class="search-icon"><use href="#icon-search"/></svg>
+        <span class="search-placeholder">Search users, orders, reports</span>
+      </div>
+      <div class="topbar-user">
+        <span class="avatar">{{ request.user.full_name|initials }}</span>
+        <span class="topbar-meta">
+          <strong>{{ request.user.full_name }}</strong>
+          <em>Administrator</em>
+        </span>
+        <form class="logout-form" method="post" action="{% url 'portal-logout' %}">
+          {% csrf_token %}
+          <button class="logout-btn" type="submit">Sign out</button>
+        </form>
+      </div>
+    </header>
+
+    <main class="content">
+      {% if messages %}
+        <div class="messages" role="status">
+          {% for message in messages %}
+            <div class="message message-{{ message.tags|default:'info' }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+<script src="{% static 'admin_portal/portal.js' %}" defer></script>
+{% endblock %}

@@ -1,0 +1,104 @@
+{% extends "admin_portal/shell.html" %}
+{% load portal_extras %}
+{% block title %}Verification Review &middot; CoPUPAdmin{% endblock %}
+{% block content %}
+<nav class="crumbs" aria-label="Breadcrumb">
+  <span>Moderation</span> / <a href="{% url 'portal-verification-queue' %}">Verification Queue</a> / <span>{{ document.user.full_name }}</span>
+</nav>
+<div class="page-heading">
+  <h1>Verification Review</h1>
+  <span class="badge badge-{{ document.status.name }}">{{ document.status.name|title }}</span>
+</div>
+
+<div class="review-grid">
+  <div class="review-main">
+    <section class="card">
+      <h2>Submitted ID</h2>
+      <div class="doc-box">
+        {% if is_image %}
+          <img class="doc-image" src="{{ download_url }}" alt="Submitted {{ document.document_type.name|doc_type_label }}" loading="lazy">
+        {% else %}
+          <a class="doc-pdf" href="{{ download_url }}" target="_blank" rel="noopener">
+            <svg class="doc-icon"><use href="#icon-download"/></svg>
+            Open document ({{ extension|upper }})
+          </a>
+        {% endif %}
+      </div>
+      <p class="doc-notice">Viewing this document is recorded in the audit log. Documents are only visible to Administrators.</p>
+    </section>
+
+    <section class="card">
+      <h2>Submitted Details</h2>
+      <dl class="detail-list">
+        {% for detail in details %}
+        <div class="detail-row">
+          <dt>{{ detail.label }}</dt>
+          <dd>{{ detail.value }}</dd>
+          {% if detail.note %}
+          <span class="detail-note {% if detail.ok is False %}is-warn{% endif %}">{{ detail.note }}</span>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </dl>
+    </section>
+  </div>
+
+  <div class="review-side">
+    <section class="card">
+      <h2>Checks</h2>
+      <ul class="check-list">
+        {% for check in checks %}
+        <li class="{% if check.pass %}is-pass{% else %}is-fail{% endif %}">
+          <span class="check-icon">
+            <svg><use href="#icon-{% if check.pass %}check{% else %}alert{% endif %}"/></svg>
+          </span>
+          <span>{{ check.label }}{% if check.detail %} ({{ check.detail }}){% endif %}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+
+    <section class="card decision-card">
+      <h2>Decision</h2>
+      {% if document.status.name == 'pending' %}
+        <form method="post" action="{% url 'portal-verification-review-submit' document.pk %}">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="approve">
+          <button class="btn btn-primary btn-block" type="submit">Approve</button>
+        </form>
+        <button class="btn btn-outline btn-block" type="button" data-open-reject>Reject</button>
+      {% else %}
+        <p class="reviewed-note">
+          Reviewed {{ document.reviewed_at|date:"M. j, Y" }}{% if document.reviewed_by %} by {{ document.reviewed_by.full_name }}{% endif %}.
+        </p>
+        {% if document.rejection_reason %}
+        <p class="reviewed-reason"><strong>Reason:</strong> {{ document.rejection_reason }}</p>
+        {% endif %}
+      {% endif %}
+    </section>
+  </div>
+</div>
+
+{% if document.status.name == 'pending' %}
+<dialog class="overlay" data-reject-overlay>
+  <div class="overlay-card">
+    <h2>Reject verification?</h2>
+    <p class="overlay-sub">{{ document.user.full_name }} will see this reason and can resubmit.</p>
+    <form method="post" action="{% url 'portal-verification-review-submit' document.pk %}">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="reject">
+      <div class="field">
+        <label for="rejection_reason">Reason <em>*</em></label>
+        <textarea class="field-input" name="rejection_reason" id="rejection_reason" rows="4"
+          placeholder="The ID photo is blurry and the ID number can&#39;t be read. Please upload a clearer photo." required></textarea>
+        <span class="field-error">A reason is required.</span>
+      </div>
+      <div class="overlay-actions">
+        <button class="btn btn-ghost" type="button" data-close-reject>Cancel</button>
+        <button class="btn btn-danger" type="submit">Reject</button>
+      </div>
+    </form>
+  </div>
+</dialog>
+{% endif %}
+{% endblock %}

@@ -6,7 +6,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core import mail
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from django.urls import reverse
@@ -256,6 +256,45 @@ class UserRegistrationTests(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["user"]["lender_status"], "none")
+
+
+class AdminAccountEmailDomainTests(APITestCase):
+    """
+    Administrator (staff/superuser) accounts must use the faculty/staff PUP
+    domain (@pup.edu.ph) — the same rule registration enforces for Faculty/Staff.
+    `createsuperuser` and Django Admin forms must refuse @gmail.com etc.
+    """
+
+    def test_createsuperuser_rejects_gmail(self) -> None:
+        with self.assertRaises(ValueError):
+            User.objects.create_superuser("admin@gmail.com", "StrongPassword123!")
+
+    def test_createsuperuser_rejects_student_domain(self) -> None:
+        with self.assertRaises(ValueError):
+            User.objects.create_superuser(
+                "admin@iskolarngbayan.pup.edu.ph", "StrongPassword123!"
+            )
+
+    def test_createsuperuser_accepts_faculty_domain(self) -> None:
+        admin = User.objects.create_superuser(
+            "admin@pup.edu.ph",
+            "StrongPassword123!",
+            full_name="Admin Account",
+            contact_number="09171234567",
+        )
+        self.assertTrue(admin.is_staff)
+        self.assertTrue(admin.is_superuser)
+        self.assertEqual(admin.affiliation, User.AffiliationChoices.FACULTY)
+
+    def test_clean_rejects_staff_with_gmail(self) -> None:
+        staff = make_user("staff@iskolarngbayan.pup.edu.ph", is_staff=True)
+        staff.email = "staff@gmail.com"
+        with self.assertRaises(ValidationError):
+            staff.full_clean()
+
+    def test_clean_allows_non_staff_student_domain(self) -> None:
+        member = make_user("member@iskolarngbayan.pup.edu.ph")
+        member.full_clean()
 
 
 # ---------------------------------------------------------------------------
@@ -545,6 +584,104 @@ class EmailVerificationTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
 
 
+@mock.patch.dict(
+    "rest_framework.throttling.SimpleRateThrottle.THROTTLE_RATES",
+    {"resend-verification": "100/min"},
+)
+class ResendVerificationTests(APITestCase):
+    """
+    Re-sending the CP-102 confirmation link (BE-BUG-0001).
+
+    The endpoint must actually mail a fresh link to an unverified account, keep
+    silent for every address it will not serve, and respond identically in all
+    cases so it cannot double as an account-existence probe.
+    """
+
+    def setUp(self) -> None:
+        self.url = reverse("auth-resend-verification")
+        self.unverified = make_user(
+            "still.waiting@iskolarngbayan.pup.edu.ph", verified=False
+        )
+
+    def test_resend_sends_fresh_link_to_unverified_account(self) -> None:
+        response = self.client.post(
+            self.url, {"email": self.unverified.email}, format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 1)
+        message = mail.outbox[0]
+        self.assertEqual(message.to, [self.unverified.email])
+
+        link = message.body.split("?", 1)[1].split()[0]
+        query = parse_qs(link)
+        self.assertTrue(
+            email_verification_token_generator().check_token(
+                self.unverified, query["token"][0]
+            )
+        )
+
+    def test_resend_does_not_send_to_already_verified_account(self) -> None:
+        verified = make_user("already.done@iskolarngbayan.pup.edu.ph", verified=True)
+        response = self.client.post(self.url, {"email": verified.email}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_resend_does_not_send_to_unknown_email(self) -> None:
+        response = self.client.post(
+            self.url,
+            {"email": "nobody@iskolarngbayan.pup.edu.ph"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_resend_does_not_send_to_non_pending_account(self) -> None:
+        suspended = make_user(
+            "suspended@iskolarngbayan.pup.edu.ph",
+            verified=False,
+            account_status=User.AccountStatusChoices.SUSPENDED,
+        )
+        response = self.client.post(self.url, {"email": suspended.email}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_resend_response_is_indistinguishable(self) -> None:
+        """
+        The known-to-exist but unusable address and the unknown address both
+        return the same 200, so neither the endpoint caller nor a network
+        observer can tell registered accounts apart.
+        """
+        responses = []
+        for email in ("nobody@iskolarngbayan.pup.edu.ph", self.unverified.email):
+            response = self.client.post(self.url, {"email": email}, format="json")
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            responses.append(str(response.data["message"]))
+
+        self.assertEqual(len(set(responses)), 1)
+        # Only the valid, unverified account actually got a mail.
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_resend_swallows_email_failures(self) -> None:
+        with mock.patch(
+            "apps.users.services.send_email_verification",
+            side_effect=OSError("smtp down"),
+        ):
+            response = self.client.post(
+                self.url, {"email": self.unverified.email}, format="json"
+            )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_resend_requires_no_authentication(self) -> None:
+        response = self.client.post(
+            self.url, {"email": self.unverified.email}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
 class EmailVerificationTokenGeneratorTests(APITestCase):
     """
     The CP-102 token has its own lifetime, independent of PASSWORD_RESET_TIMEOUT.
@@ -663,6 +800,7 @@ class LoginTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
         self.assertEqual(response.data["detail"], "Invalid email or password.")
+        self.assertEqual(response.data["code"], "invalid_credentials")
 
     def test_unknown_email_returns_the_identical_generic_error(self) -> None:
         """
@@ -706,6 +844,7 @@ class LoginTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
         self.assertIn("Confirm your email address", response.data["detail"])
+        self.assertEqual(response.data["code"], "unverified_email")
 
     def test_suspended_account_cannot_log_in(self) -> None:
         """AC-103.4: Suspended accounts are denied."""
@@ -717,6 +856,7 @@ class LoginTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
         self.assertIn("suspended", response.data["detail"])
+        self.assertEqual(response.data["code"], "suspended")
 
     def test_banned_account_cannot_log_in(self) -> None:
         """AC-103.4: Banned accounts are denied."""
@@ -728,6 +868,7 @@ class LoginTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
         self.assertIn("banned", response.data["detail"])
+        self.assertEqual(response.data["code"], "banned")
 
     def test_account_status_refusal_is_not_reachable_without_the_password(self) -> None:
         """
@@ -741,6 +882,58 @@ class LoginTests(APITestCase):
         response = self.login({"email": user.email, "password": "Guessing123456!"})
 
         self.assertEqual(response.data["detail"], "Invalid email or password.")
+
+
+class MeViewTests(APITestCase):
+    """
+    GET /api/v1/auth/me/ returns the caller's own real account details
+    (BE-BUG-0002) so the Profile page can stop hardcoding placeholder data.
+    """
+
+    def setUp(self) -> None:
+        self.me_url = reverse("auth-me")
+        self.login_url = reverse("auth-login")
+
+    def login(self, email: str, password: str = "StrongPassword123!"):
+        response = self.client.post(
+            self.login_url, {"email": email, "password": password}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        return response.data["tokens"]["access"]
+
+    def test_me_returns_the_authenticated_account_affiliation(self) -> None:
+        """The profile badge source must reflect what the account registered."""
+        user = make_user("staff@iskolarngbayan.pup.edu.ph", affiliation="Staff")
+        token = self.login(user.email)
+
+        response = self.client.get(self.me_url, HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["full_name"], user.full_name)
+        self.assertEqual(response.data["email"], user.email)
+        self.assertEqual(response.data["affiliation"], "Staff")
+
+    def test_me_reports_the_callers_own_row_only(self) -> None:
+        """The endpoint reads request.user, so it cannot leak another account."""
+        make_user("someone.else@iskolarngbayan.pup.edu.ph", affiliation="Faculty")
+        me = make_user("me@iskolarngbayan.pup.edu.ph", affiliation="Staff")
+        token = self.login(me.email)
+
+        response = self.client.get(self.me_url, HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["email"], me.email)
+        self.assertNotIn("someone.else@iskolarngbayan.pup.edu.ph", str(response.data))
+
+    def test_me_requires_authentication(self) -> None:
+        response = self.client.get(self.me_url)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_me_invalid_token_is_rejected(self) -> None:
+        response = self.client.get(
+            self.me_url, HTTP_AUTHORIZATION="Bearer not-a-real-token"
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
 @override_settings(CORS_ALLOW_ALL_ORIGINS=False)
@@ -1850,6 +2043,83 @@ class IdentityDocumentReviewTests(APITestCase):
         self.assertEqual(self.document.status.name, "approved")
         self.assertEqual(self.document.reviewed_by, self.admin)
         self.assertIsNotNone(self.document.reviewed_at)
+
+    # --- CP-106 admin bulk reject action (TC-021, TC-022) ---
+
+    def _reject_action(self, post: dict):
+        from django.contrib import admin
+
+        model_admin = admin.site._registry[IdentityDocument]
+        model_admin.message_user = mock.MagicMock()
+
+        request = _request_for(self.admin)
+        request.POST = post
+        qs = IdentityDocument.objects.filter(pk=self.document.pk)
+        return model_admin, model_admin.reject_selected_documents(request, qs)
+
+    def test_admin_reject_action_renders_confirmation_page(self) -> None:
+        """Selecting the reject action shows the reason form before any change."""
+        _model_admin, response = self._reject_action({})
+
+        self.assertEqual(response.status_code, 200)
+        response.render()
+        content = response.content.decode()
+        self.assertIn("Reject selected identity documents", content)
+        self.assertIn(self.submitter.email, content)
+
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status.name, "pending")
+
+    def test_admin_reject_action_without_reason_is_blocked(self) -> None:
+        """TC-022: The action refuses a blank reason and leaves the document pending."""
+        model_admin, response = self._reject_action(
+            {"_reject_confirmed": "1", "rejection_reason": "   "}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        response.render()
+        self.assertTrue(response.context_data["form"].errors)
+
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status.name, "pending")
+        self.assertEqual(self.document.rejection_reason, "")
+        model_admin.message_user.assert_not_called()
+
+    def test_admin_reject_action_persists_decision_and_audit(self) -> None:
+        """TC-021: A confirmed reason rejects the document and logs the reviewer."""
+        reason = "Photo is blurry and the ID expiration date is illegible."
+        _model_admin, response = self._reject_action(
+            {"_reject_confirmed": "1", "rejection_reason": reason}
+        )
+
+        self.assertEqual(response.status_code, 302)
+
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status.name, "rejected")
+        self.assertEqual(self.document.rejection_reason, reason)
+        self.assertEqual(self.document.reviewed_by, self.admin)
+        self.assertIsNotNone(self.document.reviewed_at)
+        self.assertFalse(self.submitter.has_verified_identity())
+
+        self.assertTrue(
+            AdminAccessLog.objects.filter(
+                document=self.document, admin=self.admin, action="review"
+            ).exists()
+        )
+
+    def test_admin_reject_action_skips_already_reviewed_documents(self) -> None:
+        """Only pending rows are touched; finalized rows are left alone."""
+        self.review({"action": "approve"}, as_user=self.admin)
+
+        _model_admin, response = self._reject_action(
+            {"_reject_confirmed": "1", "rejection_reason": "Should not apply"}
+        )
+
+        self.assertEqual(response.status_code, 302)
+
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status.name, "approved")
+        self.assertEqual(self.document.rejection_reason, "")
 
 
 # ---------------------------------------------------------------------------

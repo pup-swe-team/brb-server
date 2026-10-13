@@ -1,10 +1,30 @@
+from django import forms
 from django.contrib import admin
+from django.contrib.admin import helpers
+from django.http import HttpResponseRedirect
+from django.template.response import TemplateResponse
 from django.urls import reverse
 from django.utils.html import format_html
 
 from apps.audit.services import log_admin_document_access
 
 from .models import IdentityDocument, IdentityDocumentStatus, IdentityDocumentType
+
+
+class RejectIdentityDocumentForm(forms.Form):
+    """Admin-only form collecting the mandatory rejection reason (CP-106, TC-022)."""
+
+    rejection_reason = forms.CharField(
+        label="Rejection reason",
+        widget=forms.Textarea(attrs={"rows": 4, "cols": 60}),
+        help_text="Required. This text is sent to the submitter in the notification.",
+    )
+
+    def clean_rejection_reason(self) -> str:
+        reason = self.cleaned_data["rejection_reason"].strip()
+        if not reason:
+            raise forms.ValidationError("A rejection reason is required.")
+        return reason
 
 
 class IdentityDocumentTypeAdmin(admin.ModelAdmin):
@@ -70,7 +90,7 @@ class IdentityDocumentAdmin(admin.ModelAdmin):
         "submitted_at",
     )
     date_hierarchy = "submitted_at"
-    actions = ("approve_selected_documents",)
+    actions = ("approve_selected_documents", "reject_selected_documents")
 
     def change_view(self, request, object_id, form_url="", extra_context=None):
         document = self.get_object(request, object_id)
@@ -97,6 +117,49 @@ class IdentityDocumentAdmin(admin.ModelAdmin):
             )
             count += 1
         self.message_user(request, f"Approved {count} identity document(s).")
+
+    @admin.action(description="Reject selected identity documents")
+    def reject_selected_documents(self, request, queryset):
+        """Reject pending documents after collecting a mandatory reason (TC-022)."""
+        from .services import review_identity_document
+
+        pending = queryset.filter(status__name="pending")
+
+        if request.POST.get("_reject_confirmed"):
+            form = RejectIdentityDocumentForm(request.POST)
+            if form.is_valid():
+                reason = form.cleaned_data["rejection_reason"]
+                count = 0
+                for doc in pending:
+                    review_identity_document(
+                        document=doc,
+                        reviewer=request.user,
+                        action="reject",
+                        rejection_reason=reason,
+                        request=request,
+                    )
+                    count += 1
+                self.message_user(request, f"Rejected {count} identity document(s).")
+                return HttpResponseRedirect(request.get_full_path())
+        else:
+            form = RejectIdentityDocumentForm()
+
+        context = {
+            **self.admin_site.each_context(request),
+            "title": "Reject selected identity documents",
+            "opts": self.model._meta,
+            "form": form,
+            "documents": pending,
+            "pending_count": pending.count(),
+            "skipped_count": queryset.count() - pending.count(),
+            "queryset": queryset,
+            "action_checkbox_name": helpers.ACTION_CHECKBOX_NAME,
+        }
+        return TemplateResponse(
+            request,
+            "admin/users/reject_identity_documents.html",
+            context,
+        )
 
     def get_queryset(self, request):
         # select_related avoids an N+1 query per row for user/document_type/status.

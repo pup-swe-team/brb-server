@@ -417,6 +417,18 @@ class EmailVerificationSerializer(serializers.Serializer):
         return attrs
 
 
+class ResendVerificationSerializer(serializers.Serializer):
+    """
+    Accept the address a fresh verification link should go to (BE-BUG-0001).
+
+    Deliberately carries no existence logic: the view responds identically
+    whether the account exists, is unverified, or does not exist at all, so the
+    endpoint cannot be used to enumerate registered addresses.
+    """
+
+    email = serializers.EmailField()
+
+
 class LoginSerializer(serializers.Serializer):
     """
     Exchange credentials for a token pair (CP-103).

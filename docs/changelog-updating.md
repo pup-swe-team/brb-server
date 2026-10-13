@@ -4,6 +4,26 @@ Running record of what changed in `brb-server`, newest first. For the reasoning
 behind a change, see [`DECISIONS.md`](DECISIONS.md). For scope and ticket
 checkboxes, see [`BRB_BACKEND_SPRINTS.md`](BRB_BACKEND_SPRINTS.md).
 
+## 2026-10-13 — Admin accounts restricted to `@pup.edu.ph`
+
+Branch: `checking/sprint-1` (local, uncommitted).
+
+### Changed
+
+- `apps/users/models.py` — `UserManager.create_superuser` now rejects emails
+  outside `ALLOWED_FACULTY_EMAIL_DOMAIN` (`@pup.edu.ph`) with a `ValueError`;
+  `User.clean()` enforces the same rule for any `is_staff` account, so Django
+  Admin "Add/Change user" forms refuse `@gmail.com` / `@iskolarngbayan` for
+  staff. Registration was already enforced (serializer); this closes the
+  `createsuperuser` and Django Admin gaps.
+- `apps/users/models.py` — dropped `affiliation` from `REQUIRED_FIELDS` so
+  `createsuperuser` no longer prompts for it; superusers keep the D-20 default
+  `affiliation=Faculty`. This is a prompt-only change (no schema/ERD impact).
+
+### Tests
+
+- `apps/users/tests.py` — new `AdminAccountEmailDomainTests` (5 tests).
+
 Related documents:
 
 | Document | Purpose |
@@ -14,6 +34,121 @@ Related documents:
 | `docs/COPUP_ERD.md` | Data shape |
 | `docs/DECISIONS.md` | Decisions and their rationale |
 | `docs/changelog-updating.md` | **This file** — what changed |
+
+## 2026-10-13 — Admin portal verification pages (BE-BUG-0006)
+
+Branch: `checking/sprint-1` (local, uncommitted). Mounted at `/portal/`.
+
+### Added
+
+- `apps/users/portal.py` — server-rendered admin pages (D-22): `AdminPortalLoginView`
+  (rejects non-staff sign-ins), `dashboard`, `verification_queue` (Pending /
+  Approved / Rejected tabs + pagination), `verification_review` (document
+  preview, submitted details, server-side checks), `verification_review_submit`
+  (approve/reject). Authority is `is_staff` via `staff_login_required`; a
+  non-staff member hitting any page is logged out. Reuses
+  `review_identity_document` so notifications, emails and audit entries stay one
+  code path.
+- `apps/users/portal_urls.py` + `brb_server/urls.py` — `/portal/` routes.
+- Templates in `apps/users/templates/admin_portal/` matching Figma screens 76
+  (sign-in), 77 (dashboard), 82 (queue), 83 (review), 84 (reject overlay).
+  Static assets: `apps/users/static/admin_portal/portal.css`, `portal.js`.
+- `apps/users/templatetags/portal_extras.py` — `|initials` and `|doc_type_label`
+  template filters.
+- `django.contrib.humanize` in `INSTALLED_APPS` (dashboard `|intcomma`).
+- `apps/users/encryption.py` — `detect_document_content_type` (PNG/JPEG/PDF
+  magic-number sniffing); `IdentityDocumentDownloadView` now uses it too.
+- `apps/users/tests_portal.py` — 16 tests: staff gating, login rejects
+  non-staff, queue tabs/pagination, review audit `view` entry, approve/reject
+  flows (notification + email), reject-requires-reason, no re-review.
+
+### Notes
+
+- The remaining admin screens (users, reports, content moderation, system
+  settings, audit log, …) are shown disabled in the sidebar as "planned for a
+  later sprint". Whitenoise/static serving for the deployed Render site is still
+  an open offer; Django Admin (and these pages) render unstyled when
+  `DEBUG=False`.
+
+## 2026-10-12 — `GET /api/v1/auth/me/` profile endpoint (BE-BUG-0002)
+
+Branch: `checking/sprint-1` (local, uncommitted).
+
+### Added
+
+- `MeView` (`apps/users/views.py`) + `auth-me` route (`apps/users/urls.py`):
+  `GET /api/v1/auth/me/` returns the authenticated caller's own row as
+  `UserResponseSerializer` (real `full_name`, `email`, `affiliation`, ...).
+  Requires authentication (project-wide `IsAuthenticated`); always reads
+  `request.user`, so it cannot return another account's details.
+- `MeViewTests` (`apps/users/tests.py`, 4 tests): returns the registered
+  affiliation verbatim, is scoped to the caller's own row only, and rejects
+  anonymous and bogus-token requests with `401`.
+
+### Why
+
+The client Profile page rendered a hardcoded placeholder badge (always
+"Student") and a hardcoded name, so a Staff/Faculty account looked like a
+Student (BE-BUG-0002). The client had no way to fetch its own account after
+login — only tokens were stored. The paired `brb-client` change makes
+`ProfileScreen` call `/auth/me/` and render the real details.
+
+---
+
+## 2026-10-12 — Auth error responses expose `code` (D-21)
+
+Branch: `checking/sprint-1` (local, uncommitted).
+
+### Added
+
+- `brb_server/exceptions.py`: project DRF exception handler
+  (`api_exception_handler`) that keeps DRF's default behaviour and appends
+  `response.data["code"] = exc.get_codes()` for every `APIException` whose
+  `detail` is a plain string.
+- `EXCEPTION_HANDLER` set in `REST_FRAMEWORK` (`brb_server/settings.py`).
+- Login 401 tests now assert the `code` (`invalid_credentials`, `unverified_email`,
+  `suspended`, `banned`).
+
+### Why
+
+The client branches on a machine-readable `code` — `LoginScreen` routes
+`unverified_email` back to the verify prompt and special-cases
+`invalid_credentials` — and `LoginSerializer` documents that code as its
+contract, but DRF's default handler never serialized it. `getApiErrorCode()`
+always returned `undefined`, so an unverified-email login showed a red error box
+instead of the verify-email redirect (FE-BUG-0002). See `DECISIONS.md` D-21.
+The paired `brb-client` fix (web token storage) makes login stop throwing on
+Expo Web, where `expo-secure-store` has no native module.
+
+---
+
+## 2026-10-12 — Resend-verification endpoint (BE-BUG-0001)
+
+Branch: `checking/sprint-1` (local, uncommitted).
+
+### Added
+
+- `POST /api/v1/auth/resend-verification/` — re-dispatches the CP-102
+  confirmation link. Accepts an email address; only when the address belongs to
+  an account that is unverified and in `pending_review` is a fresh link minted
+  and mailed. Returns the same generic 200 for every outcome so it cannot
+  enumerate registered addresses (consistent with the indistinguishable
+  failures of the verification endpoint itself).
+- `apps/users/services.py`: `resend_email_verification()`.
+- `apps/users/serializers.py`: `ResendVerificationSerializer`.
+- DRF `ScopedRateThrottle` on the new view with `resend-verification` limited to
+  `3/hour` via `DEFAULT_THROTTLE_RATES` in `brb_server/settings.py`, bounding
+  outbound mail volume from a public endpoint.
+- `apps/users/tests.py`: `ResendVerificationTests` (7 tests).
+
+### Why
+
+The frontend "Resend Email" button previously navigated straight to the
+"Email Verified" success screen and sent nothing (verify the client commit
+alongside this). The backend surfaced no such endpoint at all, so the button
+could not have worked as labelled. Client-side fix follows in `brb-client`.
+
+---
 
 ## 2026-10-11 — CORS headers for the browser client (D-20)
 

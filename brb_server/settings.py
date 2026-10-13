@@ -48,7 +48,11 @@ INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
+    # Must sit ABOVE django.contrib.staticfiles so whitenoise's `runserver`
+    # command wins; keeps local dev serving static the same way prod does.
+    "whitenoise.runserver_nostatic",
     "django.contrib.staticfiles",
+    "django.contrib.humanize",
     # local apps
     "apps.core",
     "apps.users",
@@ -64,6 +68,11 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # Serves /static/ in production too (Django won't do it itself when
+    # DEBUG=False). Directly below SecurityMiddleware per whitenoise's
+    # requirements. WHITENOISE_USE_FINDERS below keeps it working even if the
+    # deploy never runs `collectstatic`.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     # CORS must sit above CommonMiddleware so it can attach headers to every
     # response, including the ones CommonMiddleware generates itself (D-20).
     "corsheaders.middleware.CorsMiddleware",
@@ -144,7 +153,15 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
 STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_DIRS = [BASE_DIR / "static"]
+
+# Serve static files in production via whitenoise middleware. WHITENOISE_USE_FINDERS
+# keeps static working even if the deploy never runs `collectstatic`: whitenoise
+# then reads straight from each app's static/ directory (and STATICFILES_DIRS),
+# which is all this project needs for its admin/portal CSS. Running
+# `collectstatic` later is still fine and just adds gzip + caching.
+WHITENOISE_USE_FINDERS = True
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
@@ -156,6 +173,10 @@ AUTH_USER_MODEL = "users.User"
 # https://www.django-rest-framework.org/api-guide/settings/
 
 REST_FRAMEWORK = {
+    # Adds a machine-readable `code` to APIException responses so the client can
+    # branch on it (e.g. login returns `unverified_email`, per the documented
+    # contract in `users/serializers.py`). See `brb_server/exceptions.py`.
+    "EXCEPTION_HANDLER": "brb_server.exceptions.api_exception_handler",
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
@@ -178,6 +199,12 @@ REST_FRAMEWORK = {
         "rest_framework.parsers.MultiPartParser",
         "rest_framework.parsers.FormParser",
     ),
+    # Rate buckets for public, potentially abusable endpoints. The resend
+    # verification link (BE-BUG-0001) is throttled so a stray script cannot use
+    # the shared mail backend as a relay.
+    "DEFAULT_THROTTLE_RATES": {
+        "resend-verification": "3/hour",
+    },
 }
 
 # JSON Web Tokens (djangorestframework-simplejwt)
@@ -226,7 +253,7 @@ STORAGES = {
         "BACKEND": "django.core.files.storage.FileSystemStorage",
     },
     "staticfiles": {
-        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
     },
 }
 

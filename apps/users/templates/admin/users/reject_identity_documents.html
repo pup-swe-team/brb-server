@@ -1,0 +1,49 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+<a href="{% url 'admin:index' %}">{% translate 'Home' %}</a>
+&rsaquo; <a href="{% url 'admin:app_list' app_label=opts.app_label %}">{{ opts.app_config.verbose_name }}</a>
+&rsaquo; <a href="{% url 'admin:users_identitydocument_changelist' %}">{{ opts.verbose_name_plural|capfirst }}</a>
+&rsaquo; {% translate 'Reject selected identity documents' %}
+</div>
+{% endblock %}
+
+{% block content %}
+<h1>{% translate 'Reject selected identity documents' %}</h1>
+
+{% if pending_count == 0 %}
+  <p>{% translate 'None of the selected documents are pending review. Only pending documents can be rejected.' %}</p>
+  <p><a href="{% url 'admin:users_identitydocument_changelist' %}">{% translate 'Back to identity documents' %}</a></p>
+{% else %}
+  {% if skipped_count %}
+    <p class="errornote">
+      {% blocktranslate count counter=skipped_count %}{{ counter }} selected document is already reviewed and will be skipped.{% plural %}{{ counter }} selected documents are already reviewed and will be skipped.{% endblocktranslate %}
+    </p>
+  {% endif %}
+
+  <p>
+    {% blocktranslate count counter=pending_count %}{{ counter }} pending document will be marked as rejected:{% plural %}{{ counter }} pending documents will be marked as rejected:{% endblocktranslate %}
+  </p>
+  <ul>
+    {% for doc in documents %}
+      <li>{{ doc.user.email }} &mdash; {{ doc.document_type.name }} (ID {{ doc.id_number }})</li>
+    {% endfor %}
+  </ul>
+
+  <form method="post">{% csrf_token %}
+    {{ form.as_p }}
+    {% for doc in queryset %}
+      <input type="hidden" name="_selected_action" value="{{ doc.pk }}">
+    {% endfor %}
+    <input type="hidden" name="action" value="reject_selected_documents">
+    <input type="hidden" name="select_across" value="0">
+    <input type="hidden" name="_reject_confirmed" value="1">
+    <div class="submit-row">
+      <input type="submit" value="{% translate 'Reject' %}" class="default">
+      <a href="{% url 'admin:users_identitydocument_changelist' %}" class="button cancel-link">{% translate 'Cancel' %}</a>
+    </div>
+  </form>
+{% endif %}
+{% endblock %}
