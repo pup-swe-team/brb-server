@@ -175,7 +175,8 @@ poetry.toml
 # LSP config files
 pyrightconfig.json
 
-# Team-local instructions (kept on disk, not part of the PR)
+# Team-local instructions and docs (kept on disk, not part of the PR)
 /AGENTS.md
+/README.md
 
 # End of https://www.toptal.com/developers/gitignore/api/python

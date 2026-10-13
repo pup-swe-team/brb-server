@@ -1,0 +1,10 @@
+# Keep working material in this folder (source PDFs, converted notes, dumps)
+# out of git. Only the two shipping docs are tracked:
+#   - docs/COPUP_ERD.md
+#   - docs/changelog-updating.md
+# Everything else here (incl. DECISIONS.md, BRB_BACKEND_SPRINTS.md, PDFs)
+# stays local-only.
+*
+!.gitignore
+!COPUP_ERD.md
+!changelog-updating.md
