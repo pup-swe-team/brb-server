@@ -1,13 +1,26 @@
 from rest_framework import permissions
 
+from apps.users.models import User
+
 
 class IsOwnerOrReadOnly(permissions.BasePermission):
     def has_permission(self, request, view) -> bool:
-        return (
-            request.method in permissions.SAFE_METHODS and request.user.is_authenticated
-        )
+        return bool(request.user and request.user.is_authenticated)
 
     def has_object_permission(self, request, view, obj) -> bool:
         if request.method in permissions.SAFE_METHODS:
             return True
         return obj.lender == request.user
+
+
+class IsActiveLender(permissions.BasePermission):
+    message = "Active lender status is required before you can post resources."
+
+    def has_permission(self, request, view) -> bool:
+        user = getattr(request, "user", None)
+        return bool(
+            user
+            and user.is_authenticated
+            and user.account_status == User.AccountStatusChoices.ACTIVE
+            and user.lender_status == User.LenderStatusChoices.ACTIVE
+        )
