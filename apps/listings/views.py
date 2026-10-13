@@ -1,11 +1,16 @@
 # Create your views here.
 
+from django.shortcuts import get_object_or_404
 from rest_framework import generics
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 
-from .models import Listing, PickupLocation
-from .permissions import IsOwnerOrReadOnly
-from .serializers import ListingSerializer, PickupLocationSerializer
+from .models import Listing, ListingStatus, PickupLocation
+from .permissions import IsActiveLender, IsOwnerOrReadOnly
+from .serializers import (
+    ListingCreateSerializer,
+    ListingSerializer,
+    PickupLocationSerializer,
+)
 
 
 class ListingDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -17,6 +22,32 @@ class ListingDetailView(generics.RetrieveUpdateDestroyAPIView):
         "photos",
         "availability_windows",
     )
+
+
+class ListingCreateView(generics.CreateAPIView):
+    queryset = Listing.objects.all()
+    serializer_class = ListingCreateSerializer
+    permission_classes = (IsActiveLender,)  # Only those that are approved
+
+    def perform_create(self, serializer):
+        pending_status = get_object_or_404(
+            ListingStatus,
+            name="Pending",
+        )
+
+        serializer.save(
+            lender=self.request.user,
+            status=pending_status,
+        )
+
+    def create(self, request, *args, **kwargs):
+        response = super().create(request, *args, **kwargs)
+
+        if response.status_code == 201:
+            listing = self.get_queryset().get(pk=response.data["id"])
+            response.data = ListingSerializer(listing).data
+
+        return response
 
 
 class PickupLocationListView(generics.ListAPIView):

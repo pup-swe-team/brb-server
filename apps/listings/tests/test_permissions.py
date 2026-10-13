@@ -2,8 +2,9 @@ from unittest.mock import Mock
 
 from django.contrib.auth.models import AnonymousUser
 
-from apps.listings.permissions import IsOwnerOrReadOnly
+from apps.listings.permissions import IsActiveLender, IsOwnerOrReadOnly
 from apps.listings.tests.base import BaseListingTestCase
+from apps.users.models import User
 
 
 class IsOwnerOrReadOnlyPermissionTests(BaseListingTestCase):
@@ -66,4 +67,79 @@ class IsOwnerOrReadOnlyPermissionTests(BaseListingTestCase):
                     request, self.mock_view, self.listing
                 ),
                 f"Failed for non-owner with method {method}",
+            )
+
+
+class IsActiveLenderPermissionTests(BaseListingTestCase):
+    """Unit tests for the IsActiveLender permission class."""
+
+    def setUp(self):
+        super().setUp()
+        self.permission = IsActiveLender()
+        self.mock_view = Mock()
+
+    def test_has_permission_active_lender(self):
+        """Active user with active lender status is granted permission."""
+        request = Mock(user=self.owner)
+        self.assertTrue(self.permission.has_permission(request, self.mock_view))
+
+    def test_has_permission_anonymous_user(self):
+        """Anonymous user is denied permission safely without raising AttributeError."""
+        request = Mock(user=AnonymousUser())
+        self.assertFalse(self.permission.has_permission(request, self.mock_view))
+
+    def test_has_permission_unauthenticated_user(self):
+        """Unauthenticated user object is denied permission."""
+        user = Mock(
+            is_authenticated=False,
+            account_status=User.AccountStatusChoices.ACTIVE,
+            lender_status=User.LenderStatusChoices.ACTIVE,
+        )
+        request = Mock(user=user)
+        self.assertFalse(self.permission.has_permission(request, self.mock_view))
+
+    def test_has_permission_none_user(self):
+        """Request with None user is denied permission safely."""
+        request = Mock(user=None)
+        self.assertFalse(self.permission.has_permission(request, self.mock_view))
+
+    def test_has_permission_non_lender_user(self):
+        """Authenticated user with lender_status 'none' is denied permission."""
+        request = Mock(user=self.other_user)
+        self.assertFalse(self.permission.has_permission(request, self.mock_view))
+
+    def test_has_permission_revoked_lender(self):
+        """Authenticated user with revoked lender status is denied permission."""
+        user = User.objects.create_user(
+            email="revoked_lender@iskolarngbayan.pup.edu.ph",
+            password="password123",
+            full_name="Revoked Lender",
+            contact_number="09111111111",
+            account_status=User.AccountStatusChoices.ACTIVE,
+            lender_status=User.LenderStatusChoices.REVOKED,
+        )
+        request = Mock(user=user)
+        self.assertFalse(self.permission.has_permission(request, self.mock_view))
+
+    def test_has_permission_inactive_account_statuses(self):
+        """User with active lender status but inactive account status is denied permission."""
+        inactive_statuses = [
+            User.AccountStatusChoices.SUSPENDED,
+            User.AccountStatusChoices.PENDING_REVIEW,
+            User.AccountStatusChoices.BANNED,
+            User.AccountStatusChoices.DEACTIVATED,
+        ]
+        for status in inactive_statuses:
+            user = User.objects.create_user(
+                email=f"user_{status}@iskolarngbayan.pup.edu.ph",
+                password="password123",
+                full_name=f"User {status}",
+                contact_number="09222222222",
+                account_status=status,
+                lender_status=User.LenderStatusChoices.ACTIVE,
+            )
+            request = Mock(user=user)
+            self.assertFalse(
+                self.permission.has_permission(request, self.mock_view),
+                f"Failed: User with account_status={status} should be denied",
             )

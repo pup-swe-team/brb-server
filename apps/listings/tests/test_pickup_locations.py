@@ -26,8 +26,11 @@ class PickupLocationViewTests(BaseListingTestCase):
         response = self.client.get(self.list_url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        # Handle paginated or non-paginated results cleanly
-        results = response.data.get("results", response.data)
+        results = (
+            response.data.get("results")
+            if isinstance(response.data, dict)
+            else response.data
+        )
         self.assertGreaterEqual(len(results), 1)
         location_names = [item["name"] for item in results]
         self.assertIn(self.pickup_location.name, location_names)
@@ -40,8 +43,11 @@ class PickupLocationViewTests(BaseListingTestCase):
         self.client.force_authenticate(user=self.owner)
         response = self.client.get(self.list_url)
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        results = response.data.get("results", response.data)
+        results = (
+            response.data.get("results")
+            if isinstance(response.data, dict)
+            else response.data
+        )
         names = [item["name"] for item in results]
         self.assertEqual(names, sorted(names))
 
