@@ -10,7 +10,6 @@ services:
   - type: web
     name: brb-server
     runtime: python
-    pythonVersion: "3.12"
     plan: free
     # uv manages deps (pyproject.toml + uv.lock); migrate runs at build so the
     # schema is current before the instance boots. Static files are served by
@@ -24,6 +23,11 @@ services:
       --bind 0.0.0.0:$PORT --workers 1 --timeout 120
     healthCheckPath: /healthz/
     envVars:
+      # Render's native runtime defaults to a newer Python (3.14.x as of 2026);
+      # PYTHON_VERSION pins it and must be fully qualified. Matches
+      # `.python-version` and `requires-python = ">=3.12"` in pyproject.toml.
+      - key: PYTHON_VERSION
+        value: "3.12.13"
       - key: DEBUG
         value: "False"
       # Generated once by Render and stored; never committed (hard rule 4).
