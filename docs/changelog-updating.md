@@ -4,6 +4,39 @@ Running record of what changed in `brb-server`, newest first. For the reasoning
 behind a change, see [`DECISIONS.md`](DECISIONS.md). For scope and ticket
 checkboxes, see [`BRB_BACKEND_SPRINTS.md`](BRB_BACKEND_SPRINTS.md).
 
+## 2026-10-16 — First Render Web Service deploy (D-23)
+
+Branch: `checking/sprint-1` (local, uncommitted).
+
+### Added
+
+- `render.yaml` — Render Blueprint for the `brb-server` Web Service: Python
+  3.12, build = `uv sync --frozen --no-dev` + full `migrate`, start =
+  `gunicorn brb_server.wsgi:application --bind 0.0.0.0:$PORT`, health check
+  at `/healthz/`, env contract (`DEBUG=False`, generated `SECRET_KEY`,
+  `ALLOWED_HOSTS`, `DATABASE_URL` and the encryption key filled in the
+  dashboard).
+- `brb_server/urls.py` + `apps/core/views.py` — `GET /healthz/` liveness
+  endpoint (no auth, no DB round-trip) for Render health checks.
+- `pyproject.toml` / `uv.lock` — `gunicorn` runtime dependency.
+
+### Changed
+
+- `brb_server/settings.py` — added `SECURE_PROXY_SSL_HEADER` (Render
+  terminates TLS) and env-driven `CSRF_TRUSTED_ORIGINS` (Admin/portal POSTs
+  are rejected behind the proxy without it once `DEBUG=False`).
+
+Related documents:
+
+| Document | Purpose |
+|---|---|
+| `CONTRIBUTING.md` | Team guide. Authoritative for conventions and quality gates |
+| `README.md` | How a teammate gets the project running |
+| `docs/BRB_BACKEND_SPRINTS.md` | What to build and when |
+| `docs/COPUP_ERD.md` | Data shape |
+| `docs/DECISIONS.md` | Decisions and their rationale |
+| `docs/changelog-updating.md` | **This file** — what changed |
+
 ## 2026-10-13 — Admin accounts restricted to `@pup.edu.ph`
 
 Branch: `checking/sprint-1` (local, uncommitted).

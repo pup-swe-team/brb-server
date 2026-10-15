@@ -18,7 +18,11 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import include, path
 
+from apps.core.views import HealthView
+
 urlpatterns = [
+    # Render health check — keep at root so it answers before any DB/CDN work.
+    path("healthz/", HealthView.as_view(), name="healthz"),
     path("admin/", admin.site.urls),
     path("portal/", include("apps.users.portal_urls")),
     path("api/v1/auth/", include("apps.users.urls")),

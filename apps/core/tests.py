@@ -222,3 +222,12 @@ class SystemConfigAdminTests(APITestCase):
             self.assertIn(config_key, registered_doc)
             # And a missing row still yields a usable value rather than an error.
             self.assertIsNotNone(get_config(config_key, "fallback"))
+
+
+class HealthzEndpointTests(APITestCase):
+    """Render health checks hit `/healthz/` (D-23); it must answer 200."""
+
+    def test_healthz_returns_ok_without_authentication(self) -> None:
+        response = self.client.get(reverse("healthz"))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, {"status": "ok"})

@@ -2,6 +2,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.request import Request
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from apps.users.services import (
     deactivate_unverified_users,
@@ -9,6 +10,22 @@ from apps.users.services import (
 )
 
 from .cron import CronSecretMixin
+
+
+class HealthView(APIView):
+    """
+    Liveness probe for Render's health checks (no auth, no DB access).
+
+    GET /healthz/ -- must answer 200 quickly so the platform does not restart
+    the instance; deliberately avoids touching the database so a sleeping
+    Postgres does not turn a healthy app into a failed check.
+    """
+
+    authentication_classes = ()
+    permission_classes = ()
+
+    def get(self, request: Request) -> Response:
+        return Response({"status": "ok"}, status=status.HTTP_200_OK)
 
 
 class DeactivateUnverifiedAccountsView(CronSecretMixin):

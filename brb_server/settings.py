@@ -35,6 +35,20 @@ ALLOWED_HOSTS = [
     host.strip() for host in os.getenv("ALLOWED_HOSTS", "").split(",") if host.strip()
 ]
 
+# Render (and any reverse proxy) terminates TLS, so requests reach Django as
+# plain HTTP. Without this Django sees `http` and rejects `secure` cookies /
+# treats CSRF origins as mismatched behind the proxy.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+# Required for POSTs from the Admin/portal behind the proxy (Django rejects
+# CSRF for any origin not listed here once DEBUG=False). Comma-separated like
+# CORS_ALLOWED_ORIGINS, e.g. "https://brb-server-xxxx.onrender.com".
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+
 
 # Application definition
 

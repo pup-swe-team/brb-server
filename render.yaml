@@ -1,0 +1,64 @@
+# Render Blueprint — brb-server Web Service
+# Docs: brb-client/docs/RUN_LOCALLY.md ("Alternative — point the phone at the
+# deployed Render backend").
+#
+# Create the service: Render dashboard -> New -> Blueprint -> pick this repo ->
+# Render reads this file. Values marked `sync: false` are filled in the
+# dashboard afterward (New -> Environment).
+
+services:
+  - type: web
+    name: brb-server
+    runtime: python
+    pythonVersion: "3.12"
+    plan: free
+    # uv manages deps (pyproject.toml + uv.lock); migrate runs at build so the
+    # schema is current before the instance boots. Static files are served by
+    # WhiteNoise with WHITENOISE_USE_FINDERS=True, so collectstatic is optional.
+    buildCommand: >-
+      pip install uv &&
+      uv sync --frozen --no-dev &&
+      uv run python manage.py migrate --noinput
+    startCommand: >-
+      uv run gunicorn brb_server.wsgi:application
+      --bind 0.0.0.0:$PORT --workers 1 --timeout 120
+    healthCheckPath: /healthz/
+    envVars:
+      - key: DEBUG
+        value: "False"
+      # Generated once by Render and stored; never committed (hard rule 4).
+      - key: SECRET_KEY
+        generateValue: true
+      # ".onrender.com" is Django's leading-dot form: matches any onrender
+      # subdomain, so the first boot works before the hostname is known.
+      # Tighten to the exact https://brb-server-xxxx.onrender.com later if wanted.
+      - key: ALLOWED_HOSTS
+        value: "localhost,127.0.0.1,.onrender.com"
+      # Set after the service exists: the service's own https://...onrender.com
+      # origin. Only needed for browser clients (expo start --web / Admin/portal
+      # POSTs); Expo Go does not send Origin headers.
+      - key: CSRF_TRUSTED_ORIGINS
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      # Paste the External Database URL of copup_db (Render -> Databases ->
+      # Connections), as in RUN_LOCALLY.md Step 1.
+      - key: DATABASE_URL
+        sync: false
+      # One shared key for the whole team — reuse the existing value if one is
+      # already set (RUN_LOCALLY.md Step 2a), else generate with:
+      # uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+      - key: IDENTITY_DOCUMENT_ENCRYPTION_KEY
+        sync: false
+      # Console prints verification links to the service logs (register works
+      # out of the box). Switch to the SMTP block below once real credentials
+      # exist (.env.example lines 74-79):
+      #   EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+      #   EMAIL_HOST=smtp.resend.com / EMAIL_PORT=587 / EMAIL_HOST_USER=resend
+      #   EMAIL_HOST_PASSWORD=<resend api key> / EMAIL_USE_TLS=True
+      - key: EMAIL_BACKEND
+        value: "django.core.mail.backends.console.EmailBackend"
+      - key: EMAIL_HOST_PASSWORD
+        sync: false
+      - key: JWT_SECRET
+        sync: false
