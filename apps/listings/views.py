@@ -1,10 +1,9 @@
-# Create your views here.
-
+from django.utils import timezone
 from rest_framework import generics
 
-from .models import Listing
-from .permissions import IsOwnerOrReadOnly
-from .serializers import ListingSerializer
+from .models import Listing, PickupLocation
+from .permissions import IsAdminOrReadOnly, IsOwnerOrReadOnly
+from .serializers import ListingSerializer, PickupLocationSerializer
 
 
 class ListingDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -16,3 +15,34 @@ class ListingDetailView(generics.RetrieveUpdateDestroyAPIView):
         "photos",
         "availability_windows",
     )
+
+
+class PickupLocationListCreateView(generics.ListCreateAPIView):
+    """
+    List active pickup locations (authenticated users) or
+    create a new designated pickup location (admin only, CP-1105).
+    """
+
+    serializer_class = PickupLocationSerializer
+    permission_classes = (IsAdminOrReadOnly,)
+    pagination_class = None
+
+    def get_queryset(self):
+        return PickupLocation.objects.filter(deleted_at__isnull=True).order_by("name")
+
+
+class PickupLocationDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    Retrieve an active pickup location (authenticated users),
+    update or soft-delete a pickup location (admin only, CP-1105).
+    """
+
+    serializer_class = PickupLocationSerializer
+    permission_classes = (IsAdminOrReadOnly,)
+
+    def get_queryset(self):
+        return PickupLocation.objects.filter(deleted_at__isnull=True)
+
+    def perform_destroy(self, instance: PickupLocation) -> None:
+        instance.deleted_at = timezone.now()
+        instance.save(update_fields=["deleted_at"])

@@ -23,9 +23,22 @@ class ListingStatusSerializer(serializers.ModelSerializer):
 
 
 class PickupLocationSerializer(serializers.ModelSerializer):
+    name = serializers.CharField(max_length=150)
+    description = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+    )
+
     class Meta:
         model = PickupLocation
-        fields = ["id", "name"]
+        fields = ["id", "name", "description"]
+
+    def validate_name(self, value: str) -> str:
+        trimmed = value.strip()
+        if not trimmed:
+            raise serializers.ValidationError("Location name cannot be blank.")
+        return trimmed
 
 
 class ListingPhotoSerializer(serializers.ModelSerializer):

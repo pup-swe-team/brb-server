@@ -11,3 +11,17 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
         if request.method in permissions.SAFE_METHODS:
             return True
         return obj.lender == request.user
+
+
+class IsAdminOrReadOnly(permissions.BasePermission):
+    """
+    Allow authenticated users read-only access (GET, HEAD, OPTIONS).
+    Require staff authority (is_staff=True) for write operations (POST, PUT, PATCH, DELETE).
+    """
+
+    def has_permission(self, request, view) -> bool:
+        if not (request.user and request.user.is_authenticated):
+            return False
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        return bool(request.user.is_staff)
