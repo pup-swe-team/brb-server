@@ -14,6 +14,7 @@ class ListingDetailView(generics.RetrieveUpdateDestroyAPIView):
     ).prefetch_related(
         "photos",
         "availability_windows",
+        "blocked_dates",
     )
 
 

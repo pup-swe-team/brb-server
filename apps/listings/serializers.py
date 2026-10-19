@@ -2,6 +2,7 @@ from rest_framework import serializers
 
 from .models import (
     AvailabilityWindow,
+    BlockedDateRange,
     Listing,
     ListingCategory,
     ListingPhoto,
@@ -53,6 +54,12 @@ class AvailabilityWindowSerializer(serializers.ModelSerializer):
         fields = ["id", "start_date", "end_date"]
 
 
+class BlockedDateRangeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BlockedDateRange
+        fields = ["id", "start_date", "end_date", "reason", "created_at"]
+
+
 class ListingSerializer(serializers.ModelSerializer):
     category = ListingCategorySerializer(read_only=True)
     status = ListingStatusSerializer(read_only=True)
@@ -62,6 +69,10 @@ class ListingSerializer(serializers.ModelSerializer):
 
     photos = ListingPhotoSerializer(many=True, read_only=True)
     availability_windows = AvailabilityWindowSerializer(
+        many=True,
+        read_only=True,
+    )
+    blocked_dates = BlockedDateRangeSerializer(
         many=True,
         read_only=True,
     )
@@ -87,6 +98,7 @@ class ListingSerializer(serializers.ModelSerializer):
             "status",
             "photos",
             "availability_windows",
+            "blocked_dates",
             "created_at",
             "updated_at",
         ]
