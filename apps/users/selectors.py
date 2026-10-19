@@ -1,4 +1,6 @@
-from django.db.models import Count, Q, QuerySet
+from django.db.models import Avg, Count, Q, QuerySet
+
+from apps.reviews.models import Review
 
 from .models import User
 
@@ -29,3 +31,45 @@ def search_lenders(q: str | None = None) -> QuerySet[User]:
             qs = qs.filter(full_name__icontains=cleaned_q)
 
     return qs.order_by("full_name")
+
+
+def get_lender_profile(user_id: int) -> User | None:
+    """
+    Fetch a verified lender by ID for public profile viewing (CP-304).
+
+    Returns the User instance with average rating, review count, and
+    preloaded active listings, or None if the lender does not exist,
+    is suspended/banned/deactivated, or is not an active lender.
+    """
+    try:
+        lender = User.objects.get(
+            pk=user_id,
+            account_status=User.AccountStatusChoices.ACTIVE,
+            lender_status=User.LenderStatusChoices.ACTIVE,
+        )
+    except User.DoesNotExist:
+        return None
+
+    # Reviews where this lender was the reviewee (written by borrowers on lender's listings)
+    reviews_qs = Review.objects.filter(
+        order__listing__lender=lender,
+        deleted_at__isnull=True,
+    ).exclude(reviewer=lender)
+
+    stats = reviews_qs.aggregate(
+        avg_rating=Avg("rating"),
+        review_count=Count("id"),
+    )
+
+    avg = stats["avg_rating"]
+    lender.average_rating = round(avg, 1) if avg is not None else None
+    lender.review_count = stats["review_count"] or 0
+
+    lender.prefetched_active_listings = list(
+        lender.listings.filter(status__name="active")
+        .select_related("category", "pickup_location", "status")
+        .prefetch_related("photos")
+        .order_by("-created_at")
+    )
+
+    return lender

@@ -1,6 +1,6 @@
 import logging
 
-from django.http import HttpResponse
+from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, permissions, status
 from rest_framework.authentication import SessionAuthentication
@@ -13,13 +13,14 @@ from apps.audit.services import log_admin_document_access
 
 from .encryption import decrypt_document_data
 from .models import IdentityDocument
-from .selectors import search_lenders
+from .selectors import get_lender_profile, search_lenders
 from .serializers import (
     EmailVerificationSerializer,
     IdentityDocumentOwnerInfoSerializer,
     IdentityDocumentResponseSerializer,
     IdentityDocumentReviewSerializer,
     IdentityDocumentSubmissionSerializer,
+    LenderProfileSerializer,
     LenderSearchResultSerializer,
     LoginSerializer,
     LogoutSerializer,
@@ -370,3 +371,24 @@ class LenderSearchView(generics.ListAPIView):
     def get_queryset(self):
         q = self.request.query_params.get("q")
         return search_lenders(q=q)
+
+
+class LenderProfileView(APIView):
+    """
+    Public profile of a verified lender (CP-304).
+    GET /api/v1/lenders/<int:pk>/
+
+    Returns public lender information, average rating, review count,
+    and active listings. Returns 404 for non-existent, non-lender,
+    suspended, banned, or deactivated users.
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request: Request, pk: int) -> Response:
+        lender = get_lender_profile(user_id=pk)
+        if lender is None:
+            raise Http404("Lender not found.")
+
+        serializer = LenderProfileSerializer(lender, context={"request": request})
+        return Response(serializer.data, status=status.HTTP_200_OK)

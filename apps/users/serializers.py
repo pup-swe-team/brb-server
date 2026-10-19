@@ -641,3 +641,44 @@ class LenderSearchResultSerializer(serializers.ModelSerializer):
             "active_listing_count",
         )
         read_only_fields = fields
+
+
+class LenderProfileSerializer(serializers.ModelSerializer):
+    """
+    Detailed public profile of a verified lender (CP-304).
+    Includes rating summary and active listings.
+    Omits all private contact info, address, and credentials.
+    """
+
+    average_rating = serializers.FloatField(read_only=True)
+    review_count = serializers.IntegerField(read_only=True)
+    active_listings = serializers.SerializerMethodField()
+
+    def get_active_listings(self, obj: User) -> list[dict]:
+        from apps.listings.serializers import ListingSearchResultSerializer
+
+        listings = getattr(
+            obj,
+            "prefetched_active_listings",
+            obj.listings.filter(status__name="active")
+            .select_related("category", "pickup_location", "status")
+            .prefetch_related("photos")
+            .order_by("-created_at"),
+        )
+        return ListingSearchResultSerializer(
+            listings, many=True, context=self.context
+        ).data
+
+    class Meta:
+        model = User
+        fields = (
+            "id",
+            "full_name",
+            "affiliation",
+            "photo",
+            "bio",
+            "average_rating",
+            "review_count",
+            "active_listings",
+        )
+        read_only_fields = fields
