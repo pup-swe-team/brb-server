@@ -77,14 +77,18 @@ def build_email_verification_token(user: User) -> str:
     """
     Mint a stateless verification token for `user` (CP-102).
 
-    The token embeds the user's id, email, current password hash and a
-    timestamp, signed with `SECRET_KEY`. That makes it self-expiring and free of
-    any storage -- which is why `docs/COPUP_ERD.md` needs no new table for
-    CP-102. CP-104's reset link reuses the same mechanism with a shorter lifetime.
+    The token embeds the user's id, email, current password hash, the time the
+    latest confirmation email was sent and a timestamp, signed with
+    `SECRET_KEY`. That makes it self-expiring and free of any storage -- which
+    is why `docs/COPUP_ERD.md` needs no new table for CP-102. CP-104's reset
+    link reuses the same mechanism with a shorter lifetime.
 
-    It is not single-use by construction, but that is safe here: `verify_user_email`
-    is idempotent, and the token also breaks the moment the user's password or
-    last-login changes, so a leaked link cannot be replayed after first use.
+    It is not single-use by construction, but that is safe here:
+    `verify_user_email` is idempotent. What a resend does change is the send
+    time folded into the hash, so each dispatch mails a different token and
+    the link already in the inbox stops verifying (F-BUG-0002-001). The token
+    still breaks the moment the user's password or last-login changes, so a
+    leaked link cannot outlive those either.
     """
     return email_verification_token_generator().make_token(user)
 
@@ -100,10 +104,17 @@ def send_email_verification(user: User) -> None:
     """
     Email the confirmation link for a freshly registered account (CP-102).
 
+    The send time is stamped onto `user` before the link is minted (the token
+    hashes it), and saved only once `send_mail` accepts the message: a resend
+    therefore retires the link already in the inbox, while a mail outage
+    retires nothing -- nothing is persisted, so the previously mailed link
+    keeps working until a resend actually lands (F-BUG-0002-001).
+
     Raises whatever `send_mail` raises. Callers decide how loud that is: the
     registration view swallows it so a mail outage cannot leave the caller
     retrying a registration the account already has.
     """
+    user.email_verification_sent_at = timezone.now()
     verification_url = build_email_verification_url(user)
 
     send_mail(
@@ -119,6 +130,7 @@ def send_email_verification(user: User) -> None:
         recipient_list=[user.email],
         fail_silently=False,
     )
+    user.save(update_fields=["email_verification_sent_at", "updated_at"])
 
 
 def verify_user_email(user: User) -> None:

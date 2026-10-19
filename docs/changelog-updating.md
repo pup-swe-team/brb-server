@@ -4,6 +4,47 @@ Running record of what changed in `brb-server`, newest first. For the reasoning
 behind a change, see [`DECISIONS.md`](DECISIONS.md). For scope and ticket
 checkboxes, see [`BRB_BACKEND_SPRINTS.md`](BRB_BACKEND_SPRINTS.md).
 
+## 2026-10-19 — Verification bug-fix round (D-24)
+
+Branch: `checking/sprint-1`.
+
+### Fixed
+
+- **A resend retires the previous verification link (F-BUG-0002-001):** new
+  `User.email_verification_sent_at` column (`users.0006`) is stamped per
+  dispatch in `send_email_verification` and folded into the token HMAC
+  (`apps/users/tokens.py`), so the link already in the inbox stops verifying
+  once a new email is mailed. A failed send persists nothing, so a mail
+  outage leaves the previously mailed link working.
+- **Portal review and download no longer 500 on legacy submissions:**
+  `decrypt_document_data` (`apps/users/encryption.py`) returns bytes that are
+  not Fernet tokens unchanged — rows written before the CP-107 write path are
+  plaintext, and migration 0005 only rewrote rows that existed when it first
+  ran. Token-shaped bytes still decrypt, or raise, exactly as before.
+
+### Tests
+
+- `apps/users/tests.py` — three new `ResendVerificationTests` (superseded link
+  refused end-to-end by POST `/verify-email/`, freshly mailed link validates
+  across the DB round-trip, failed send keeps the old link valid);
+  `IdentityDocumentEncryptionTests` covers the legacy-plaintext read;
+  `test_submission_is_stored_with_a_pending_status` now decrypts before
+  comparing, since CP-107 encrypts at write time.
+- The third QA bug (profile "Verified" tag stale after admin approval) is a
+  `brb-client` fix — any-approved status scan, refresh-and-retry interceptor,
+  foreground refetch — recorded in `DECISIONS.md` D-24.
+
+Related documents:
+
+| Document | Purpose |
+|---|---|
+| `CONTRIBUTING.md` | Team guide. Authoritative for conventions and quality gates |
+| `README.md` | How a teammate gets the project running |
+| `docs/BRB_BACKEND_SPRINTS.md` | What to build and when |
+| `docs/COPUP_ERD.md` | Data shape |
+| `docs/DECISIONS.md` | Decisions and their rationale |
+| `docs/changelog-updating.md` | **This file** — what changed |
+
 ## 2026-10-16 — First Render Web Service deploy (D-23)
 
 Branch: `checking/sprint-1` (local, uncommitted).
