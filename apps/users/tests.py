@@ -615,6 +615,10 @@ class ResendVerificationTests(APITestCase):
 
         link = message.body.split("?", 1)[1].split()[0]
         query = parse_qs(link)
+        # Re-read the row the way POST /verify-email/ does: the resend stamps
+        # `email_verification_sent_at` on its own instance, so this test's copy
+        # is stale until refreshed (F-BUG-0002-001 hashes that stamp).
+        self.unverified.refresh_from_db()
         self.assertTrue(
             email_verification_token_generator().check_token(
                 self.unverified, query["token"][0]
@@ -680,6 +684,71 @@ class ResendVerificationTests(APITestCase):
             self.url, {"email": self.unverified.email}, format="json"
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_resend_supersedes_the_link_already_in_the_inbox(self) -> None:
+        """F-BUG-0002-001: the previously mailed link must stop verifying."""
+        stale_token = build_email_verification_token(self.unverified)
+
+        response = self.client.post(
+            self.url, {"email": self.unverified.email}, format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.unverified.refresh_from_db()
+        self.assertIsNotNone(self.unverified.email_verification_sent_at)
+
+        generator = email_verification_token_generator()
+        self.assertFalse(
+            generator.check_token(self.unverified, stale_token),
+            "The link mailed before the resend must no longer verify",
+        )
+        link = mail.outbox[-1].body.split("?", 1)[1].split()[0]
+        query = parse_qs(link)
+        self.assertTrue(
+            generator.check_token(self.unverified, query["token"][0]),
+            "The freshly mailed link must verify (DB round-trip of the send time)",
+        )
+
+    def test_old_link_cannot_verify_through_the_endpoint_after_a_resend(self) -> None:
+        """End-to-end: the superseded link is refused by POST /verify-email/."""
+        from django.utils.encoding import force_bytes
+        from django.utils.http import urlsafe_base64_encode
+
+        stale_token = build_email_verification_token(self.unverified)
+        self.client.post(self.url, {"email": self.unverified.email}, format="json")
+
+        response = self.client.post(
+            reverse("auth-verify-email"),
+            {
+                "uid": urlsafe_base64_encode(force_bytes(self.unverified.pk)),
+                "token": stale_token,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.unverified.refresh_from_db()
+        self.assertIsNone(self.unverified.email_verified_at)
+
+    def test_failed_resend_keeps_the_previous_link_working(self) -> None:
+        """A mail outage must not retire the only link the user has."""
+        stale_token = build_email_verification_token(self.unverified)
+
+        with mock.patch(
+            "apps.users.services.send_mail", side_effect=OSError("smtp down")
+        ):
+            response = self.client.post(
+                self.url, {"email": self.unverified.email}, format="json"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.unverified.refresh_from_db()
+        self.assertIsNone(self.unverified.email_verification_sent_at)
+        self.assertTrue(
+            email_verification_token_generator().check_token(
+                self.unverified, stale_token
+            )
+        )
 
 
 class EmailVerificationTokenGeneratorTests(APITestCase):
@@ -1341,8 +1410,11 @@ class IdentityDocumentSubmissionTests(APITestCase):
         self.assertEqual(response.data["id_number"], "2024-00123")
 
         document = IdentityDocument.objects.get(user=self.user)
-        # The bytes are in the row itself, byte-for-byte as uploaded.
-        self.assertEqual(bytes(document.document_data), PNG_BYTES)
+        # CP-107 encrypts at write time, so read the row back through the
+        # decryptor rather than comparing raw bytes to the upload.
+        self.assertEqual(
+            decrypt_document_data(bytes(document.document_data)), PNG_BYTES
+        )
         self.assertEqual(document.status.name, "pending")
         self.assertIsNotNone(document.submitted_at)
 
@@ -2175,6 +2247,18 @@ class IdentityDocumentEncryptionTests(APITestCase):
         """When key is unconfigured in development/test, bytes pass through."""
         with override_settings(IDENTITY_DOCUMENT_ENCRYPTION_KEY="", DEBUG=True):
             self.assertEqual(encrypt_document_data(PNG_BYTES), PNG_BYTES)
+            self.assertEqual(decrypt_document_data(PNG_BYTES), PNG_BYTES)
+
+    def test_legacy_plaintext_row_reads_back_with_a_key_configured(self) -> None:
+        """
+        Rows written before encryption-at-rest must not raise InvalidToken.
+
+        Migration 0005 only rewrote rows that existed when it ran, so a
+        submission stored as plaintext stays plaintext in the row; decrypting
+        it used to raise and turn the portal review page and the download
+        endpoint into 500s.
+        """
+        with override_settings(IDENTITY_DOCUMENT_ENCRYPTION_KEY=self.key):
             self.assertEqual(decrypt_document_data(PNG_BYTES), PNG_BYTES)
 
     def test_missing_key_in_production_fails_closed(self) -> None:

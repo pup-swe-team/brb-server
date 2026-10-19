@@ -132,6 +132,11 @@ class User(AbstractUser):
     bio = models.TextField(blank=True, null=True)
     photo = models.ImageField(upload_to="profile_photos/", blank=True, null=True)
     email_verified_at = models.DateTimeField(blank=True, null=True)
+    # When the confirmation email was last dispatched. Folded into the CP-102
+    # token hash (see apps/users/tokens.py), so each resend mints a different
+    # token and the link already sitting in the inbox stops verifying
+    # (F-BUG-0002-001). Nullable, so the migration is a backward-compatible add.
+    email_verification_sent_at = models.DateTimeField(blank=True, null=True)
     account_status = models.CharField(
         max_length=20,
         choices=AccountStatusChoices.choices,

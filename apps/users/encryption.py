@@ -101,6 +101,15 @@ def decrypt_document_data(ciphertext: bytes | memoryview | None) -> bytes:
     Returns decrypted plaintext bytes, or original bytes if no key is configured
     in dev/test. Raises InvalidToken if ciphertext is invalid, tampered with, or
     encrypted with a different key.
+
+    Rows written before encryption-at-rest (CP-107) hold plaintext bytes even
+    when a key is now configured -- migration 0005 only rewrites rows that
+    existed when it first ran. A Fernet token is base64url of a version byte
+    that always begins "gAAAA", and no accepted document signature (PNG/JPEG/
+    PDF) can start with "g", so anything else is a legacy row and is returned
+    as-is rather than raising InvalidToken and 500-ing the portal review page
+    or the download endpoint. Token-shaped bytes still go through Fernet, so
+    tampering and key mismatches keep failing loudly.
     """
     if ciphertext is None:
         return b""
@@ -110,5 +119,7 @@ def decrypt_document_data(ciphertext: bytes | memoryview | None) -> bytes:
 
     fernet = get_fernet()
     if fernet is None:
+        return raw_bytes
+    if not raw_bytes.startswith(b"gAAAA"):
         return raw_bytes
     return fernet.decrypt(raw_bytes)
