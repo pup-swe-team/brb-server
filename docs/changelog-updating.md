@@ -4,6 +4,52 @@ Running record of what changed in `brb-server`, newest first. For the reasoning
 behind a change, see [`DECISIONS.md`](DECISIONS.md). For scope and ticket
 checkboxes, see [`BRB_BACKEND_SPRINTS.md`](BRB_BACKEND_SPRINTS.md).
 
+## 2026-10-19 — Sprint 2 account lifecycle endpoints (D-25)
+
+Branch: `feature/sprint-2_CP-104-1001-1002-1004`.
+
+### Added
+
+- **CP-104 password recovery** — `POST /api/v1/auth/password-reset/` mails a
+  single-use link (generic anti-enumeration response, throttled 3/hour);
+  `POST /api/v1/auth/password-reset/confirm/` sets the new password, clears
+  any lockout and blacklists outstanding sessions. Link lifetime defaults to
+  60 minutes, Admin-configurable via
+  `system_configs.password_reset_expiry_minutes`.
+- **CP-1001 profile edit** — `PATCH /api/v1/auth/me/` persists full name,
+  contact number, bio, street address, municipality and province.
+- **CP-1001 password change** — `POST /api/v1/auth/password-change/` proves
+  the current password (401 `invalid_credentials` on mismatch), re-hashes the
+  new one and signs out every other session.
+- **CP-1002 email change** — `POST /api/v1/auth/email-change/` mails a
+  confirmation link to the new address (throttled 3/hour);
+  `POST /api/v1/auth/email-change/confirm/` swaps the addresses. The old
+  email stays the account of record until the link is confirmed; the new
+  address must satisfy the CP-101 PUP-domain and affiliation rules.
+- **CP-1004 deactivation** — `POST /api/v1/auth/deactivate/` closes the
+  account (status `deactivated`, `is_active` False, sessions blacklisted),
+  and refuses with a 400 naming the counts while open orders (borrowed or
+  lent) or open/escalated UnreturnedCases exist.
+
+### Changed
+
+- `apps/users/tokens.py` — the send-stamp hash logic is now driven by a
+  per-subclass `sent_at_field`, with `PasswordResetTokenGenerator` and
+  `EmailChangeTokenGenerator` added alongside the CP-102 generator (each
+  with its own salt, so tokens cannot cross endpoints). Behaviour of
+  verification tokens is unchanged.
+- `apps/users/serializers.py` — PUP-domain lookups extracted into
+  `pup_webmail_domains()`; registration behaviour is unchanged.
+- `users.0007` — adds `password_reset_sent_at`, `pending_email`,
+  `email_change_sent_at` (all nullable; backward-compatible).
+
+### Tests
+
+- `apps/users/tests.py` — 53 new tests: `PasswordResetTests` (15),
+  `ProfileUpdateTests` (8), `PasswordChangeTests` (7),
+  `EmailChangeTests` (13), `AccountDeactivationTests` (10). Suite total
+  314, all green.
+
 ## 2026-10-19 — Verification bug-fix round (D-24)
 
 Branch: `checking/sprint-1`.

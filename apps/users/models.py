@@ -137,6 +137,18 @@ class User(AbstractUser):
     # token and the link already sitting in the inbox stops verifying
     # (F-BUG-0002-001). Nullable, so the migration is a backward-compatible add.
     email_verification_sent_at = models.DateTimeField(blank=True, null=True)
+    # CP-104: when the password-reset link was last mailed. Folded into the
+    # reset token's HMAC (see apps/users/tokens.py) exactly the way
+    # `email_verification_sent_at` is, so requesting a new link retires the
+    # one already in the inbox. Nullable, backward-compatible add.
+    password_reset_sent_at = models.DateTimeField(blank=True, null=True)
+    # CP-1002: the address the user asked to move to. `email` remains the
+    # account of record until the new address is confirmed through the mailed
+    # link, so a pending change can never lock anyone out of the account.
+    pending_email = models.EmailField(blank=True, null=True)
+    # CP-1002: when the confirmation email for `pending_email` was last
+    # dispatched; the same supersession role as `email_verification_sent_at`.
+    email_change_sent_at = models.DateTimeField(blank=True, null=True)
     account_status = models.CharField(
         max_length=20,
         choices=AccountStatusChoices.choices,

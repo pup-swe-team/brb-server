@@ -223,10 +223,13 @@ REST_FRAMEWORK = {
         "rest_framework.parsers.FormParser",
     ),
     # Rate buckets for public, potentially abusable endpoints. The resend
-    # verification link (BE-BUG-0001) is throttled so a stray script cannot use
-    # the shared mail backend as a relay.
+    # verification link (BE-BUG-0001), the password-reset request (CP-104) and
+    # the email-change request (CP-1002) are throttled so a stray script
+    # cannot use the shared mail backend as a relay.
     "DEFAULT_THROTTLE_RATES": {
         "resend-verification": "3/hour",
+        "password-reset": "3/hour",
+        "email-change": "3/hour",
     },
 }
 
@@ -305,6 +308,14 @@ EMAIL_BACKEND = os.getenv(
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "webmaster@localhost")
 EMAIL_VERIFICATION_REDIRECT_URL = os.getenv(
     "EMAIL_VERIFICATION_REDIRECT_URL", "brb://auth/verify-email"
+)
+# CP-104: deep link the password-reset email hands back to the app.
+PASSWORD_RESET_REDIRECT_URL = os.getenv(
+    "PASSWORD_RESET_REDIRECT_URL", "brb://auth/reset-password"
+)
+# CP-1002: same, for the change-of-email confirmation link.
+EMAIL_CHANGE_REDIRECT_URL = os.getenv(
+    "EMAIL_CHANGE_REDIRECT_URL", "brb://auth/verify-email-change"
 )
 # CP-102: an account that never verifies its email is removed after this many
 # days. Read through SystemConfig so it stays Admin-configurable (CP-1104).

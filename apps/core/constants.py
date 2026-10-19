@@ -19,3 +19,7 @@ DEFAULT_LOGIN_LOCKOUT_MINUTES = 15
 # CP-102 -- days an account may stay unverified before it is removed.
 EMAIL_VERIFICATION_EXPIRY_DAYS = "email_verification_expiry_days"
 DEFAULT_EMAIL_VERIFICATION_EXPIRY_DAYS = 7
+
+# CP-104 -- minutes a password-reset link stays valid.
+PASSWORD_RESET_EXPIRY_MINUTES = "password_reset_expiry_minutes"
+DEFAULT_PASSWORD_RESET_EXPIRY_MINUTES = 60

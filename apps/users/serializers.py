@@ -37,7 +37,11 @@ from .models import (
     IdentityDocumentType,
     User,
 )
-from .services import email_verification_token_generator
+from .services import (
+    email_change_token_generator,
+    email_verification_token_generator,
+    password_reset_token_generator,
+)
 
 
 def login_lockout_threshold() -> int:
@@ -48,6 +52,17 @@ def login_lockout_threshold() -> int:
 def login_lockout_minutes() -> int:
     """How long a CP-103 lockout lasts, Admin-configurable."""
     return get_int_config(LOGIN_LOCKOUT_MINUTES, DEFAULT_LOGIN_LOCKOUT_MINUTES)
+
+
+def pup_webmail_domains() -> tuple[str, str]:
+    """The (student, faculty/staff) PUP webmail domains, from settings."""
+    student_domain = getattr(
+        settings, "ALLOWED_STUDENT_EMAIL_DOMAIN", "iskolarngbayan.pup.edu.ph"
+    ).lower()
+    faculty_domain = getattr(
+        settings, "ALLOWED_FACULTY_EMAIL_DOMAIN", "pup.edu.ph"
+    ).lower()
+    return student_domain, faculty_domain
 
 
 class UserResponseSerializer(serializers.ModelSerializer):
@@ -102,16 +117,10 @@ class UserRegistrationSerializer(serializers.Serializer):
                 "An account with this email address already exists."
             )
 
-        student_domain = getattr(
-            settings, "ALLOWED_STUDENT_EMAIL_DOMAIN", "iskolarngbayan.pup.edu.ph"
-        ).lower()
-        faculty_domain = getattr(
-            settings, "ALLOWED_FACULTY_EMAIL_DOMAIN", "pup.edu.ph"
-        ).lower()
-
         if "@" not in normalized_email:
             raise serializers.ValidationError("Enter a valid email address.")
 
+        student_domain, faculty_domain = pup_webmail_domains()
         domain = normalized_email.split("@")[-1]
         if domain not in (student_domain, faculty_domain):
             raise serializers.ValidationError(
@@ -164,12 +173,7 @@ class UserRegistrationSerializer(serializers.Serializer):
         domain = email.split("@")[-1].lower() if "@" in email else ""
         affiliation = attrs.get("affiliation")
 
-        student_domain = getattr(
-            settings, "ALLOWED_STUDENT_EMAIL_DOMAIN", "iskolarngbayan.pup.edu.ph"
-        ).lower()
-        faculty_domain = getattr(
-            settings, "ALLOWED_FACULTY_EMAIL_DOMAIN", "pup.edu.ph"
-        ).lower()
+        student_domain, faculty_domain = pup_webmail_domains()
 
         if affiliation == User.AffiliationChoices.STUDENT and domain != student_domain:
             raise serializers.ValidationError(
@@ -632,3 +636,260 @@ class IdentityDocumentOwnerInfoSerializer(serializers.ModelSerializer):
         model = User
         fields = ("id", "full_name", "email", "contact_number", "affiliation")
         read_only_fields = fields
+
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    """
+    Accept the address a reset link should go to (CP-104).
+
+    Carries no existence logic, like `ResendVerificationSerializer`: the view
+    answers identically whether the account exists, so the endpoint cannot be
+    used to enumerate registered addresses.
+    """
+
+    email = serializers.EmailField()
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    """
+    Validate a reset link and set the new password (CP-104).
+
+    A bad `uid` or token -- forged, aged out, or already used -- gets the same
+    message, so the endpoint cannot be probed for which links are live. The
+    password-quality checks still speak for themselves: they only run once the
+    link has been proven, which means the caller already controls the inbox.
+    """
+
+    uid = serializers.CharField()
+    token = serializers.CharField()
+    password = serializers.CharField(
+        write_only=True,
+        style={"input_type": "password"},
+    )
+    password_confirm = serializers.CharField(
+        write_only=True,
+        style={"input_type": "password"},
+    )
+
+    default_error_messages = {
+        "invalid_link": "This password reset link is invalid or has expired."
+    }
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        try:
+            user_pk = urlsafe_base64_decode(attrs["uid"]).decode()
+            user = User.objects.get(pk=user_pk)
+        except (User.DoesNotExist, ValueError, TypeError, OverflowError):
+            raise serializers.ValidationError(
+                {"detail": self.error_messages["invalid_link"]}
+            )
+
+        if not password_reset_token_generator().check_token(user, attrs["token"]):
+            raise serializers.ValidationError(
+                {"detail": self.error_messages["invalid_link"]}
+            )
+
+        password = attrs.get("password")
+        if password != attrs.get("password_confirm"):
+            raise serializers.ValidationError(
+                {"password_confirm": "Passwords do not match."}
+            )
+
+        try:
+            validate_password(password)
+        except DjangoValidationError as err:
+            raise serializers.ValidationError({"password": list(err.messages)})
+
+        attrs["reset_user"] = user
+        return attrs
+
+
+class ProfileUpdateSerializer(serializers.ModelSerializer):
+    """
+    Persist profile field updates (CP-1001).
+
+    Covers the text/location fields on the profile screen. `email` is absent
+    on purpose -- CP-1002 owns that change and its re-verification dance --
+    and `password` is absent because CP-1001's password change is a separate
+    endpoint that proves the current password first. `photo` is left to a
+    multipart endpoint when the client needs it.
+    """
+
+    class Meta:
+        model = User
+        fields = (
+            "full_name",
+            "contact_number",
+            "bio",
+            "street_address",
+            "municipality",
+            "province",
+        )
+
+    def validate_full_name(self, value: str) -> str:
+        cleaned_name = value.strip()
+        if len(cleaned_name) < 2:
+            raise serializers.ValidationError(
+                "Full name must be at least 2 characters long."
+            )
+        return cleaned_name
+
+    def validate_contact_number(self, value: str) -> str:
+        cleaned_number = value.strip()
+        if not PHILIPPINES_MOBILE_REGEX.match(cleaned_number):
+            raise serializers.ValidationError(
+                "Enter a valid Philippine mobile number (e.g., 09123456789 or +639123456789)."
+            )
+        return cleaned_number
+
+
+class PasswordChangeSerializer(serializers.Serializer):
+    """
+    Change the caller's password from inside the app (CP-1001).
+
+    The current password is proven first, and a wrong one is an *authentication*
+    failure (401, code `invalid_credentials`) per D-12 -- the same answer login
+    gives -- rather than a validation error that would let a stolen access
+    token grind through passwords. The new password is strength-checked and
+    confirmed twice, then applied through `apply_new_password`, which re-hashes
+    it and blacklists every outstanding refresh token.
+    """
+
+    current_password = serializers.CharField(
+        write_only=True, style={"input_type": "password"}
+    )
+    new_password = serializers.CharField(
+        write_only=True, style={"input_type": "password"}
+    )
+    new_password_confirm = serializers.CharField(
+        write_only=True, style={"input_type": "password"}
+    )
+
+    default_error_messages = {
+        "invalid_credentials": "Current password is incorrect.",
+    }
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        user = self.context["request"].user
+
+        if not user.check_password(attrs["current_password"]):
+            raise AuthenticationFailed(
+                self.error_messages["invalid_credentials"], code="invalid_credentials"
+            )
+
+        new_password = attrs["new_password"]
+        if new_password != attrs.get("new_password_confirm"):
+            raise serializers.ValidationError(
+                {"new_password_confirm": "Passwords do not match."}
+            )
+
+        try:
+            validate_password(new_password, user=user)
+        except DjangoValidationError as err:
+            raise serializers.ValidationError({"new_password": list(err.messages)})
+
+        attrs["user"] = user
+        return attrs
+
+
+class EmailChangeSerializer(serializers.Serializer):
+    """
+    Request a change of the registered email (CP-1002).
+
+    The new address must be a valid PUP webmail domain *and* match the
+    account's affiliation the same way registration does -- a Student moving
+    to @pup.edu.ph would otherwise mint an account the CP-101 rules could
+    never have created. The change is only a proposal until the mailed link is
+    confirmed; `email` stays the account of record until then.
+    """
+
+    new_email = serializers.EmailField()
+
+    def validate_new_email(self, value: str) -> str:
+        normalized = value.strip().lower()
+        user = self.context["request"].user
+
+        if normalized == user.email.strip().lower():
+            raise serializers.ValidationError(
+                "This is already your registered email address."
+            )
+
+        if User.objects.filter(email__iexact=normalized).exists():
+            raise serializers.ValidationError(
+                "An account with this email address already exists."
+            )
+
+        student_domain, faculty_domain = pup_webmail_domains()
+        domain = normalized.split("@")[-1]
+        if domain not in (student_domain, faculty_domain):
+            raise serializers.ValidationError(
+                f"Email changes are restricted to PUP webmail addresses "
+                f"(@{student_domain} for students, @{faculty_domain} for faculty/staff)."
+            )
+
+        if (
+            user.affiliation == User.AffiliationChoices.STUDENT
+            and domain != student_domain
+        ):
+            raise serializers.ValidationError(
+                f"Student affiliation requires an @{student_domain} email address."
+            )
+        if (
+            user.affiliation
+            in (User.AffiliationChoices.FACULTY, User.AffiliationChoices.STAFF)
+            and domain != faculty_domain
+        ):
+            raise serializers.ValidationError(
+                f"{user.affiliation} affiliation requires an @{faculty_domain} email address."
+            )
+
+        return normalized
+
+
+class EmailChangeConfirmSerializer(serializers.Serializer):
+    """
+    Confirm a change-of-email link and swap the addresses (CP-1002).
+
+    Same generic failure message for every dead link, for the same reason
+    `EmailVerificationSerializer` uses one. The pending address is re-checked
+    for uniqueness here, immediately before the swap: the world may have moved
+    since the request was made, and `users.email` is unique.
+    """
+
+    uid = serializers.CharField()
+    token = serializers.CharField()
+
+    default_error_messages = {
+        "invalid_link": "This email change link is invalid or has expired."
+    }
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        try:
+            user_pk = urlsafe_base64_decode(attrs["uid"]).decode()
+            user = User.objects.get(pk=user_pk)
+        except (User.DoesNotExist, ValueError, TypeError, OverflowError):
+            raise serializers.ValidationError(
+                {"detail": self.error_messages["invalid_link"]}
+            )
+
+        if user.pending_email is None:
+            raise serializers.ValidationError(
+                {"detail": self.error_messages["invalid_link"]}
+            )
+
+        if not email_change_token_generator().check_token(user, attrs["token"]):
+            raise serializers.ValidationError(
+                {"detail": self.error_messages["invalid_link"]}
+            )
+
+        if (
+            User.objects.filter(email__iexact=user.pending_email)
+            .exclude(pk=user.pk)
+            .exists()
+        ):
+            raise serializers.ValidationError(
+                {"detail": self.error_messages["invalid_link"]}
+            )
+
+        attrs["target_user"] = user
+        return attrs
