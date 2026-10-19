@@ -64,6 +64,8 @@ cover/
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
+# Uploaded media (listing photos etc.) — runtime artifacts, never committed
+media/
 
 # Flask stuff:
 instance/
