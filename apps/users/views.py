@@ -2,7 +2,7 @@ import logging
 
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
-from rest_framework import permissions, status
+from rest_framework import generics, permissions, status
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -13,12 +13,14 @@ from apps.audit.services import log_admin_document_access
 
 from .encryption import decrypt_document_data
 from .models import IdentityDocument
+from .selectors import search_lenders
 from .serializers import (
     EmailVerificationSerializer,
     IdentityDocumentOwnerInfoSerializer,
     IdentityDocumentResponseSerializer,
     IdentityDocumentReviewSerializer,
     IdentityDocumentSubmissionSerializer,
+    LenderSearchResultSerializer,
     LoginSerializer,
     LogoutSerializer,
     RefreshSerializer,
@@ -351,3 +353,20 @@ class IdentityDocumentOwnerInfoView(APIView):
             document.user, context={"request": request}
         )
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class LenderSearchView(generics.ListAPIView):
+    """
+    Search active, verified lenders by name (CP-302).
+    GET /api/v1/lenders/?q=<name>
+
+    Excludes suspended/revoked lenders and non-lenders.
+    Returns public profile info with active listing count.
+    """
+
+    serializer_class = LenderSearchResultSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        q = self.request.query_params.get("q")
+        return search_lenders(q=q)

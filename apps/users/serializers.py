@@ -620,3 +620,24 @@ class IdentityDocumentOwnerInfoSerializer(serializers.ModelSerializer):
         model = User
         fields = ("id", "full_name", "email", "contact_number", "affiliation")
         read_only_fields = fields
+
+
+class LenderSearchResultSerializer(serializers.ModelSerializer):
+    """
+    Public representation of a verified lender in search results (CP-302).
+    Never exposes private contact details, email, or identity documents.
+    """
+
+    active_listing_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = (
+            "id",
+            "full_name",
+            "affiliation",
+            "photo",
+            "bio",
+            "active_listing_count",
+        )
+        read_only_fields = fields

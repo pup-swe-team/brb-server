@@ -23,5 +23,6 @@ urlpatterns = [
     path("api/v1/auth/", include("apps.users.urls")),
     path("api/v1/jobs/", include("apps.core.urls")),
     path("api/v1/identity/", include("apps.users.identity_urls")),
+    path("api/v1/lenders/", include("apps.users.lender_urls")),
     path("api/v1/", include("apps.listings.urls")),
 ]
