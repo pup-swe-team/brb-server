@@ -102,3 +102,63 @@ class ListingSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+
+class ListingSearchQuerySerializer(serializers.Serializer):
+    q = serializers.CharField(required=False, allow_blank=True)
+    category = serializers.IntegerField(required=False)
+    condition = serializers.CharField(required=False, allow_blank=True)
+    pickup_location = serializers.IntegerField(required=False)
+    min_price = serializers.DecimalField(
+        required=False, max_digits=10, decimal_places=2, min_value=0
+    )
+    max_price = serializers.DecimalField(
+        required=False, max_digits=10, decimal_places=2, min_value=0
+    )
+    free_only = serializers.BooleanField(required=False, default=False)
+    available_from = serializers.DateField(required=False)
+    available_to = serializers.DateField(required=False)
+    sort = serializers.ChoiceField(
+        choices=[
+            "created_at",
+            "-created_at",
+            "rate_per_day",
+            "-rate_per_day",
+            "title",
+            "-title",
+        ],
+        required=False,
+    )
+
+
+class ListingSearchResultSerializer(serializers.ModelSerializer):
+    category = ListingCategorySerializer(read_only=True)
+    pickup_location = PickupLocationSerializer(read_only=True)
+    status = ListingStatusSerializer(read_only=True)
+    lender = serializers.SerializerMethodField()
+    photos = ListingPhotoSerializer(many=True, read_only=True)
+
+    def get_lender(self, obj: Listing) -> dict:
+        return {
+            "id": obj.lender_id,
+            "full_name": obj.lender.full_name,
+            "photo": obj.lender.photo.url if obj.lender.photo else None,
+        }
+
+    class Meta:
+        model = Listing
+        fields = [
+            "id",
+            "title",
+            "description",
+            "condition",
+            "rate_per_day",
+            "is_ownership_confirmed",
+            "lender",
+            "category",
+            "pickup_location",
+            "status",
+            "photos",
+            "created_at",
+            "updated_at",
+        ]

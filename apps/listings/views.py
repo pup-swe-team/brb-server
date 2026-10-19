@@ -1,9 +1,32 @@
 from django.utils import timezone
-from rest_framework import generics
+from rest_framework import generics, permissions
 
 from .models import Listing, PickupLocation
 from .permissions import IsAdminOrReadOnly, IsOwnerOrReadOnly
-from .serializers import ListingSerializer, PickupLocationSerializer
+from .selectors import search_listings
+from .serializers import (
+    ListingSearchQuerySerializer,
+    ListingSearchResultSerializer,
+    ListingSerializer,
+    PickupLocationSerializer,
+)
+
+
+class ListingSearchView(generics.ListAPIView):
+    """
+    Search and filter active listings (CP-301).
+    Supports keyword search (?q=), category, condition, pickup location,
+    price range, free_only, date availability, and sorting.
+    Excludes deactivated/deleted listings and suspended/revoked lenders.
+    """
+
+    serializer_class = ListingSearchResultSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        query_serializer = ListingSearchQuerySerializer(data=self.request.query_params)
+        query_serializer.is_valid(raise_exception=True)
+        return search_listings(**query_serializer.validated_data)
 
 
 class ListingDetailView(generics.RetrieveUpdateDestroyAPIView):
