@@ -3966,3 +3966,41 @@ class LenderProfileTests(APITestCase):
         self.assertNotIn("contact_number", response.data)
         self.assertNotIn("street_address", response.data)
         self.assertNotIn("password", response.data)
+
+
+class AdminPortalSmokeTests(APITestCase):
+    """The /portal/ admin surface renders for staff and rejects everyone else."""
+
+    def setUp(self) -> None:
+        self.login_url = reverse("portal-login")
+        self.dashboard_url = reverse("portal-dashboard")
+        self.staff = User.objects.create_superuser(
+            email="portaladmin@pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Portal Admin",
+        )
+        self.regular = User.objects.create_user(
+            email="student@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Regular Student",
+        )
+
+    def test_login_page_renders_publicly(self) -> None:
+        response = self.client.get(self.login_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_dashboard_redirects_anonymous_to_login(self) -> None:
+        response = self.client.get(self.dashboard_url)
+        self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+        self.assertIn("portal/login", response.url)
+
+    def test_dashboard_renders_for_staff(self) -> None:
+        self.client.force_login(self.staff)
+        response = self.client.get(self.dashboard_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_non_staff_is_bounced_to_login(self) -> None:
+        self.client.force_login(self.regular)
+        response = self.client.get(self.dashboard_url)
+        self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+        self.assertIn("portal/login", response.url)

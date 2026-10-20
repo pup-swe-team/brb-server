@@ -27,6 +27,21 @@ Branch: `feature/sprint-2_CP-104-1001-1002-1004` (merged `feature/sprint-2_cp301
   `apps/listings/tests.py` into modules under `apps/listings/tests/`, with the
   pickup tests rewritten against the CP-1105 endpoints.
 
+### Added (admin activation, same day)
+
+- `/admin/` now covers the whole listings domain: `ListingCategory`,
+  `ListingStatus` (read-only lookup — names are literal constants in the
+  services), `ListingPhoto`, `AvailabilityWindow` joined the `Listing`,
+  `PickupLocation` (with a soft-delete bulk action mirroring DELETE
+  `/api/v1/pickup-locations/<id>/`) and `BlockedDateRange` registrations, and
+  `users.User` itself is registered (password hash excluded from the form;
+  statuses searchable/filterable for incident support).
+- `docs/COPUP_ERD.md` gained the missing `BLOCKED_DATE_RANGES` table (CP-403)
+  in the listings domain.
+- New smoke tests: `/admin/` changelists render for every listings model plus
+  `User`, the pickup soft-delete action works, and `/portal/` (verification
+  admin, CP-106) renders for staff and bounces everyone else.
+
 ## 2026-10-20 — Sprint 2: Search, Profiles, Calendar, and Locations (CP-301, CP-302, CP-304, CP-403, CP-1105)
 
 Branch: `feature/sprint-2_cp301-302-304-403-1105-search-profiles-calendar-locations`.

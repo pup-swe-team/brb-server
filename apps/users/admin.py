@@ -8,7 +8,49 @@ from django.utils.html import format_html
 
 from apps.audit.services import log_admin_document_access
 
-from .models import IdentityDocument, IdentityDocumentStatus, IdentityDocumentType
+from .models import (
+    IdentityDocument,
+    IdentityDocumentStatus,
+    IdentityDocumentType,
+    User,
+)
+
+
+@admin.register(User)
+class UserAdmin(admin.ModelAdmin):
+    """
+    Read/manage accounts from /admin/ (ops visibility; FR14-adjacent).
+
+    The password hash is excluded from the form -- credential changes go
+    through the app's own endpoints (CP-104/1001), not the admin. Account
+    and lender statuses are editable here so support can resolve incidents
+    without raw SQL; D-03 authority remains `is_staff`/`is_superuser`.
+    """
+
+    list_display = (
+        "email",
+        "full_name",
+        "affiliation",
+        "account_status",
+        "lender_status",
+        "is_staff",
+        "is_active",
+        "created_at",
+    )
+    list_filter = ("affiliation", "account_status", "lender_status", "is_staff")
+    search_fields = ("email", "full_name")
+    exclude = ("password",)
+    readonly_fields = (
+        "last_login",
+        "date_joined",
+        "created_at",
+        "updated_at",
+        "email_verified_at",
+        "email_verification_sent_at",
+        "password_reset_sent_at",
+        "email_change_sent_at",
+    )
+    date_hierarchy = "created_at"
 
 
 class RejectIdentityDocumentForm(forms.Form):
