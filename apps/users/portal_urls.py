@@ -1,8 +1,9 @@
-"""CoPUPAdmin portal routes (BE-BUG-0006).
+"""CoPUPAdmin portal routes (BE-BUG-0006, CP-1108).
 
 Mounted at `/portal/`. These are Django-rendered pages for the administrator
-verification workflow (screens 76, 77, 82, 83, 84). Everything under these
-routes except the sign-in page requires a logged-in staff account
+verification workflow (screens 76, 77, 82, 83, 84) plus the pickup-location
+management page (CP-1108, mirror of CP-1105). Everything under these routes
+except the sign-in page requires a logged-in staff account
 (`is_staff`, D-03) -- enforced in `apps.users.portal.staff_login_required`.
 """
 
@@ -24,5 +25,25 @@ urlpatterns = [
         "verification/<int:pk>/review/",
         portal.verification_review_submit,
         name="portal-verification-review-submit",
+    ),
+    path(
+        "pickup-locations/",
+        portal.pickup_locations,
+        name="portal-pickup-locations",
+    ),
+    path(
+        "pickup-locations/<int:pk>/edit/",
+        portal.pickup_location_edit,
+        name="portal-pickup-location-edit",
+    ),
+    path(
+        "pickup-locations/<int:pk>/delete/",
+        portal.pickup_location_soft_delete,
+        name="portal-pickup-location-delete",
+    ),
+    path(
+        "pickup-locations/<int:pk>/restore/",
+        portal.pickup_location_restore,
+        name="portal-pickup-location-restore",
     ),
 ]

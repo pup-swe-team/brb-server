@@ -1,0 +1,88 @@
+{% extends "admin_portal/shell.html" %}
+{% block title %}Pickup Locations &middot; CoPUPAdmin{% endblock %}
+{% block content %}
+<nav class="crumbs" aria-label="Breadcrumb"><span>Configuration</span> / <a href="{% url 'portal-pickup-locations' %}">Pickup Locations</a></nav>
+<div class="page-heading">
+  <h1>Pickup Locations</h1>
+</div>
+
+<div class="card">
+  <h2>{% if editing %}Edit &ldquo;{{ editing.name }}&rdquo;{% else %}Add a pickup location{% endif %}</h2>
+  <form method="post" novalidate>
+    {% csrf_token %}
+    <div class="field {% if form.name.errors %}is-invalid{% endif %}">
+      <label for="{{ form.name.id_for_label }}">Location name <em>*</em></label>
+      {{ form.name }}
+      {% for error in form.name.errors %}<span class="field-error">{{ error }}</span>{% endfor %}
+    </div>
+    <div class="field {% if form.description.errors %}is-invalid{% endif %}">
+      <label for="{{ form.description.id_for_label }}">Description</label>
+      {{ form.description }}
+      {% for error in form.description.errors %}<span class="field-error">{{ error }}</span>{% endfor %}
+    </div>
+    <button class="btn btn-primary" type="submit">{% if editing %}Save changes{% else %}Add location{% endif %}</button>
+    {% if editing %}<a class="btn btn-ghost" href="{% url 'portal-pickup-locations' %}">Cancel</a>{% endif %}
+  </form>
+</div>
+
+<div class="card">
+  <h2>Active locations ({{ locations|length }})</h2>
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Name</th><th>Description</th><th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for loc in locations %}
+        <tr>
+          <td data-label="Name">{{ loc.name }}</td>
+          <td data-label="Description">{{ loc.description|default:"—" }}</td>
+          <td data-label="Actions">
+            <a class="link" href="{% url 'portal-pickup-location-edit' loc.pk %}">Edit</a>
+            <form method="post" action="{% url 'portal-pickup-location-delete' loc.pk %}">
+              {% csrf_token %}
+              <button class="btn btn-ghost" type="submit">Archive</button>
+            </form>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="3" class="table-empty">No active pickup locations yet. Lenders only see active locations in the listing-creation dropdown.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Archived ({{ archived|length }})</h2>
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Name</th><th>Description</th><th>Archived</th><th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for loc in archived %}
+        <tr>
+          <td data-label="Name">{{ loc.name }}</td>
+          <td data-label="Description">{{ loc.description|default:"—" }}</td>
+          <td data-label="Archived">{{ loc.deleted_at|date:"M. j, Y" }}</td>
+          <td data-label="Actions">
+            <form method="post" action="{% url 'portal-pickup-location-restore' loc.pk %}">
+              {% csrf_token %}
+              <button class="btn btn-ghost" type="submit">Restore</button>
+            </form>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="4" class="table-empty">Nothing archived.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="empty-note">Archived locations stay attached to existing listings but are hidden from the lender dropdown and the public API.</p>
+</div>
+{% endblock %}

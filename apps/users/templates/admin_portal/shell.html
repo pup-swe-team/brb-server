@@ -30,7 +30,7 @@
         <svg class="nav-icon"><use href="#icon-moderation"/></svg><span>Content Moderation</span>
       </a>
       <p class="nav-group">Configuration</p>
-      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="Planned for a later sprint">
+      <a class="nav-item {% if active_nav == 'pickup' %}is-active{% endif %}" href="{% url 'portal-pickup-locations' %}">
         <svg class="nav-icon"><use href="#icon-pickup"/></svg><span>Pickup Locations</span>
       </a>
       <a class="nav-item is-disabled" href="#" aria-disabled="true" title="Planned for a later sprint">

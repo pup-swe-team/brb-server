@@ -12,8 +12,11 @@ staff-gated page logs a non-staff member out.
 from django.core import mail
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
+from rest_framework.test import APIClient
 
 from apps.audit.models import AdminAccessLog
+from apps.listings.models import PickupLocation
 from apps.notifications.models import Notification
 from apps.users.models import (
     IdentityDocument,
@@ -273,3 +276,139 @@ class PortalVerificationReviewTests(TestCase):
         )
         self.document.refresh_from_db()
         self.assertEqual(self.document.status.name, "rejected")
+
+
+class PickupLocationPortalTests(TestCase):
+    """CP-1108: portal mirror of CP-1105 -- staff manage fixed locations."""
+
+    def setUp(self) -> None:
+        self.admin = make_user(
+            "admin-pickup@iskolarngbayan.pup.edu.ph",
+            is_staff=True,
+            full_name="Ash Reyes",
+        )
+        self.member = make_user(
+            "member-pickup@iskolarngbayan.pup.edu.ph", full_name="Bela Cruz"
+        )
+        self.main = PickupLocation.objects.create(
+            name="Main Library Front Desk",
+            description="Beside the circulation counter",
+        )
+        self.lobby = PickupLocation.objects.create(name="Engineering Lobby")
+        self.old = PickupLocation.objects.create(name="Old Gym Entrance")
+        self.old.deleted_at = timezone.now()
+        self.old.save(update_fields=["deleted_at"])
+        self.url = reverse("portal-pickup-locations")
+
+    def test_anonymous_redirected_to_sign_in(self) -> None:
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("login", response.url)
+
+    def test_non_staff_member_is_logged_out(self) -> None:
+        self.client.force_login(self.member)
+        response = self.client.get(self.url)
+        self.assertRedirects(response, reverse("portal-login"))
+        self.assertNotIn("_auth_user_id", self.client.session)
+
+    def test_list_splits_active_and_archived(self) -> None:
+        self.client.force_login(self.admin)
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        active_names = [loc.name for loc in response.context["locations"]]
+        self.assertEqual(active_names, ["Engineering Lobby", "Main Library Front Desk"])
+        archived_names = [loc.name for loc in response.context["archived"]]
+        self.assertEqual(archived_names, ["Old Gym Entrance"])
+        self.assertContains(response, "Main Library Front Desk")
+        self.assertContains(response, "Old Gym Entrance")
+        self.assertContains(response, self.url)
+
+    def test_nav_link_is_enabled_on_shell(self) -> None:
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("portal-dashboard"))
+        self.assertContains(response, self.url)
+
+    def test_create_trims_name_and_feeds_api_dropdown(self) -> None:
+        self.client.force_login(self.admin)
+        response = self.client.post(
+            self.url,
+            {"name": "  Student Center Counter  ", "description": "2nd floor"},
+        )
+        self.assertRedirects(response, self.url)
+
+        created = PickupLocation.objects.get(name="Student Center Counter")
+        self.assertEqual(created.description, "2nd floor")
+
+        # The API's exact dropdown queryset must now contain the new row.
+        dropdown = PickupLocation.objects.filter(deleted_at__isnull=True).order_by(
+            "name"
+        )
+        self.assertIn(created, list(dropdown))
+
+        api = APIClient()
+        api.force_authenticate(user=self.admin)
+        payload = api.get("/api/v1/pickup-locations/")
+        self.assertEqual(payload.status_code, 200)
+        self.assertIn("Student Center Counter", [row["name"] for row in payload.data])
+
+    def test_blank_name_rejected_with_serializer_wording(self) -> None:
+        self.client.force_login(self.admin)
+        before = PickupLocation.objects.count()
+        response = self.client.post(self.url, {"name": "   "})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Location name cannot be blank.")
+        self.assertEqual(PickupLocation.objects.count(), before)
+
+    def test_edit_updates_active_location(self) -> None:
+        self.client.force_login(self.admin)
+        edit_url = reverse("portal-pickup-location-edit", args=[self.main.pk])
+
+        page = self.client.get(edit_url)
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, 'value="Main Library Front Desk"')
+
+        response = self.client.post(
+            edit_url,
+            {"name": "Main Library Desk (North Wing)", "description": "New spot"},
+        )
+        self.assertRedirects(response, self.url)
+        self.main.refresh_from_db()
+        self.assertEqual(self.main.name, "Main Library Desk (North Wing)")
+        self.assertEqual(self.main.description, "New spot")
+
+    def test_edit_archived_location_is_404(self) -> None:
+        self.client.force_login(self.admin)
+        edit_url = reverse("portal-pickup-location-edit", args=[self.old.pk])
+        response = self.client.get(edit_url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_soft_delete_archives_location(self) -> None:
+        self.client.force_login(self.admin)
+        response = self.client.post(
+            reverse("portal-pickup-location-delete", args=[self.lobby.pk])
+        )
+        self.assertRedirects(response, self.url)
+        self.lobby.refresh_from_db()
+        self.assertIsNotNone(self.lobby.deleted_at)
+        self.assertNotIn(
+            self.lobby.pk,
+            [loc.pk for loc in PickupLocation.objects.filter(deleted_at__isnull=True)],
+        )
+
+    def test_restore_returns_location_to_active(self) -> None:
+        self.client.force_login(self.admin)
+        response = self.client.post(
+            reverse("portal-pickup-location-restore", args=[self.old.pk])
+        )
+        self.assertRedirects(response, self.url)
+        self.old.refresh_from_db()
+        self.assertIsNone(self.old.deleted_at)
+
+    def test_delete_and_restore_reject_get(self) -> None:
+        self.client.force_login(self.admin)
+        delete_url = reverse("portal-pickup-location-delete", args=[self.lobby.pk])
+        restore_url = reverse("portal-pickup-location-restore", args=[self.old.pk])
+        self.assertEqual(self.client.get(delete_url).status_code, 405)
+        self.assertEqual(self.client.get(restore_url).status_code, 405)

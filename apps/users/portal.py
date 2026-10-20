@@ -18,6 +18,7 @@ every staff-gated page logs them out.
 import functools
 from datetime import timedelta
 
+from django import forms
 from django.contrib import messages
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
@@ -31,7 +32,7 @@ from django.utils.dateformat import DateFormat
 from django.views.decorators.http import require_POST
 
 from apps.audit.services import log_admin_document_access
-from apps.listings.models import Listing, ListingStatus
+from apps.listings.models import Listing, ListingStatus, PickupLocation
 from apps.orders.models import Order
 from apps.reports.models import (
     ListingReport,
@@ -481,3 +482,149 @@ def verification_review_submit(request, pk: int):
         f"Verification {outcome} for {document.user.full_name}.",
     )
     return redirect(reverse("portal-verification-queue"))
+
+
+# ---------------------------------------------------------------------------
+# CP-1108 -- Pickup-location management (portal mirror of CP-1105)
+
+
+class PickupLocationPortalForm(forms.Form):
+    """
+    The CP-1105 rules restated for a server-rendered form: a trimmed, non-blank
+    name up to 150 characters and an optional description. The required-error
+    wording matches `PickupLocationSerializer.validate_name` so the API and the
+    portal say the same thing about the same input.
+    """
+
+    name = forms.CharField(
+        max_length=150,
+        strip=True,
+        widget=forms.TextInput(
+            attrs={
+                "class": "field-input",
+                "placeholder": "e.g. PUP Main Library Front Desk",
+            }
+        ),
+        error_messages={"required": "Location name cannot be blank."},
+    )
+    description = forms.CharField(
+        required=False,
+        widget=forms.Textarea(
+            attrs={
+                "class": "field-input",
+                "rows": 3,
+                "placeholder": "Landmark, floor, desk - anything that helps borrowers find it (optional)",
+            }
+        ),
+    )
+
+
+def _pickup_location_context() -> dict:
+    """Shared context for the pickup pages: split lists in the API's order."""
+    return {
+        "active_nav": "pickup",
+        "locations": PickupLocation.objects.filter(deleted_at__isnull=True).order_by(
+            "name"
+        ),
+        "archived": PickupLocation.objects.filter(deleted_at__isnull=False).order_by(
+            "name"
+        ),
+        "nav_verification_count": _identity_document_tab_counts()["pending"],
+    }
+
+
+@staff_login_required
+def pickup_locations(request):
+    """
+    Pickup-location management page (CP-1108): active locations with add form,
+    archived (soft-deleted) locations with Restore. Create follows PRG like the
+    rest of the portal; validation errors re-render the form inline.
+    """
+    if request.method == "POST":
+        form = PickupLocationPortalForm(request.POST)
+        if form.is_valid():
+            PickupLocation.objects.create(
+                name=form.cleaned_data["name"],
+                description=form.cleaned_data["description"] or None,
+            )
+            messages.success(
+                request,
+                f"Pickup location \u201c{form.cleaned_data['name']}\u201d added.",
+            )
+            return redirect(reverse("portal-pickup-locations"))
+    else:
+        form = PickupLocationPortalForm()
+
+    context = {
+        "page_title": "Pickup Locations",
+        "form": form,
+        **_pickup_location_context(),
+    }
+    return render(request, "admin_portal/pickup_locations.html", context)
+
+
+@staff_login_required
+def pickup_location_edit(request, pk: int):
+    """Edit one active location (CP-1108). Archived rows are not editable."""
+    location = get_object_or_404(PickupLocation, pk=pk, deleted_at__isnull=True)
+
+    if request.method == "POST":
+        form = PickupLocationPortalForm(request.POST)
+        if form.is_valid():
+            location.name = form.cleaned_data["name"]
+            location.description = form.cleaned_data["description"] or None
+            location.save(update_fields=["name", "description"])
+            messages.success(
+                request,
+                f"Pickup location \u201c{location.name}\u201d updated.",
+            )
+            return redirect(reverse("portal-pickup-locations"))
+    else:
+        form = PickupLocationPortalForm(
+            initial={
+                "name": location.name,
+                "description": location.description or "",
+            }
+        )
+
+    context = {
+        "page_title": "Pickup Locations",
+        "form": form,
+        "editing": location,
+        **_pickup_location_context(),
+    }
+    return render(request, "admin_portal/pickup_locations.html", context)
+
+
+@require_POST
+@staff_login_required
+def pickup_location_soft_delete(request, pk: int):
+    """
+    Archive a location (CP-1108): the same `deleted_at` stamp the API's
+    DELETE applies, so the listing-creation dropdown drops it immediately.
+    """
+    location = get_object_or_404(PickupLocation, pk=pk, deleted_at__isnull=True)
+    location.deleted_at = timezone.now()
+    location.save(update_fields=["deleted_at"])
+    messages.success(
+        request,
+        f"Pickup location \u201c{location.name}\u201d archived.",
+    )
+    return redirect(reverse("portal-pickup-locations"))
+
+
+@require_POST
+@staff_login_required
+def pickup_location_restore(request, pk: int):
+    """
+    Restore an archived location (CP-1108). Portal-only convenience (D-30):
+    the API has no un-delete counterpart, so this is the supported way back.
+    """
+    location = get_object_or_404(PickupLocation, pk=pk, deleted_at__isnull=False)
+    location.deleted_at = None
+    location.save(update_fields=["deleted_at"])
+    messages.success(
+        request,
+        f"Pickup location \u201c{location.name}\u201d restored.",
+    )
+    return redirect(reverse("portal-pickup-locations"))

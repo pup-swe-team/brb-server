@@ -42,6 +42,35 @@ Branch: `feature/sprint-2_CP-104-1001-1002-1004` (merged `feature/sprint-2_cp301
   `User`, the pickup soft-delete action works, and `/portal/` (verification
   admin, CP-106) renders for staff and bounces everyone else.
 
+## 2026-10-21 — Portal: pickup-location management
+
+Branch: `merging/sprint-2`.
+
+### Added
+
+- Added pickup-location management to `/portal/`. The previously-disabled
+  sidebar nav item is now live. Active locations list with an inline add form
+  and per-row Edit / Archive; Archived section lists soft-deleted rows with
+  Restore.
+- `PickupLocationPortalForm` restates the existing pickup-location rules
+  (trimmed, non-blank name up to 150 chars, optional description) with the same
+  `"Location name cannot be blank."` wording, so the portal and the API agree.
+- Portal-only **Restore** action for soft-deleted locations: `deleted_at` is
+  cleared, and the row returns to the listing-creation dropdown.
+- Routes: `portal-pickup-locations`, `portal-pickup-location-edit`,
+  `portal-pickup-location-delete`, `portal-pickup-location-restore` (delete and
+  restore are POST-only). All staff-gated via `staff_login_required` (D-03).
+- 11 tests in `tests_portal.py`: staff gating, active/archived split, trimmed
+  create feeding the API dropdown, blank-name rejection, edit (and 404 for
+  archived), soft-delete, restore, and GET rejection on the POST-only routes.
+
+### Changed
+
+- Portal page scope is now coordinated with the API work: this page mirrors the
+  existing pickup-location capability, and the remaining sidebar items activate
+  only once their backend counterparts exist. Tracked in the local-only
+  `BRB_BACKEND_SPRINTS.md`.
+
 ## 2026-10-20 — Sprint 2: Search, Profiles, Calendar, and Locations (CP-301, CP-302, CP-304, CP-403, CP-1105)
 
 Branch: `feature/sprint-2_cp301-302-304-403-1105-search-profiles-calendar-locations`.
