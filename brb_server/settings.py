@@ -271,9 +271,12 @@ CORS_ALLOWED_ORIGINS = [
 # `identity_documents.document_data`, because Render's filesystem is ephemeral and
 # the free tier has no persistent disk (DECISIONS.md D-13).
 #
-# The backend below only serves legacy/profile image fields such as
-# `users.photo`. Those are cosmetic and regenerable by the user, so losing them on
-# redeploy is acceptable -- unlike a government ID, which is not.
+# Files under MEDIA_ROOT (listing photos, profile images, dispute evidence) are
+# served by the catch-all `media/<path>` route in `brb_server/urls.py`
+# (DECISIONS.md D-26): Render has no nginx and DEBUG=False, so Django's
+# `static()` helper would no-op. Those files are cosmetic and regenerable by the
+# user, so losing them on redeploy is acceptable -- unlike a government ID,
+# which is not.
 STORAGES = {
     "default": {
         "BACKEND": "django.core.files.storage.FileSystemStorage",
@@ -284,7 +287,10 @@ STORAGES = {
 }
 
 MEDIA_ROOT = BASE_DIR / "media"
-MEDIA_URL = "media/"
+# Leading slash required: ImageField URLs go through
+# `request.build_absolute_uri()`, and a relative "media/..." would urljoin
+# against the request path (e.g. /api/v1/listings/5/ -> /api/v1/listings/media/...).
+MEDIA_URL = "/media/"
 
 # PUP Community Webmail Validation (SRS Section 4.2)
 ALLOWED_STUDENT_EMAIL_DOMAIN = os.getenv(

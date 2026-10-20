@@ -281,6 +281,94 @@ class ListingCreateViewTests(BaseListingTestCase):
         self.assertIn("photos", response.data)
         self.assertIn("5MB", str(response.data["photos"]))
 
+    def test_create_listing_rejects_disguised_image_bytes(self):
+        """Magic bytes decide the type: a PDF renamed to .png with an image/png
+        header is still rejected."""
+        self.client.force_authenticate(user=self.owner)
+        disguised_file = SimpleUploadedFile(
+            "fake.png", b"%PDF-1.4 pretending to be a photo", content_type="image/png"
+        )
+
+        payload = {
+            "title": "Title",
+            "description": "Desc",
+            "category": self.category.id,
+            "condition": "Good",
+            "pickup_location": self.pickup_location.id,
+            "is_ownership_confirmed": True,
+            "photos": [disguised_file],
+            "start_date": "2026-10-15",
+            "end_date": "2026-10-20",
+        }
+
+        response = self.client.post(self.create_url, data=payload, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("photos", response.data)
+        self.assertEqual(ListingPhoto.objects.count(), 0)
+
+    def test_create_listing_rejects_string_photo_values(self):
+        """JSON payloads must upload real files; string values are rejected."""
+        self.client.force_authenticate(user=self.owner)
+
+        tomorrow = timezone.now().date() + timedelta(days=1)
+        next_week = tomorrow + timedelta(days=7)
+        payload = {
+            "title": "Organic Chemistry",
+            "description": "Reference copy available for borrowing.",
+            "category": self.category.id,
+            "condition": "Good",
+            "pickup_location": self.pickup_location.id,
+            "is_ownership_confirmed": True,
+            "photos": ["https://example.com/photo.jpg"],
+            "availability_windows": [
+                {
+                    "start_date": tomorrow.isoformat(),
+                    "end_date": next_week.isoformat(),
+                }
+            ],
+        }
+
+        response = self.client.post(self.create_url, data=payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("photos", response.data)
+        self.assertEqual(ListingPhoto.objects.count(), 0)
+
+    def test_listing_photo_url_resolves_to_media_route(self):
+        """Photo URLs are absolute under /media/, and the media route serves the file."""
+        self.client.force_authenticate(user=self.owner)
+        test_photo = self._create_test_image("served.png", "image/png")
+
+        tomorrow = timezone.now().date() + timedelta(days=1)
+        next_week = tomorrow + timedelta(days=7)
+
+        payload = {
+            "title": "Campbell Biology",
+            "description": "Borrowable reference copy in good condition.",
+            "category": self.category.id,
+            "condition": "Good",
+            "pickup_location": self.pickup_location.id,
+            "is_ownership_confirmed": True,
+            "photos": [test_photo],
+            "availability_windows": json.dumps(
+                [
+                    {
+                        "start_date": tomorrow.isoformat(),
+                        "end_date": next_week.isoformat(),
+                    }
+                ]
+            ),
+        }
+
+        response = self.client.post(self.create_url, data=payload, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        photo_url = response.data["photos"][0]["file_reference"]
+        self.assertTrue(photo_url.startswith("http://testserver/media/"))
+
+        media_response = self.client.get(photo_url)
+        self.assertEqual(media_response.status_code, status.HTTP_200_OK)
+        self.assertTrue(media_response["Content-Type"].startswith("image/"))
+
     def test_create_listing_requires_ownership_confirmation(self):
         """Unconfirmed ownership statement is rejected."""
         self.client.force_authenticate(user=self.owner)

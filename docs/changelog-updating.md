@@ -4,6 +4,30 @@ Running record of what changed in `brb-server`, newest first. For the reasoning
 behind a change, see [`DECISIONS.md`](DECISIONS.md). For scope and ticket
 checkboxes, see [`BRB_BACKEND_SPRINTS.md`](BRB_BACKEND_SPRINTS.md).
 
+## 2026-10-19 — Listing photos and media serving fixes (D-26)
+
+Branch: `feature/sprint-2_CP-104-1001-1002-1004`.
+
+### Fixed
+
+- **Listing photos now load in production** — added the missing `media/<path>`
+  route (`django.views.static.serve` over `MEDIA_ROOT`; Render has no nginx
+  and `DEBUG=False`, so nothing served uploads before) and changed `MEDIA_URL`
+  to the absolute `/media/`, which also stops photo URLs from resolving to
+  `.../api/v1/listings/media/...`.
+- **Photo uploads validate by content, not by client claims** — files whose
+  first bytes are not PNG/JPEG/WebP are rejected regardless of the declared
+  `content_type`, and non-file `photos` values (e.g. URL strings in a JSON
+  body) now return a 400 instead of creating a phantom `ListingPhoto` row.
+- **PATCH on a listing returns the photos you just sent** — the response was
+  built from the stale prefetch cache after `update_listing()` replaced
+  photos and availability windows.
+- **Deleting an in-use pickup location returns 400** instead of a 500
+  (`ProtectedError`); unreferenced locations still delete with 204.
+- Removed the no-op `paginate_by = 10` on the pickup-location list (DRF
+  reads `pagination_class`; the endpoint has always used the global
+  `PAGE_SIZE` of 20).
+
 ## 2026-10-19 — Sprint 2 account lifecycle endpoints (D-25)
 
 Branch: `feature/sprint-2_CP-104-1001-1002-1004`.

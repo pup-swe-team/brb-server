@@ -133,6 +133,17 @@ class PickupLocationViewTests(BaseListingTestCase):
             PickupLocation.objects.filter(pk=standalone_location.pk).exists()
         )
 
+    def test_delete_referenced_pickup_location_returns_400(self):
+        """Deleting a location still used by a listing is a clean 400, not a 500."""
+        self.client.force_authenticate(user=self.admin_user)
+        response = self.client.delete(self.detail_url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("still used", str(response.data))
+        self.assertTrue(
+            PickupLocation.objects.filter(pk=self.pickup_location.pk).exists()
+        )
+
     def test_delete_pickup_location_regular_user_forbidden(self):
         """Non-admin cannot delete a pickup location."""
         self.client.force_authenticate(user=self.other_user)

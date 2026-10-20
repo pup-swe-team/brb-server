@@ -2,6 +2,7 @@ import json
 from datetime import date
 from typing import Any
 
+from django.core.files.uploadedfile import UploadedFile
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -23,6 +24,53 @@ from .models import (
 )
 from .selectors import get_lender_rating_stats, get_listing_reviews
 from .services import create_listing, update_listing
+
+
+def _sniff_photo_content_type(head: bytes) -> str:
+    """Infer the image type from file bytes; "" when no supported signature matches."""
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if head.startswith(b"RIFF") and head[8:12] == b"WEBP":
+        return "image/webp"
+    return ""
+
+
+def _extract_and_validate_photos(serializer: serializers.BaseSerializer) -> list[Any]:
+    """Pull photos from the request and validate size plus real content by magic bytes."""
+    request = serializer.context.get("request")
+    photos: list[Any] = []
+    if request and request.FILES:
+        photos = request.FILES.getlist("photos")
+    if not photos and "photos" in serializer.initial_data:
+        initial_photos = serializer.initial_data.get("photos")
+        if isinstance(initial_photos, list):
+            photos = initial_photos
+        elif initial_photos:
+            photos = [initial_photos]
+
+    allowed = ", ".join(
+        t.split("/")[-1].upper() for t in ALLOWED_LISTING_PHOTO_CONTENT_TYPES
+    )
+    for photo in photos:
+        if not isinstance(photo, UploadedFile):
+            raise serializers.ValidationError(
+                {"photos": "Photos must be uploaded as image files."}
+            )
+        if photo.size > MAX_LISTING_PHOTO_BYTES:
+            max_mb = MAX_LISTING_PHOTO_BYTES // (1024 * 1024)
+            raise serializers.ValidationError(
+                {"photos": f"Image must be {max_mb}MB or smaller."}
+            )
+        photo.seek(0)
+        head = photo.read(16)
+        photo.seek(0)
+        if _sniff_photo_content_type(head) not in ALLOWED_LISTING_PHOTO_CONTENT_TYPES:
+            raise serializers.ValidationError(
+                {"photos": f"Image must be one of: {allowed}."}
+            )
+    return photos
 
 
 class ListingCategorySerializer(serializers.ModelSerializer):
@@ -214,44 +262,14 @@ class ListingCreateSerializer(serializers.ModelSerializer):
         raise serializers.ValidationError("Invalid date value.")
 
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
-        request = self.context.get("request")
-
-        # 1. Extract and validate photos
-        photos = []
-        if request and request.FILES:
-            photos = request.FILES.getlist("photos")
-        if not photos and "photos" in self.initial_data:
-            initial_photos = self.initial_data.get("photos")
-            if isinstance(initial_photos, list):
-                photos = initial_photos
-            elif initial_photos:
-                photos = [initial_photos]
-
+        photos = _extract_and_validate_photos(self)
         if not photos:
             raise serializers.ValidationError(
                 {"photos": "At least one photo is required."}
             )
-
-        for photo in photos:
-            if getattr(photo, "size", 0) > MAX_LISTING_PHOTO_BYTES:
-                max_mb = MAX_LISTING_PHOTO_BYTES // (1024 * 1024)
-                raise serializers.ValidationError(
-                    {"photos": f"Image must be {max_mb}MB or smaller."}
-                )
-
-            content_type = (getattr(photo, "content_type", "") or "").lower()
-            if content_type and content_type not in ALLOWED_LISTING_PHOTO_CONTENT_TYPES:
-                allowed = ", ".join(
-                    t.split("/")[-1].upper()
-                    for t in ALLOWED_LISTING_PHOTO_CONTENT_TYPES
-                )
-                raise serializers.ValidationError(
-                    {"photos": f"Image must be one of: {allowed}."}
-                )
-
         attrs["photos"] = photos
 
-        # 2. Extract and validate availability windows
+        # Extract and validate availability windows
         raw_windows = self.initial_data.get("availability_windows")
         windows_data = []
 
@@ -389,37 +407,8 @@ class ListingUpdateSerializer(serializers.ModelSerializer):
                 {"pickup_location": "Selected pickup location is not available."}
             )
 
-        request = self.context.get("request")
-        photos = []
-        if request and request.FILES:
-            photos = request.FILES.getlist("photos")
-        if not photos and "photos" in self.initial_data:
-            initial_photos = self.initial_data.get("photos")
-            if isinstance(initial_photos, list):
-                photos = initial_photos
-            elif initial_photos:
-                photos = [initial_photos]
-
+        photos = _extract_and_validate_photos(self)
         if photos:
-            for photo in photos:
-                if getattr(photo, "size", 0) > MAX_LISTING_PHOTO_BYTES:
-                    max_mb = MAX_LISTING_PHOTO_BYTES // (1024 * 1024)
-                    raise serializers.ValidationError(
-                        {"photos": f"Image must be {max_mb}MB or smaller."}
-                    )
-
-                content_type = (getattr(photo, "content_type", "") or "").lower()
-                if (
-                    content_type
-                    and content_type not in ALLOWED_LISTING_PHOTO_CONTENT_TYPES
-                ):
-                    allowed = ", ".join(
-                        t.split("/")[-1].upper()
-                        for t in ALLOWED_LISTING_PHOTO_CONTENT_TYPES
-                    )
-                    raise serializers.ValidationError(
-                        {"photos": f"Image must be one of: {allowed}."}
-                    )
             attrs["photos"] = photos
 
         raw_windows = self.initial_data.get("availability_windows")

@@ -1,5 +1,7 @@
+from django.db.models import ProtectedError
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
@@ -40,6 +42,9 @@ class ListingDetailView(generics.RetrieveUpdateDestroyAPIView):
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         listing = serializer.save()
+        # Re-fetch so photos and availability windows replaced inside
+        # update_listing() are not served from the stale prefetch cache.
+        listing = self.get_queryset().get(pk=listing.pk)
         response_data = ListingSerializer(listing, context={"request": request}).data
         return Response(response_data, status=status.HTTP_200_OK)
 
@@ -94,10 +99,19 @@ class PickupLocationListView(generics.ListAPIView):
     permission_classes = (IsAuthenticated,)
     serializer_class = PickupLocationSerializer
     queryset = PickupLocation.objects.all().order_by("name")
-    paginate_by = 10
 
 
 class PickupLocationCreateRetrieveDestroyView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = (IsAdminUser,)
     serializer_class = PickupLocationSerializer
     queryset = PickupLocation.objects.all().order_by("name")
+
+    def perform_destroy(self, instance: PickupLocation) -> None:
+        try:
+            instance.delete()
+        except ProtectedError as exc:
+            raise ValidationError(
+                {
+                    "detail": "Cannot delete a pickup location that is still used by listings."
+                }
+            ) from exc

@@ -1,11 +1,14 @@
 from datetime import date
 from decimal import Decimal
+from io import BytesIO
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from django.utils import timezone
+from PIL import Image
 from rest_framework import status
 
-from apps.listings.models import Listing, PickupLocation
+from apps.listings.models import Listing, ListingPhoto, PickupLocation
 from apps.listings.tests.base import BaseListingTestCase
 from apps.orders.models import Order, OrderStatus
 from apps.reviews.models import Review
@@ -22,6 +25,19 @@ class ListingDetailViewTests(BaseListingTestCase):
         self.order_status_completed, _ = OrderStatus.objects.get_or_create(
             name="completed"
         )
+
+    def _create_test_image(
+        self,
+        name: str = "photo.png",
+        content_type: str = "image/png",
+    ) -> SimpleUploadedFile:
+        """Generate a valid in-memory image for upload tests."""
+        file_obj = BytesIO()
+        img = Image.new("RGB", (50, 50), color="blue")
+        fmt = "PNG" if "png" in content_type else "JPEG"
+        img.save(file_obj, format=fmt)
+        file_obj.seek(0)
+        return SimpleUploadedFile(name, file_obj.read(), content_type=content_type)
 
     # =========================================================================
     # GET (Retrieve) Tests
@@ -301,6 +317,27 @@ class ListingDetailViewTests(BaseListingTestCase):
         self.assertEqual(self.listing.title, "Calculus: Complete Edition")
         self.assertEqual(self.listing.condition, "Like New")
         self.assertEqual(self.listing.rate_per_day, Decimal("35.00"))
+
+    def test_update_replacing_photos_returns_fresh_photo_set(self):
+        """A PATCH that replaces photos returns the new set, not the stale prefetch."""
+        original_photo = ListingPhoto.objects.create(
+            listing=self.listing,
+            file_reference=self._create_test_image("old.png"),
+        )
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.patch(
+            self.detail_url,
+            data={"photos": [self._create_test_image("new.png")]},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_ids = [photo["id"] for photo in response.data["photos"]]
+        self.assertEqual(len(returned_ids), 1)
+        self.assertNotIn(original_photo.id, returned_ids)
+        fresh_ids = list(self.listing.photos.values_list("id", flat=True))
+        self.assertEqual(returned_ids, fresh_ids)
 
     def test_update_by_non_owner_forbidden(self):
         """A user other than the owner cannot update the listing."""
