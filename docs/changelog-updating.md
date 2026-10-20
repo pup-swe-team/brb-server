@@ -15,6 +15,60 @@ Related documents:
 | `docs/DECISIONS.md` | Decisions and their rationale |
 | `docs/changelog-updating.md` | **This file** — what changed |
 
+## 2026-10-20 — Sprint 2: Search, Profiles, Calendar, and Locations (CP-301, CP-302, CP-304, CP-403, CP-1105)
+
+Branch: `feature/sprint-2_cp301-302-304-403-1105-search-profiles-calendar-locations`.
+
+### Added
+
+**CP-1105 — Fixed pickup locations (Admin CRUD)**
+- `apps/listings/permissions.py`: `IsAdminOrReadOnly` permission granting write permissions exclusively to staff administrators while permitting read access to authenticated borrowers and lenders.
+- `apps/listings/serializers.py`: `PickupLocationSerializer` with unique name validation and soft-deletion protection.
+- `apps/listings/views.py`: `PickupLocationListCreateView` (`GET`, `POST` `/api/v1/pickup-locations/`) and `PickupLocationDetailView` (`GET`, `PUT`, `PATCH`, `DELETE` `/api/v1/pickup-locations/<pk>/`). Soft-delete sets `deleted_at`.
+- Active pickup locations feed into the lender's listing-creation location dropdown set.
+
+**CP-403 — Availability calendar date blocking & release**
+- `apps/listings/models.py`: `BlockedDateRange` model with foreign keys to `Listing` and optional `Order`, plus `reason` (e.g. `order_confirmed`, `maintenance`). Includes database check constraint `start_date <= end_date`.
+- `apps/listings/migrations/0003_blockeddaterange.py`: Schema migration for `BlockedDateRange`.
+- `apps/listings/services.py`:
+  - `block_dates_for_order(order)`: atomically blocks date range upon order confirmation.
+  - `release_dates_for_order(order)`: atomically releases blocked dates upon cancellation or completion.
+  - `is_listing_available_for_range(listing, start_date, end_date)`: checks for overlapping blocked ranges and ensures requested dates fall within listing availability windows.
+- Registered `BlockedDateRange` in `apps/listings/admin.py`.
+
+**CP-301 — Search listings by keyword & filters**
+- `apps/listings/selectors.py`: `search_listings(...)` filtering by keyword (`title`, `description`), category ID, condition, pickup location ID, price range (`min_price`, `max_price`), free-only flag (`is_free=True` or `rate=0`), and date range availability.
+- Multi-field sorting: `price_asc`, `price_desc`, `newest`, `rating`.
+- Robust exclusion rules: excludes soft-deleted listings (`deleted_at`), inactive listings (`is_active=False`), admin-removed listings (`status='removed'`), and listings owned by unverified, inactive, suspended, or revoked lenders.
+- `apps/listings/serializers.py`: `ListingSearchQuerySerializer` (query param validation) and `ListingSearchResultSerializer`.
+- `apps/listings/views.py`: `ListingSearchView` (`GET /api/v1/listings/`).
+
+**CP-302 — Search for verified lenders**
+- `apps/users/selectors.py`: `search_lenders(query=...)` searching verified lenders by full name.
+- Annotates `active_listing_count` dynamically based on non-deleted, active, non-removed listings.
+- Robust exclusions: excludes suspended, revoked, inactive, or unverified lenders.
+- `apps/users/serializers.py`: `LenderSearchResultSerializer`.
+- `apps/users/views.py`: `LenderSearchView` (`GET /api/v1/lenders/`).
+- Routes mapped in `apps/users/lender_urls.py` and `brb_server/urls.py`.
+
+**CP-304 — Public lender profile endpoint**
+- `apps/users/selectors.py`: `get_lender_profile(lender_id)` aggregating lender info, active listings, and rating statistics (`average_rating`, `review_count`).
+- Review calculation joins through `order__listing__lender=lender` and excludes self-reviews, adhering to D-19 (reviewee is derived).
+- Information disclosure protection (Rule 9): queries for non-existent, unverified, inactive, suspended, or revoked lenders return `404 Not Found` rather than leaking status details.
+- `apps/users/serializers.py`: `LenderProfileSerializer` exposing public fields safely (no sensitive emails, phones, or document data).
+- `apps/users/views.py`: `LenderProfileView` (`GET /api/v1/lenders/<pk>/`).
+
+### Tests
+
+41 new automated tests across `apps/listings/tests.py` and `apps/users/tests.py`. Total test suite: **198 tests, all passing** with 0 warnings or errors.
+- `PickupLocationTests` (10 tests)
+- `AvailabilityCalendarTests` (8 tests)
+- `ListingSearchTests` (11 tests)
+- `LenderSearchTests` (6 tests)
+- `LenderProfileTests` (6 tests)
+
+---
+
 ## 2026-10-11 — CORS headers for the browser client (D-20)
 
 Branch: `checking/sprint-1`.

@@ -604,3 +604,53 @@ serving the API through a proxy.
 **Why not a custom middleware:** the browser protocol (preflight, `Vary: Origin`,
 header allow-listing) has enough edge cases that the maintained package is
 cheaper and less error-prone than reimplementing it.
+
+---
+
+## 2026-10-20 — Availability Calendar Separation (CP-403)
+
+Branch: `feature/sprint-2_cp301-302-304-403-1105-search-profiles-calendar-locations`.
+
+### D-21 — Separation of AvailabilityWindow and BlockedDateRange
+
+**Context:**
+CP-403 requires automatically blocking listing availability dates when an order is Confirmed, and releasing those dates when an order is Cancelled or Completed. `AvailabilityWindow` already existed in the schema to represent lender-configured windows during which a listing is offered.
+
+**Decision:**
+Do not mutate or segment `AvailabilityWindow` rows to represent temporary reservations. Instead, introduce a dedicated `BlockedDateRange` model linking to `Listing` and optional `Order`.
+1. **Separation of Concerns:** `AvailabilityWindow` captures the lender's publishing intent. `BlockedDateRange` captures dynamic reservations (order confirmations, maintenance holds).
+2. **Clean Lifecycle:** When an order is cancelled or completed, releasing dates is a simple, non-destructive deletion or release of the order's `BlockedDateRange` without needing to recalculate or stitch sliced `AvailabilityWindow` intervals back together.
+3. **Database Integrity:** Enforced `CheckConstraint(check=Q(start_date__lte=F('end_date')), name='blocked_date_start_lte_end')`.
+
+---
+
+## 2026-10-20 — Soft Deletion for Fixed Pickup Locations (CP-1105)
+
+Branch: `feature/sprint-2_cp301-302-304-403-1105-search-profiles-calendar-locations`.
+
+### D-22 — Soft deletion of PickupLocation with deleted_at
+
+**Context:**
+CP-1105 provides Admin CRUD for fixed pickup locations and feeds them into the lender listing-creation dropdown. If an admin deletes a pickup location that is already referenced by existing listings or historical orders, a database hard delete would either fail due to foreign key protection or cascade delete valid listings.
+
+**Decision:**
+1. Implement soft deletion on `PickupLocation` via a nullable `deleted_at` timestamp.
+2. The dropdown endpoint (`GET /api/v1/pickup-locations/`) filters for `deleted_at__isnull=True` so newly created listings can only pick active locations.
+3. Admin endpoints allow viewing and updating active locations, and `DELETE /api/v1/pickup-locations/<pk>/` sets `deleted_at = timezone.now()` rather than removing the row from the database.
+4. Existing listings referencing a deactivated pickup location remain intact for historical accuracy and auditability.
+
+---
+
+## 2026-10-20 — Lender Public Profile & Rating Aggregation (CP-304)
+
+Branch: `feature/sprint-2_cp301-302-304-403-1105-search-profiles-calendar-locations`.
+
+### D-23 — Lender rating aggregation derived from orders (conforming to D-19 and Rule 9)
+
+**Context:**
+CP-304 builds `GET /api/v1/lenders/<id>/` returning public profile information, active listings, and rating statistics (`average_rating`, `review_count`).
+
+**Decision:**
+1. **D-19 Conformance:** Reviews do not carry a `reviewee_id` foreign key. Average rating and review counts are aggregated across reviews where `order__listing__lender = lender`, excluding self-reviews (`reviewer = lender`) and soft-deleted reviews (`deleted_at__isnull = True`).
+2. **Rule 9 (Information Disclosure Prevention):** If a requested ID does not exist, or belongs to a user who is not a verified lender, or whose account or lender status is suspended/revoked/inactive, the endpoint returns `404 Not Found` rather than `403 Forbidden` to avoid leaking user role or disciplinary standing.
+3. **Privacy by Default:** Public serializer exposes only `id`, `full_name`, `bio`, `photo`, `affiliation`, `member_since`, `average_rating`, `review_count`, and active listings. Sensitive contact info, email addresses, and verification documents are strictly omitted.

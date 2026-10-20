@@ -8,7 +8,7 @@ strategy, scheduled jobs, lookup-table convention) and open questions that
 affect ticket estimates. `CONTRIBUTING.md` remains the authoritative guide for
 workflow and conventions.
 
-**Current status: Sprint 1 (Sept 26 – Oct 10) — IN PROGRESS**
+**Current status: Sprint 2 (Oct 10 – Oct 24) — IN PROGRESS**
 
 Tasks are grouped by ticket, in the order they appear in the team's sprint
 plan. Each task line is a checkbox — mark `[x]` as it's built and verified.
@@ -96,19 +96,19 @@ reassigned.
 - [ ] Block deactivation with clear message when blockers exist
 
 ### CP-301 — Search listings by keyword and filters
-- [ ] Implement keyword search query logic
-- [ ] Implement filter/sort query logic
-- [ ] Exclude deactivated/deleted/removed listings and revoked/suspended Lenders from results
+- [x] Implement keyword search query logic — *Ezekiel*
+- [x] Implement filter/sort query logic — *Ezekiel*
+- [x] Exclude deactivated/deleted/removed listings and revoked/suspended Lenders from results — *Ezekiel*
 
 ### CP-302 — Search for Lenders
-- [ ] Implement Lender search query logic
-- [ ] Exclude suspended/revoked Lenders from results
+- [x] Implement Lender search query logic — *Ezekiel*
+- [x] Exclude suspended/revoked Lenders from results — *Ezekiel*
 
 ### CP-303 — View listing detail page
 - [ ] Build detail-fetch endpoint aggregating listing + Lender + reviews
 
 ### CP-304 — View public Lender profile
-- [ ] Build profile-fetch endpoint
+- [x] Build profile-fetch endpoint — *Ezekiel*
 
 ### CP-401 — Create a resource listing
 - [ ] Block unverified users from accessing the create-listing flow
@@ -122,11 +122,11 @@ reassigned.
 - [ ] Block deletion server-side when listing has Confirmed/Active order
 
 ### CP-403 — Automatically maintained availability calendar
-- [ ] Implement calendar logic: block dates on confirm, release on cancel/complete
+- [x] Implement calendar logic: block dates on confirm, release on cancel/complete — *Ezekiel*
 
 ### CP-1105 — Manage fixed pickup locations (Admin)
-- [ ] Implement pickup-location CRUD endpoints
-- [ ] Feed current location set into Lender's listing-creation dropdown
+- [x] Implement pickup-location CRUD endpoints — *Ezekiel*
+- [x] Feed current location set into Lender's listing-creation dropdown — *Ezekiel*
 
 ---
 
