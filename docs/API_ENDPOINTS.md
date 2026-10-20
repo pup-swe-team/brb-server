@@ -1,8 +1,9 @@
 # BRB Server — API endpoints
 
 Flat reference of every HTTP route the server exposes. Generated from the
-URLconf on **2026-10-19** (branch `feature/sprint-2_CP-104-1001-1002-1004`) —
-if a route changes, update this file in the same commit.
+URLconf on **2026-10-20** (branch `feature/sprint-2_CP-104-1001-1002-1004`,
+after merging CP-301/302/304/403/1105) — if a route changes, update this file
+in the same commit.
 
 - **Base URL (dev):** `http://localhost:8000` — **(Render):** the service URL
   from the `brb-server` dashboard (`https://…onrender.com`).
@@ -68,22 +69,39 @@ if a route changes, update this file in the same commit.
 
 | Method | Path | Auth |
 |---|---|---|
+| GET | `/api/v1/listings/` | user (CP-301 search: `?q=&category=&condition=&pickup_location=&min_price=&max_price=&free_only=&available_from=&available_to=&sort=`) |
 | POST | `/api/v1/listings/` | verified lender (multipart; ≥1 photo, ≥1 date window) |
-| GET | `/api/v1/listings/<id>/` | user |
+| GET | `/api/v1/listings/<id>/` | user (embeds lender summary, reviews, availability windows, blocked dates) |
 | PUT | `/api/v1/listings/<id>/` | owner |
 | PATCH | `/api/v1/listings/<id>/` | owner |
 | DELETE | `/api/v1/listings/<id>/` | owner (soft delete; blocked by ongoing orders) |
 | POST | `/api/v1/listings/<id>/deactivate/` | owner |
 | POST | `/api/v1/listings/<id>/reactivate/` | owner |
-| GET | `/api/v1/pickup-location/` | user (paginated) |
-| GET | `/api/v1/pickup-location/<id>` | admin |
-| PUT | `/api/v1/pickup-location/<id>` | admin |
-| PATCH | `/api/v1/pickup-location/<id>` | admin |
-| DELETE | `/api/v1/pickup-location/<id>` | admin (400 while listings still use it) |
 
 > There is also a legacy alias `GET/PUT/PATCH/DELETE /api/v1/<id>` (name
-> `listing-detail`) pointing at the same detail view. Use
+> `listing-detail-legacy`) pointing at the same detail view. Use
 > `/api/v1/listings/<id>/` in clients; the bare alias is scheduled for cleanup.
+
+## Pickup locations — `/api/v1/pickup-locations/` (CP-1105)
+
+Unpaginated list. Soft delete: `DELETE` sets `deleted_at`; deleted rows stay
+for history but vanish from the list and return 404 on detail.
+
+| Method | Path | Auth |
+|---|---|---|
+| GET | `/api/v1/pickup-locations/` | user (active locations only — listing-creation dropdown) |
+| POST | `/api/v1/pickup-locations/` | admin |
+| GET | `/api/v1/pickup-locations/<id>/` | user (active only) |
+| PUT | `/api/v1/pickup-locations/<id>/` | admin |
+| PATCH | `/api/v1/pickup-locations/<id>/` | admin |
+| DELETE | `/api/v1/pickup-locations/<id>/` | admin (soft delete) |
+
+## Lenders — `/api/v1/lenders/`
+
+| Method | Path | Auth |
+|---|---|---|
+| GET | `/api/v1/lenders/?q=` | user (CP-302; suspended/revoked/non-lenders excluded; omits contact info) |
+| GET | `/api/v1/lenders/<id>/` | user (CP-304 public profile: bio, photo, ratings, active listings; 404 for non-lenders) |
 
 ## Media
 

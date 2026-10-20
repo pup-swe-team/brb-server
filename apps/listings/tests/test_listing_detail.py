@@ -76,7 +76,11 @@ class ListingDetailViewTests(BaseListingTestCase):
         )
         self.assertEqual(
             data["pickup_location"],
-            {"id": self.pickup_location.id, "name": self.pickup_location.name},
+            {
+                "id": self.pickup_location.id,
+                "name": self.pickup_location.name,
+                "description": self.pickup_location.description,
+            },
         )
         self.assertEqual(
             data["status"],

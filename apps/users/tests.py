@@ -271,7 +271,7 @@ class UserRegistrationTests(APITestCase):
 class AdminAccountEmailDomainTests(APITestCase):
     """
     Administrator (staff/superuser) accounts must use the faculty/staff PUP
-    domain (@pup.edu.ph) — the same rule registration enforces for Faculty/Staff.
+    domain (@pup.edu.ph) â€” the same rule registration enforces for Faculty/Staff.
     `createsuperuser` and Django Admin forms must refuse @gmail.com etc.
     """
 
@@ -401,7 +401,7 @@ in_memory_storage = override_settings(
 
 
 # ---------------------------------------------------------------------------
-# CP-102 — Verify email address
+# CP-102 â€” Verify email address
 # ---------------------------------------------------------------------------
 
 
@@ -822,7 +822,7 @@ class EmailVerificationTokenGeneratorTests(APITestCase):
 
 
 # ---------------------------------------------------------------------------
-# CP-103 — Log in to account
+# CP-103 â€” Log in to account
 # ---------------------------------------------------------------------------
 
 
@@ -1384,7 +1384,7 @@ class TokenLifecycleTests(APITestCase):
 
 
 # ---------------------------------------------------------------------------
-# CP-105 — Submit identity verification document
+# CP-105 â€” Submit identity verification document
 # ---------------------------------------------------------------------------
 
 
@@ -1892,7 +1892,7 @@ class IdentityDocumentAdminTests(APITestCase):
 
 
 # ---------------------------------------------------------------------------
-# CP-106 — Admin review of identity verification
+# CP-106 â€” Admin review of identity verification
 # ---------------------------------------------------------------------------
 
 
@@ -2205,7 +2205,7 @@ class IdentityDocumentReviewTests(APITestCase):
 
 
 # ---------------------------------------------------------------------------
-# CP-107 — Document protection, encryption at rest, and audit logging
+# CP-107 â€” Document protection, encryption at rest, and audit logging
 # ---------------------------------------------------------------------------
 
 
@@ -2595,7 +2595,7 @@ class AdminAccessLogTests(APITestCase):
 
 
 # ---------------------------------------------------------------------------
-# CP-104 — Recover forgotten password
+# CP-104 â€” Recover forgotten password
 # ---------------------------------------------------------------------------
 
 
@@ -2918,7 +2918,7 @@ class PasswordResetTests(APITestCase):
 
 
 # ---------------------------------------------------------------------------
-# CP-1001 — Edit profile information
+# CP-1001 â€” Edit profile information
 # ---------------------------------------------------------------------------
 
 
@@ -3110,7 +3110,7 @@ class PasswordChangeTests(APITestCase):
 
 
 # ---------------------------------------------------------------------------
-# CP-1002 — Change registered email with re-verification
+# CP-1002 â€” Change registered email with re-verification
 # ---------------------------------------------------------------------------
 
 
@@ -3316,7 +3316,7 @@ class EmailChangeTests(APITestCase):
 
 
 # ---------------------------------------------------------------------------
-# CP-1004 — Deactivate account
+# CP-1004 â€” Deactivate account
 # ---------------------------------------------------------------------------
 
 
@@ -3476,3 +3476,493 @@ class AccountDeactivationTests(APITestCase):
         response = self.client.post(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class LenderSearchTests(APITestCase):
+    """
+    Test suite for CP-302: Search for Lenders.
+    Covers name search query logic, exclusion of suspended/revoked lenders and non-lenders,
+    annotation of active listing counts, and strict privacy boundaries.
+    """
+
+    def setUp(self) -> None:
+        self.search_url = reverse("lender-search")
+
+        self.caller = User.objects.create_user(
+            email="caller@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Caller Student",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.caller.account_status = User.AccountStatusChoices.ACTIVE
+        self.caller.save(update_fields=["account_status"])
+
+        # Eligible Lender 1: Juan Dela Cruz (Active, 2 active listings + 1 deactivated)
+        self.lender_juan = User.objects.create_user(
+            email="juan.lender@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Juan Dela Cruz",
+            affiliation=User.AffiliationChoices.STUDENT,
+            bio="Engineering student with spare calculators and books",
+        )
+        self.lender_juan.account_status = User.AccountStatusChoices.ACTIVE
+        self.lender_juan.lender_status = User.LenderStatusChoices.ACTIVE
+        self.lender_juan.save(update_fields=["account_status", "lender_status"])
+
+        # Eligible Lender 2: Maria Santos (Active, 0 listings)
+        self.lender_maria = User.objects.create_user(
+            email="maria.lender@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Maria Santos",
+            affiliation=User.AffiliationChoices.FACULTY,
+            bio="Physics faculty member",
+        )
+        self.lender_maria.account_status = User.AccountStatusChoices.ACTIVE
+        self.lender_maria.lender_status = User.LenderStatusChoices.ACTIVE
+        self.lender_maria.save(update_fields=["account_status", "lender_status"])
+
+        # Ineligible 1: Non-lender (lender_status='none')
+        self.borrower_pedro = User.objects.create_user(
+            email="pedro.borrower@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Pedro Borrower",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.borrower_pedro.account_status = User.AccountStatusChoices.ACTIVE
+        self.borrower_pedro.lender_status = User.LenderStatusChoices.NONE
+        self.borrower_pedro.save(update_fields=["account_status", "lender_status"])
+
+        # Ineligible 2: Suspended Lender
+        self.suspended_juan = User.objects.create_user(
+            email="suspended.juan@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Suspended Juan",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.suspended_juan.account_status = User.AccountStatusChoices.SUSPENDED
+        self.suspended_juan.lender_status = User.LenderStatusChoices.ACTIVE
+        self.suspended_juan.save(update_fields=["account_status", "lender_status"])
+
+        # Ineligible 3: Banned Lender
+        self.banned_lender = User.objects.create_user(
+            email="banned.lender@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Banned Lender",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.banned_lender.account_status = User.AccountStatusChoices.BANNED
+        self.banned_lender.lender_status = User.LenderStatusChoices.ACTIVE
+        self.banned_lender.save(update_fields=["account_status", "lender_status"])
+
+        # Ineligible 4: Revoked Lender
+        self.revoked_lender = User.objects.create_user(
+            email="revoked.lender@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Revoked Lender",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.revoked_lender.account_status = User.AccountStatusChoices.ACTIVE
+        self.revoked_lender.lender_status = User.LenderStatusChoices.REVOKED
+        self.revoked_lender.save(update_fields=["account_status", "lender_status"])
+
+        # Ineligible 5: Deactivated User
+        self.deactivated_user = User.objects.create_user(
+            email="deactivated.user@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Deactivated User",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.deactivated_user.account_status = User.AccountStatusChoices.DEACTIVATED
+        self.deactivated_user.lender_status = User.LenderStatusChoices.ACTIVE
+        self.deactivated_user.save(update_fields=["account_status", "lender_status"])
+
+        # Set up Listings for Juan
+        from apps.listings.models import (
+            Listing,
+            ListingCategory,
+            ListingStatus,
+            PickupLocation,
+        )
+
+        cat, _ = ListingCategory.objects.get_or_create(name="Textbooks")
+        loc = PickupLocation.objects.create(name="Main Library")
+        status_active, _ = ListingStatus.objects.get_or_create(name="active")
+        status_deactivated, _ = ListingStatus.objects.get_or_create(name="deactivated")
+
+        Listing.objects.create(
+            lender=self.lender_juan,
+            title="Calculus Vol 1",
+            description="Book 1",
+            category=cat,
+            pickup_location=loc,
+            status=status_active,
+            condition="Good",
+        )
+        Listing.objects.create(
+            lender=self.lender_juan,
+            title="Calculus Vol 2",
+            description="Book 2",
+            category=cat,
+            pickup_location=loc,
+            status=status_active,
+            condition="Good",
+        )
+        Listing.objects.create(
+            lender=self.lender_juan,
+            title="Old Notes",
+            description="Deactivated item",
+            category=cat,
+            pickup_location=loc,
+            status=status_deactivated,
+            condition="Fair",
+        )
+
+    def test_unauthenticated_request_is_denied(self) -> None:
+        """Unauthenticated request is rejected with 401."""
+        response = self.client.get(self.search_url)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_search_all_returns_only_active_eligible_lenders(self) -> None:
+        """Search returns only active accounts with active lender status."""
+        self.client.force_authenticate(user=self.caller)
+        response = self.client.get(self.search_url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 2)
+
+        returned_ids = [item["id"] for item in response.data["results"]]
+        self.assertIn(self.lender_juan.id, returned_ids)
+        self.assertIn(self.lender_maria.id, returned_ids)
+
+        self.assertNotIn(self.borrower_pedro.id, returned_ids)
+        self.assertNotIn(self.suspended_juan.id, returned_ids)
+        self.assertNotIn(self.banned_lender.id, returned_ids)
+        self.assertNotIn(self.revoked_lender.id, returned_ids)
+        self.assertNotIn(self.deactivated_user.id, returned_ids)
+
+    def test_keyword_search_by_name(self) -> None:
+        """Query parameter ?q= filters lenders by full_name case-insensitively."""
+        self.client.force_authenticate(user=self.caller)
+
+        # "Juan" matches "Juan Dela Cruz", but "Suspended Juan" must remain excluded
+        response = self.client.get(self.search_url, {"q": "Juan"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["id"], self.lender_juan.id)
+
+        # "maria" (lowercase) matches "Maria Santos"
+        response2 = self.client.get(self.search_url, {"q": "maria"})
+        self.assertEqual(response2.status_code, status.HTTP_200_OK)
+        self.assertEqual(response2.data["count"], 1)
+        self.assertEqual(response2.data["results"][0]["id"], self.lender_maria.id)
+
+        # Nonexistent name
+        response3 = self.client.get(self.search_url, {"q": "Nobody Here"})
+        self.assertEqual(response3.status_code, status.HTTP_200_OK)
+        self.assertEqual(response3.data["count"], 0)
+
+    def test_active_listing_count_annotation(self) -> None:
+        """Active listing count accurately counts only active listings per lender."""
+        self.client.force_authenticate(user=self.caller)
+        response = self.client.get(self.search_url)
+
+        results_by_id = {item["id"]: item for item in response.data["results"]}
+        # Juan has 2 active and 1 deactivated -> active_listing_count == 2
+        self.assertEqual(results_by_id[self.lender_juan.id]["active_listing_count"], 2)
+        # Maria has 0 listings -> active_listing_count == 0
+        self.assertEqual(results_by_id[self.lender_maria.id]["active_listing_count"], 0)
+
+    def test_no_private_data_leaked(self) -> None:
+        """Lender search responses omit sensitive contact and document information."""
+        self.client.force_authenticate(user=self.caller)
+        response = self.client.get(self.search_url)
+
+        for lender_item in response.data["results"]:
+            self.assertIn("id", lender_item)
+            self.assertIn("full_name", lender_item)
+            self.assertIn("affiliation", lender_item)
+            self.assertIn("bio", lender_item)
+            self.assertIn("active_listing_count", lender_item)
+
+            # Strictly forbidden fields
+            self.assertNotIn("email", lender_item)
+            self.assertNotIn("contact_number", lender_item)
+            self.assertNotIn("street_address", lender_item)
+            self.assertNotIn("password", lender_item)
+
+
+class LenderProfileTests(APITestCase):
+    """
+    Test suite for CP-304: View public Lender profile.
+    Covers fetching public lender profile, average rating calculation from completed orders,
+    active listing display, exclusion of suspended/revoked lenders (404),
+    and strict privacy protection.
+    """
+
+    def setUp(self) -> None:
+        from apps.listings.models import (
+            Listing,
+            ListingCategory,
+            ListingStatus,
+            PickupLocation,
+        )
+        from apps.orders.models import Order, OrderStatus
+        from apps.reviews.models import Review
+
+        self.caller = User.objects.create_user(
+            email="profile.caller@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Caller Student",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.caller.account_status = User.AccountStatusChoices.ACTIVE
+        self.caller.save(update_fields=["account_status"])
+
+        # Eligible Lender: Juan Dela Cruz
+        self.lender = User.objects.create_user(
+            email="juan.profile@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Juan Dela Cruz",
+            affiliation=User.AffiliationChoices.STUDENT,
+            bio="Engineering major, happy to lend lab items and textbooks",
+        )
+        self.lender.account_status = User.AccountStatusChoices.ACTIVE
+        self.lender.lender_status = User.LenderStatusChoices.ACTIVE
+        self.lender.save(update_fields=["account_status", "lender_status"])
+
+        # Borrower 1 & Borrower 2
+        self.borrower1 = User.objects.create_user(
+            email="borrower1@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Borrower One",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.borrower1.account_status = User.AccountStatusChoices.ACTIVE
+        self.borrower1.save(update_fields=["account_status"])
+
+        self.borrower2 = User.objects.create_user(
+            email="borrower2@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Borrower Two",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.borrower2.account_status = User.AccountStatusChoices.ACTIVE
+        self.borrower2.save(update_fields=["account_status"])
+
+        # Ineligible Users
+        self.regular_borrower = User.objects.create_user(
+            email="reg.borrower@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Regular Borrower",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.regular_borrower.account_status = User.AccountStatusChoices.ACTIVE
+        self.regular_borrower.lender_status = User.LenderStatusChoices.NONE
+        self.regular_borrower.save(update_fields=["account_status", "lender_status"])
+
+        self.suspended_lender = User.objects.create_user(
+            email="suspended.prof@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Suspended Lender",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.suspended_lender.account_status = User.AccountStatusChoices.SUSPENDED
+        self.suspended_lender.lender_status = User.LenderStatusChoices.ACTIVE
+        self.suspended_lender.save(update_fields=["account_status", "lender_status"])
+
+        self.revoked_lender = User.objects.create_user(
+            email="revoked.prof@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Revoked Lender",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.revoked_lender.account_status = User.AccountStatusChoices.ACTIVE
+        self.revoked_lender.lender_status = User.LenderStatusChoices.REVOKED
+        self.revoked_lender.save(update_fields=["account_status", "lender_status"])
+
+        # Listings for Juan
+        cat, _ = ListingCategory.objects.get_or_create(name="Textbooks")
+        loc = PickupLocation.objects.create(name="East Wing")
+        status_active, _ = ListingStatus.objects.get_or_create(name="active")
+        status_deactivated, _ = ListingStatus.objects.get_or_create(name="deactivated")
+
+        self.listing1 = Listing.objects.create(
+            lender=self.lender,
+            title="Calculus Vol 1",
+            description="Book 1",
+            category=cat,
+            pickup_location=loc,
+            status=status_active,
+            condition="Good",
+            rate_per_day=20.00,
+        )
+        self.listing2 = Listing.objects.create(
+            lender=self.lender,
+            title="Physics Vol 1",
+            description="Book 2",
+            category=cat,
+            pickup_location=loc,
+            status=status_active,
+            condition="Like New",
+            rate_per_day=25.00,
+        )
+        self.listing_deactivated = Listing.objects.create(
+            lender=self.lender,
+            title="Deactivated Chemistry Book",
+            description="Book 3",
+            category=cat,
+            pickup_location=loc,
+            status=status_deactivated,
+            condition="Fair",
+            rate_per_day=10.00,
+        )
+
+        # Orders & Reviews
+        order_completed, _ = OrderStatus.objects.get_or_create(name="completed")
+
+        order1 = Order.objects.create(
+            listing=self.listing1,
+            borrower=self.borrower1,
+            start_date=timezone.now().date(),
+            end_date=timezone.now().date(),
+            status=order_completed,
+        )
+        order2 = Order.objects.create(
+            listing=self.listing2,
+            borrower=self.borrower2,
+            start_date=timezone.now().date(),
+            end_date=timezone.now().date(),
+            status=order_completed,
+        )
+
+        # Review 1: Borrower 1 rates Juan 5 stars
+        Review.objects.create(
+            order=order1,
+            reviewer=self.borrower1,
+            rating=5,
+            comment="Great lender! Fast handover.",
+        )
+
+        # Review 2: Borrower 2 rates Juan 4 stars
+        Review.objects.create(
+            order=order2,
+            reviewer=self.borrower2,
+            rating=4,
+            comment="Book was in great condition.",
+        )
+
+        # Review 3: Juan rates Borrower 1 3 stars (about borrower, must NOT be counted in Juan's rating)
+        Review.objects.create(
+            order=order1,
+            reviewer=self.lender,
+            rating=3,
+            comment="Returned a bit late.",
+        )
+
+        # Review 4: Deleted review (must NOT be counted)
+        order3 = Order.objects.create(
+            listing=self.listing1,
+            borrower=self.borrower2,
+            start_date=timezone.now().date(),
+            end_date=timezone.now().date(),
+            status=order_completed,
+        )
+        Review.objects.create(
+            order=order3,
+            reviewer=self.borrower2,
+            rating=1,
+            comment="Deleted complaint",
+            deleted_at=timezone.now(),
+        )
+
+        self.profile_url = reverse("lender-profile", kwargs={"pk": self.lender.pk})
+
+    def test_unauthenticated_request_is_denied(self) -> None:
+        """Unauthenticated caller cannot view lender profile (401)."""
+        response = self.client.get(self.profile_url)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_get_lender_profile_success(self) -> None:
+        """Fetches lender profile with correct rating average and active listings."""
+        self.client.force_authenticate(user=self.caller)
+        response = self.client.get(self.profile_url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["id"], self.lender.pk)
+        self.assertEqual(response.data["full_name"], "Juan Dela Cruz")
+        self.assertEqual(response.data["affiliation"], "Student")
+        self.assertEqual(
+            response.data["bio"],
+            "Engineering major, happy to lend lab items and textbooks",
+        )
+
+        # Rating: (5 + 4) / 2 = 4.5
+        self.assertEqual(response.data["average_rating"], 4.5)
+        self.assertEqual(response.data["review_count"], 2)
+
+        # Active listings: listing1 and listing2 only (deactivated excluded)
+        active_listings = response.data["active_listings"]
+        self.assertEqual(len(active_listings), 2)
+        listing_ids = [item["id"] for item in active_listings]
+        self.assertIn(self.listing1.id, listing_ids)
+        self.assertIn(self.listing2.id, listing_ids)
+        self.assertNotIn(self.listing_deactivated.id, listing_ids)
+
+    def test_lender_with_no_reviews_returns_none_rating_and_zero_count(self) -> None:
+        """Lender without reviews returns average_rating=None and review_count=0."""
+        new_lender = User.objects.create_user(
+            email="new.lender@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="New Lender",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        new_lender.account_status = User.AccountStatusChoices.ACTIVE
+        new_lender.lender_status = User.LenderStatusChoices.ACTIVE
+        new_lender.save(update_fields=["account_status", "lender_status"])
+
+        url = reverse("lender-profile", kwargs={"pk": new_lender.pk})
+        self.client.force_authenticate(user=self.caller)
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(response.data["average_rating"])
+        self.assertEqual(response.data["review_count"], 0)
+        self.assertEqual(response.data["active_listings"], [])
+
+    def test_ineligible_lenders_return_404(self) -> None:
+        """Non-existent, non-lender, suspended, or revoked users return 404 (Rule 9)."""
+        self.client.force_authenticate(user=self.caller)
+
+        # Non-existent user
+        res_nonexistent = self.client.get(
+            reverse("lender-profile", kwargs={"pk": 999999})
+        )
+        self.assertEqual(res_nonexistent.status_code, status.HTTP_404_NOT_FOUND)
+
+        # Regular borrower (lender_status='none')
+        res_borrower = self.client.get(
+            reverse("lender-profile", kwargs={"pk": self.regular_borrower.pk})
+        )
+        self.assertEqual(res_borrower.status_code, status.HTTP_404_NOT_FOUND)
+
+        # Suspended lender
+        res_suspended = self.client.get(
+            reverse("lender-profile", kwargs={"pk": self.suspended_lender.pk})
+        )
+        self.assertEqual(res_suspended.status_code, status.HTTP_404_NOT_FOUND)
+
+        # Revoked lender
+        res_revoked = self.client.get(
+            reverse("lender-profile", kwargs={"pk": self.revoked_lender.pk})
+        )
+        self.assertEqual(res_revoked.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_privacy_no_private_contact_leaked(self) -> None:
+        """Lender profile strictly excludes private contact information."""
+        self.client.force_authenticate(user=self.caller)
+        response = self.client.get(self.profile_url)
+
+        self.assertNotIn("email", response.data)
+        self.assertNotIn("contact_number", response.data)
+        self.assertNotIn("street_address", response.data)
+        self.assertNotIn("password", response.data)

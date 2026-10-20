@@ -1,20 +1,21 @@
 from django.urls import path
 
 from .views import (
-    ListingCreateView,
+    ListingCollectionView,
     ListingDeactivateView,
     ListingDetailView,
     ListingReactivateView,
-    PickupLocationCreateRetrieveDestroyView,
-    PickupLocationListView,
+    PickupLocationDetailView,
+    PickupLocationListCreateView,
 )
 
 urlpatterns = [
-    path("listings/", ListingCreateView.as_view(), name="listing-create"),
+    # GET = search listings (CP-301); POST = publish a listing (CP-401).
+    path("listings/", ListingCollectionView.as_view(), name="listing-create"),
     path(
         "listings/<int:pk>/",
         ListingDetailView.as_view(),
-        name="listing-detail-prefixed",
+        name="listing-detail",
     ),
     path(
         "listings/<int:pk>/deactivate/",
@@ -26,15 +27,15 @@ urlpatterns = [
         ListingReactivateView.as_view(),
         name="listing-reactivate",
     ),
-    path("<int:pk>", ListingDetailView.as_view(), name="listing-detail"),
     path(
-        "pickup-location/",
-        PickupLocationListView.as_view(),
-        name="pickup-location-list",
+        "pickup-locations/",
+        PickupLocationListCreateView.as_view(),
+        name="pickup-location-list-create",
     ),
     path(
-        "pickup-location/<int:pk>",
-        PickupLocationCreateRetrieveDestroyView.as_view(),
+        "pickup-locations/<int:pk>/",
+        PickupLocationDetailView.as_view(),
         name="pickup-location-detail",
     ),
+    path("<int:pk>", ListingDetailView.as_view(), name="listing-detail-legacy"),
 ]

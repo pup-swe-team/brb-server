@@ -24,3 +24,17 @@ class IsActiveLender(permissions.BasePermission):
             and user.account_status == User.AccountStatusChoices.ACTIVE
             and user.lender_status == User.LenderStatusChoices.ACTIVE
         )
+
+
+class IsAdminOrReadOnly(permissions.BasePermission):
+    """
+    Allow authenticated users read-only access (GET, HEAD, OPTIONS).
+    Require staff authority (is_staff=True) for write operations (POST, PUT, PATCH, DELETE).
+    """
+
+    def has_permission(self, request, view) -> bool:
+        if not (request.user and request.user.is_authenticated):
+            return False
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        return bool(request.user.is_staff)
