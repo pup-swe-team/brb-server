@@ -696,12 +696,19 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
             )
 
         try:
-            validate_password(password)
-        except DjangoValidationError as err:
-            raise serializers.ValidationError({"password": list(err.messages)})
+            validate_password(password, user=user)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"password": list(exc.messages)}) from exc
 
         attrs["reset_user"] = user
         return attrs
+
+
+class PasswordResetValidateSerializer(serializers.Serializer):
+    """Validate a password reset link without consuming it (CP-104)."""
+
+    uid = serializers.CharField()
+    token = serializers.CharField()
 
 
 class ProfileUpdateSerializer(serializers.ModelSerializer):

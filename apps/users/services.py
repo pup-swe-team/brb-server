@@ -447,6 +447,71 @@ def deactivate_account(user: User) -> None:
     blacklist_outstanding_tokens(user)
 
 
+# ---------------------------------------------------------------------------
+# CP-1003 -- apply for the Lender role
+# ---------------------------------------------------------------------------
+
+
+class LenderApplicationError(Exception):
+    """
+    Why a lender application was refused (CP-1003).
+
+    The message is written for an end user: it reaches the mobile client
+    verbatim in the `detail` field.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+def apply_for_lender_role(user: User) -> User:
+    """
+    Grant the Lender role to a verified borrower (CP-1003).
+
+    The role is a server-side fact, not a UI toggle: `users.lender_status`
+    is what `IsActiveLender` checks before a listing may be created, and what
+    CP-301's search filters read. The client therefore has nothing to decide
+    -- it asks, and the backend answers.
+
+    Preconditions, all checked here so the rule holds no matter which screen
+    calls the endpoint:
+
+    * the account must be active -- a suspended or deactivated account must
+      not be able to pick up new responsibilities;
+    * the identity must have been Admin-approved, because lending means
+      handing something over to a stranger and CP-105 makes verification the
+      gate for exactly that;
+    * the account must not already be a lender, and a revoked lender may not
+      quietly re-apply -- revocation is a trust decision, and re-applying
+      without an Admin's say-so would undo it.
+    """
+    if user.account_status != User.AccountStatusChoices.ACTIVE:
+        raise LenderApplicationError(
+            "Your account is not active, so you cannot become a lender right now."
+        )
+
+    if not user.has_verified_identity():
+        raise LenderApplicationError(
+            "Identity verification is required before you can become a lender. "
+            "Submit an identity document and wait for review to complete."
+        )
+
+    if user.lender_status == User.LenderStatusChoices.ACTIVE:
+        raise LenderApplicationError("You are already a lender.")
+
+    if user.lender_status == User.LenderStatusChoices.REVOKED:
+        raise LenderApplicationError(
+            "Your lender status was revoked. Please contact an administrator."
+        )
+
+    with transaction.atomic():
+        user.lender_status = User.LenderStatusChoices.ACTIVE
+        user.save(update_fields=["lender_status", "updated_at"])
+
+    return user
+
+
 def deactivate_unverified_users(*, now=None) -> list[int]:
     """
     Remove accounts that never confirmed their email within the expiry window.

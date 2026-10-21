@@ -4004,3 +4004,116 @@ class AdminPortalSmokeTests(APITestCase):
         response = self.client.get(self.dashboard_url)
         self.assertEqual(response.status_code, status.HTTP_302_FOUND)
         self.assertIn("portal/login", response.url)
+
+
+# ---------------------------------------------------------------------------
+# CP-1003 -- Apply for the Lender role
+# ---------------------------------------------------------------------------
+
+
+class ApplyLenderTests(APITestCase):
+    """TC-100: a verified borrower can apply for the Lender role."""
+
+    def setUp(self) -> None:
+        self.url = reverse("auth-apply-lender")
+        self.user = make_user("borrower@iskolarngbayan.pup.edu.ph")
+        self.client.force_authenticate(self.user)
+
+    def approve_identity(self, user: User) -> None:
+        IdentityDocument.objects.create(
+            user=user,
+            document_type=IdentityDocumentType.objects.get(name="pup_id"),
+            id_number="APPROVED-LENDER-1",
+            document_data=PNG_BYTES,
+            status=IdentityDocumentStatus.objects.get(name="approved"),
+            consent_given=True,
+            consented_at=timezone.now(),
+        )
+
+    def test_a_verified_borrower_is_granted_the_lender_role(self) -> None:
+        self.approve_identity(self.user)
+        self.assertEqual(self.user.lender_status, User.LenderStatusChoices.NONE)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.lender_status, User.LenderStatusChoices.ACTIVE)
+
+    def test_the_response_echoes_the_new_lender_status(self) -> None:
+        self.approve_identity(self.user)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(
+            response.data["user"]["lender_status"],
+            User.LenderStatusChoices.ACTIVE,
+        )
+
+    def test_an_unverified_user_is_refused(self) -> None:
+        """Email verification (CP-102) is not identity verification (CP-105)."""
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Identity verification", str(response.data["detail"]))
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.lender_status, User.LenderStatusChoices.NONE)
+
+    def test_a_pending_document_is_not_enough(self) -> None:
+        IdentityDocument.objects.create(
+            user=self.user,
+            document_type=IdentityDocumentType.objects.get(name="pup_id"),
+            id_number="PENDING-LENDER-1",
+            document_data=PNG_BYTES,
+            status=IdentityDocumentStatus.objects.get(name="pending"),
+            consent_given=True,
+            consented_at=timezone.now(),
+        )
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.lender_status, User.LenderStatusChoices.NONE)
+
+    def test_an_inactive_account_is_refused(self) -> None:
+        self.approve_identity(self.user)
+        self.user.account_status = User.AccountStatusChoices.SUSPENDED
+        self.user.save(update_fields=["account_status"])
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.lender_status, User.LenderStatusChoices.NONE)
+
+    def test_applying_twice_is_refused(self) -> None:
+        self.approve_identity(self.user)
+        self.client.post(self.url)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("already a lender", str(response.data["detail"]))
+
+    def test_a_revoked_lender_cannot_re_apply(self) -> None:
+        """Revocation is a trust decision; re-applying would undo it."""
+        self.approve_identity(self.user)
+        self.user.lender_status = User.LenderStatusChoices.REVOKED
+        self.user.save(update_fields=["lender_status"])
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.lender_status, User.LenderStatusChoices.REVOKED)
+
+    def test_an_anonymous_caller_is_denied(self) -> None:
+        self.client.force_authenticate(None)
+
+        response = self.client.post(self.url)
+
+        self.assertIn(
+            response.status_code,
+            (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN),
+        )

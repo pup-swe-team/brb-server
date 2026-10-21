@@ -5,6 +5,27 @@ behind a change, see [`DECISIONS.md`](DECISIONS.md). For scope and ticket
 checkboxes, see [`BRB_BACKEND_SPRINTS.md`](BRB_BACKEND_SPRINTS.md).
 
 
+## 2026-10-22 — Lender application endpoint and password-reset link validation
+
+### Added
+
+- `POST /api/v1/auth/apply-lender/` lets a borrower apply for the Lender role.
+  The role is a server-side fact stored on the account, so the client only
+  asks and renders the answer. The service refuses the application with a
+  message written for the person who tapped the button when the account is
+  not active, when the identity document has not been approved, when the
+  account is already a lender, and when a previous lender status was revoked.
+- `POST /api/v1/auth/password-reset/validate/` checks a password-reset link
+  without consuming it, so a client can tell a live link from a forged,
+  expired, or already-spent one before showing a new-password form.
+
+### Changed
+
+- Password-reset confirmation now validates the candidate password against the
+  account it is resetting, so the new password cannot be too similar to the
+  account's own details.
+
+
 ## 2026-10-20 — Merge: listing search, lender profiles, availability calendar, pickup locations (CP-301, CP-302, CP-304, CP-403, CP-1105)
 
 Branch: `feature/sprint-2_CP-104-1001-1002-1004` (merged `feature/sprint-2_cp301-302-304-403-1105-search-profiles-calendar-locations`).

@@ -2,6 +2,8 @@ import logging
 
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404
+from django.utils.encoding import force_str
+from django.utils.http import urlsafe_base64_decode
 from rest_framework import generics, permissions, status
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.request import Request
@@ -13,7 +15,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from apps.audit.services import log_admin_document_access
 
 from .encryption import decrypt_document_data, detect_document_content_type
-from .models import IdentityDocument
+from .models import IdentityDocument, User
 from .selectors import get_lender_profile, search_lenders
 from .serializers import (
     EmailChangeConfirmSerializer,
@@ -30,6 +32,7 @@ from .serializers import (
     PasswordChangeSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
+    PasswordResetValidateSerializer,
     ProfileUpdateSerializer,
     RefreshSerializer,
     ResendVerificationSerializer,
@@ -37,10 +40,13 @@ from .serializers import (
     UserResponseSerializer,
 )
 from .services import (
+    LenderApplicationError,
+    apply_for_lender_role,
     apply_new_password,
     confirm_email_change,
     deactivate_account,
     deactivation_blockers,
+    password_reset_token_generator,
     register_user,
     request_password_reset,
     resend_email_verification,
@@ -208,6 +214,38 @@ class MeView(APIView):
         )
 
 
+class ApplyLenderView(APIView):
+    """
+    Apply for the Lender role (CP-1003).
+    POST /api/v1/auth/apply-lender/
+
+    Grants `lender_status = active` to a verified, active borrower. The role
+    is a server-side fact -- it is what `IsActiveLender` checks before a
+    listing may be created -- so the client only asks and renders the answer.
+    Every precondition is enforced in the service, and each refusal carries a
+    message written for the person who tapped the button.
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request: Request) -> Response:
+        try:
+            apply_for_lender_role(request.user)
+        except LenderApplicationError as exc:
+            return Response(
+                {"detail": exc.message},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            {
+                "message": "Your lender application was approved. You can now list items.",
+                "user": UserResponseSerializer(request.user).data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 class PasswordResetRequestView(APIView):
     """
     Ask for a password-reset link (CP-104).
@@ -239,6 +277,38 @@ class PasswordResetRequestView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class PasswordResetValidateView(APIView):
+    """Validate a password reset link without consuming it (CP-104).
+
+    POST /api/v1/auth/password-reset/validate/
+    """
+
+    permission_classes = (permissions.AllowAny,)
+
+    def post(self, request: Request) -> Response:
+        serializer = PasswordResetValidateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        uidb64 = serializer.validated_data["uid"]
+        token = serializer.validated_data["token"]
+
+        try:
+            uid = force_str(urlsafe_base64_decode(uidb64))
+            user = User.objects.get(pk=uid)
+        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+            return Response(
+                {"detail": "This password reset link is invalid or has expired."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not password_reset_token_generator().check_token(user, token):
+            return Response(
+                {"detail": "This password reset link is invalid or has expired."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response({"valid": True}, status=status.HTTP_200_OK)
 
 
 class PasswordResetConfirmView(APIView):

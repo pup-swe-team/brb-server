@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    ApplyLenderView,
     DeactivateAccountView,
     EmailChangeConfirmView,
     EmailChangeView,
@@ -11,6 +12,7 @@ from .views import (
     PasswordChangeView,
     PasswordResetConfirmView,
     PasswordResetRequestView,
+    PasswordResetValidateView,
     RefreshView,
     RegisterView,
     ResendVerificationView,
@@ -26,6 +28,8 @@ urlpatterns = [
     ),
     path("login/", LoginView.as_view(), name="auth-login"),
     path("me/", MeView.as_view(), name="auth-me"),
+    # CP-1003 -- apply for the Lender role.
+    path("apply-lender/", ApplyLenderView.as_view(), name="auth-apply-lender"),
     path("token/refresh/", RefreshView.as_view(), name="auth-token-refresh"),
     path("logout/", LogoutView.as_view(), name="auth-logout"),
     # CP-104 -- password recovery.
@@ -33,6 +37,11 @@ urlpatterns = [
         "password-reset/",
         PasswordResetRequestView.as_view(),
         name="auth-password-reset",
+    ),
+    path(
+        "password-reset/validate/",
+        PasswordResetValidateView.as_view(),
+        name="auth-password-reset-validate",
     ),
     path(
         "password-reset/confirm/",
