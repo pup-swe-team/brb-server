@@ -8,10 +8,11 @@ from rest_framework.views import APIView
 
 from apps.users.permissions import IsIdentityVerified
 
-from .models import Listing, PickupLocation
+from .models import Listing, ListingCategory, PickupLocation
 from .permissions import IsActiveLender, IsAdminOrReadOnly, IsOwnerOrReadOnly
 from .selectors import search_listings
 from .serializers import (
+    ListingCategorySerializer,
     ListingCreateSerializer,
     ListingSearchQuerySerializer,
     ListingSearchResultSerializer,
@@ -56,6 +57,21 @@ class ListingCollectionView(generics.ListCreateAPIView):
         response_data = ListingSerializer(listing, context={"request": request}).data
         headers = self.get_success_headers(response_data)
         return Response(response_data, status=status.HTTP_201_CREATED, headers=headers)
+
+
+class ListingCategoryListView(generics.ListAPIView):
+    """
+    Read-only list of resource categories (FR7-related).
+
+    Feeds the client's search filter and the Add-Item category dropdown. These
+    rows are managed by administrators in Django /admin/ (and, later, /portal/);
+    the endpoint only exposes `id` and `name`. Any authenticated user may read.
+    """
+
+    queryset = ListingCategory.objects.all().order_by("name")
+    serializer_class = ListingCategorySerializer
+    permission_classes = (IsAuthenticated,)
+    pagination_class = None
 
 
 class ListingDetailView(generics.RetrieveUpdateDestroyAPIView):
