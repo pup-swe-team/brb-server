@@ -461,3 +461,58 @@ class ListingCreateViewTests(BaseListingTestCase):
         response = self.client.post(self.create_url, data=payload, format="multipart")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("availability_windows", response.data)
+
+    # =========================================================================
+    # Required-field contract
+    #
+    # The mobile form sends the category and the pickup location as foreign
+    # keys, so the API only ever accepts the id. A client that cannot resolve
+    # a name to an id (the lists failed to load, or a row was renamed) would
+    # otherwise drop the field and the user would see a bare "This field is
+    # required." These tests pin the contract down.
+    # =========================================================================
+
+    def _valid_payload(self, test_photo) -> dict:
+        start = timezone.now().date() + timedelta(days=1)
+        end = timezone.now().date() + timedelta(days=5)
+        return {
+            "title": "Book",
+            "description": "Desc",
+            "category": self.category.id,
+            "condition": "Good",
+            "pickup_location": self.pickup_location.id,
+            "is_ownership_confirmed": True,
+            "photos": [test_photo],
+            "start_date": start.isoformat(),
+            "end_date": end.isoformat(),
+        }
+
+    def test_create_listing_requires_a_description(self):
+        """A blank description is rejected: a listing always carries one."""
+        self.client.force_authenticate(user=self.owner)
+        payload = self._valid_payload(self._create_test_image())
+        payload["description"] = ""
+
+        response = self.client.post(self.create_url, data=payload, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("description", response.data)
+
+    def test_create_listing_requires_a_category(self):
+        """The category is mandatory and is addressed by id."""
+        self.client.force_authenticate(user=self.owner)
+        payload = self._valid_payload(self._create_test_image())
+        payload.pop("category")
+
+        response = self.client.post(self.create_url, data=payload, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("category", response.data)
+
+    def test_create_listing_requires_a_pickup_location(self):
+        """The pickup location is mandatory and is addressed by id."""
+        self.client.force_authenticate(user=self.owner)
+        payload = self._valid_payload(self._create_test_image())
+        payload.pop("pickup_location")
+
+        response = self.client.post(self.create_url, data=payload, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("pickup_location", response.data)

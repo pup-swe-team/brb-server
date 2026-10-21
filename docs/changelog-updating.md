@@ -5,6 +5,20 @@ behind a change, see [`DECISIONS.md`](DECISIONS.md). For scope and ticket
 checkboxes, see [`BRB_BACKEND_SPRINTS.md`](BRB_BACKEND_SPRINTS.md).
 
 
+## 2026-10-22 — Create-listing contract pinned by tests
+
+### Changed
+
+- `POST /api/v1/listings/` now has explicit regression tests for the fields a
+  client must always send: a non-blank `description`, a `category` id, and a
+  `pickup_location` id. A missing one is answered with a bare
+  `400 {"<field>": ["This field is required."]}`, which is easy to miss on the
+  client side, so the contract is now stated in the test names as well.
+
+  No behaviour changed; this only records the contract the mobile app has to
+  honour.
+
+
 ## 2026-10-22 — Lender application endpoint and password-reset link validation
 
 ### Added
