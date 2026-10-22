@@ -4,7 +4,7 @@ from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
-from rest_framework import generics, permissions, status
+from rest_framework import generics, parsers, permissions, status
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -188,7 +188,7 @@ class LoginView(APIView):
 
 class MeView(APIView):
     """
-    The authenticated caller's own account details (BE-BUG-0002, CP-1001).
+    The authenticated caller's own account details (BE-BUG-0002, CP-1001, BE-BUG-2002).
     GET /api/v1/auth/me/ -- read the profile.
     PATCH /api/v1/auth/me/ -- persist profile field updates.
 
@@ -198,19 +198,30 @@ class MeView(APIView):
     behind their own endpoints with their own proofs.
     """
 
+    parser_classes = (
+        parsers.JSONParser,
+        parsers.MultiPartParser,
+        parsers.FormParser,
+    )
+
     def get(self, request: Request) -> Response:
         return Response(
-            UserResponseSerializer(request.user).data, status=status.HTTP_200_OK
+            UserResponseSerializer(request.user, context={"request": request}).data,
+            status=status.HTTP_200_OK,
         )
 
     def patch(self, request: Request) -> Response:
         serializer = ProfileUpdateSerializer(
-            instance=request.user, data=request.data, partial=True
+            instance=request.user,
+            data=request.data,
+            partial=True,
+            context={"request": request},
         )
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        user = serializer.save()
         return Response(
-            UserResponseSerializer(request.user).data, status=status.HTTP_200_OK
+            UserResponseSerializer(user, context={"request": request}).data,
+            status=status.HTTP_200_OK,
         )
 
 

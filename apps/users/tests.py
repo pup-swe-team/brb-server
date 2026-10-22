@@ -2999,6 +2999,104 @@ class ProfileUpdateTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(User.objects.get(pk=self.user.pk).province_id, province.pk)
 
+    def test_patch_updates_photo_with_valid_image(self) -> None:
+        photo = png_upload("avatar.png")
+        response = self.client.patch(
+            self.url,
+            {"photo": photo},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        user = User.objects.get(pk=self.user.pk)
+        self.assertTrue(bool(user.photo))
+        self.assertIn("avatar", user.photo.name)
+        self.assertIn("photo", response.data)
+        self.assertIn("profile_picture", response.data)
+        self.assertIsNotNone(response.data["photo"])
+        self.assertIsNotNone(response.data["profile_picture"])
+
+    def test_patch_updates_photo_using_profile_picture_alias(self) -> None:
+        photo = png_upload("my_pic.png")
+        response = self.client.patch(
+            self.url,
+            {"profile_picture": photo},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        user = User.objects.get(pk=self.user.pk)
+        self.assertTrue(bool(user.photo))
+        self.assertIn("my_pic", user.photo.name)
+        self.assertIsNotNone(response.data["photo"])
+
+    def test_patch_updates_address_using_address_alias(self) -> None:
+        response = self.client.patch(
+            self.url,
+            {"address": "456 Mabini St, Manila"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        user = User.objects.get(pk=self.user.pk)
+        self.assertEqual(user.street_address, "456 Mabini St, Manila")
+        self.assertEqual(response.data["street_address"], "456 Mabini St, Manila")
+        self.assertEqual(response.data["address"], "456 Mabini St, Manila")
+
+    def test_patch_rejects_oversized_photo(self) -> None:
+        huge_file = SimpleUploadedFile(
+            "huge.png",
+            PNG_BYTES + b"x" * (5 * 1024 * 1024 + 10),
+            content_type="image/png",
+        )
+        response = self.client.patch(
+            self.url,
+            {"photo": huge_file},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("photo", response.data)
+
+    def test_patch_rejects_non_image_photo(self) -> None:
+        fake_file = SimpleUploadedFile(
+            "fake.png",
+            b"not a real image content at all",
+            content_type="image/png",
+        )
+        response = self.client.patch(
+            self.url,
+            {"photo": fake_file},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("photo", response.data)
+
+    def test_get_me_returns_all_profile_fields(self) -> None:
+        from .models import Municipality, Province
+
+        prov = Province.objects.create(name="Laguna")
+        muni = Municipality.objects.create(name="Santa Rosa", province=prov)
+        self.user.bio = "Lender bio"
+        self.user.street_address = "Block 1 Lot 2"
+        self.user.province = prov
+        self.user.municipality = muni
+        self.user.save()
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["bio"], "Lender bio")
+        self.assertEqual(response.data["street_address"], "Block 1 Lot 2")
+        self.assertEqual(response.data["address"], "Block 1 Lot 2")
+        self.assertEqual(response.data["province"], prov.pk)
+        self.assertEqual(response.data["province_name"], "Laguna")
+        self.assertEqual(response.data["municipality"], muni.pk)
+        self.assertEqual(response.data["municipality_name"], "Santa Rosa")
+        self.assertIn("photo", response.data)
+        self.assertIn("profile_picture", response.data)
+
     def test_requires_authentication(self) -> None:
         self.client.force_authenticate(user=None)
 

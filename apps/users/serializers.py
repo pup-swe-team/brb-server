@@ -24,9 +24,11 @@ from apps.core.selectors import get_int_config
 
 from .constants import (
     ALLOWED_IDENTITY_DOCUMENT_CONTENT_TYPES,
+    ALLOWED_PROFILE_PHOTO_CONTENT_TYPES,
     ALLOWED_REGISTRATION_AFFILIATIONS,
     IDENTITY_DOCUMENT_STATUS_PENDING,
     MAX_IDENTITY_DOCUMENT_BYTES,
+    MAX_PROFILE_PHOTO_BYTES,
     PHILIPPINES_MOBILE_REGEX,
     normalize_name,
 )
@@ -65,8 +67,29 @@ def pup_webmail_domains() -> tuple[str, str]:
     return student_domain, faculty_domain
 
 
+def _sniff_image_content_type(head: bytes) -> str:
+    """Infer the image type from file bytes; empty string when unsupported."""
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if head.startswith(b"RIFF") and len(head) >= 12 and head[8:12] == b"WEBP":
+        return "image/webp"
+    return ""
+
+
 class UserResponseSerializer(serializers.ModelSerializer):
-    """Serializer for exposing user data in API responses (FR1, FR2)."""
+    """Serializer for exposing user data in API responses (FR1, FR2, CP-1001, BE-BUG-2002)."""
+
+    photo = serializers.ImageField(read_only=True)
+    profile_picture = serializers.ImageField(source="photo", read_only=True)
+    address = serializers.CharField(source="street_address", read_only=True)
+    municipality_name = serializers.CharField(
+        source="municipality.name", read_only=True, default=None
+    )
+    province_name = serializers.CharField(
+        source="province.name", read_only=True, default=None
+    )
 
     class Meta:
         model = User
@@ -78,6 +101,15 @@ class UserResponseSerializer(serializers.ModelSerializer):
             "affiliation",
             "account_status",
             "lender_status",
+            "bio",
+            "photo",
+            "profile_picture",
+            "street_address",
+            "address",
+            "municipality",
+            "province",
+            "municipality_name",
+            "province_name",
             "email_verified_at",
             "created_at",
         )
@@ -713,14 +745,15 @@ class PasswordResetValidateSerializer(serializers.Serializer):
 
 class ProfileUpdateSerializer(serializers.ModelSerializer):
     """
-    Persist profile field updates (CP-1001).
+    Persist profile field updates (CP-1001, BE-BUG-2002).
 
-    Covers the text/location fields on the profile screen. `email` is absent
-    on purpose -- CP-1002 owns that change and its re-verification dance --
+    Covers the text, location, and photo fields on the profile screen. `email` is
+    absent on purpose -- CP-1002 owns that change and its re-verification dance --
     and `password` is absent because CP-1001's password change is a separate
-    endpoint that proves the current password first. `photo` is left to a
-    multipart endpoint when the client needs it.
+    endpoint that proves the current password first.
     """
+
+    photo = serializers.ImageField(required=False, allow_null=True)
 
     class Meta:
         model = User
@@ -728,10 +761,49 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
             "full_name",
             "contact_number",
             "bio",
+            "photo",
             "street_address",
             "municipality",
             "province",
         )
+
+    def to_internal_value(self, data):
+        if hasattr(data, "_mutable"):
+            was_mutable = data._mutable
+            data._mutable = True
+            try:
+                if "address" in data and "street_address" not in data:
+                    data["street_address"] = data["address"]
+                if "profile_picture" in data and "photo" not in data:
+                    data.setlist("photo", data.getlist("profile_picture"))
+                return super().to_internal_value(data)
+            finally:
+                data._mutable = was_mutable
+
+        data = dict(data)
+        if "address" in data and "street_address" not in data:
+            data["street_address"] = data["address"]
+        if "profile_picture" in data and "photo" not in data:
+            data["photo"] = data["profile_picture"]
+
+        return super().to_internal_value(data)
+
+    def validate_photo(self, value):
+        if value is None:
+            return None
+        if value.size > MAX_PROFILE_PHOTO_BYTES:
+            max_mb = MAX_PROFILE_PHOTO_BYTES // (1024 * 1024)
+            raise serializers.ValidationError(f"Image must be {max_mb}MB or smaller.")
+        value.seek(0)
+        head = value.read(16)
+        value.seek(0)
+        sniffed = _sniff_image_content_type(head)
+        if sniffed not in ALLOWED_PROFILE_PHOTO_CONTENT_TYPES:
+            allowed = ", ".join(
+                t.split("/")[-1].upper() for t in ALLOWED_PROFILE_PHOTO_CONTENT_TYPES
+            )
+            raise serializers.ValidationError(f"Image must be one of: {allowed}.")
+        return value
 
     def validate_full_name(self, value: str) -> str:
         cleaned_name = value.strip()

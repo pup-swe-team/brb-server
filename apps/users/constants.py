@@ -34,6 +34,14 @@ ALLOWED_IDENTITY_DOCUMENT_CONTENT_TYPES = (
     "application/pdf",
 )
 
+# Upload constraints for profile photos (CP-1001, BE-BUG-2002)
+MAX_PROFILE_PHOTO_BYTES = 5 * 1024 * 1024  # 5 MB
+ALLOWED_PROFILE_PHOTO_CONTENT_TYPES = (
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+)
+
 # Name comparison for the CP-105 mismatch flag: case, punctuation and spacing
 # differ freely between a registration form and a printed ID, so compare on
 # letters and digits only.

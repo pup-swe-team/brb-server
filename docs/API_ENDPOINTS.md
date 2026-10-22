@@ -38,8 +38,8 @@ in the same commit.
 | POST | `/api/v1/auth/verify-email/` | public (link from email) |
 | POST | `/api/v1/auth/resend-verification/` | public (throttled 3/hour) |
 | POST | `/api/v1/auth/login/` | public |
-| GET | `/api/v1/auth/me/` | user |
-| PATCH | `/api/v1/auth/me/` | user (profile fields only — not email/password) |
+| GET | `/api/v1/auth/me/` | user (full profile: name, contact, affiliation, status, bio, photo, address, municipality, province) |
+| PATCH | `/api/v1/auth/me/` | user (profile fields: full_name, contact_number, bio, photo/profile_picture, street_address/address, municipality, province; multipart/json) |
 | POST | `/api/v1/auth/token/refresh/` | public (refresh token required) |
 | POST | `/api/v1/auth/logout/` | user |
 | POST | `/api/v1/auth/password-reset/` | public (throttled 3/hour) |

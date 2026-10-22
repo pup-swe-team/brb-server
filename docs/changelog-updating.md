@@ -5,6 +5,14 @@ behind a change, see [`DECISIONS.md`](DECISIONS.md). For scope and ticket
 checkboxes, see [`BRB_BACKEND_SPRINTS.md`](BRB_BACKEND_SPRINTS.md).
 
 
+## 2026-10-23 — Profile photo, bio, and address persistence and response (BE-BUG-2002, CP-1001)
+
+### Fixed
+
+- `PATCH /api/v1/auth/me/` now persists profile photos (`photo` / `profile_picture`) with multipart support, validates max 5MB and JPEG/PNG/WEBP magic bytes, and supports `address` as an alias for `street_address`.
+- `GET /api/v1/auth/me/` and `PATCH /api/v1/auth/me/` responses (`UserResponseSerializer`) now expose `photo`, `profile_picture`, `bio`, `street_address`, `address`, `municipality`, `province`, `municipality_name`, and `province_name`.
+
+
 ## 2026-10-22 — Demo catalogue so the browse screens are not empty
 
 ### Added
