@@ -79,6 +79,15 @@ a:hover { text-decoration: underline; }
   letter-spacing: 0.08em;
   color: var(--muted-2);
 }
+.nav-group-tag {
+  margin-left: 6px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--muted-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 6px;
+}
 
 .nav-item {
   display: flex;
@@ -104,6 +113,17 @@ a:hover { text-decoration: underline; }
   font-weight: 700;
   border-radius: 999px;
   padding: 1px 8px;
+}
+.nav-item .nav-badge:not(:last-child) { margin-left: 6px; }
+.nav-tag {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--muted-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 6px;
 }
 
 /* ---------- Main column ---------- */

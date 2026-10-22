@@ -46,4 +46,20 @@ urlpatterns = [
         portal.pickup_location_restore,
         name="portal-pickup-location-restore",
     ),
+    # Listing categories -- the pick list Lenders publish from (CP-401).
+    path(
+        "categories/",
+        portal.listing_categories,
+        name="portal-listing-categories",
+    ),
+    path(
+        "categories/<int:pk>/edit/",
+        portal.listing_category_edit,
+        name="portal-listing-category-edit",
+    ),
+    path(
+        "categories/<int:pk>/delete/",
+        portal.listing_category_delete,
+        name="portal-listing-category-delete",
+    ),
 ]

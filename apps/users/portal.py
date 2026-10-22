@@ -32,7 +32,7 @@ from django.utils.dateformat import DateFormat
 from django.views.decorators.http import require_POST
 
 from apps.audit.services import log_admin_document_access
-from apps.listings.models import Listing, ListingStatus, PickupLocation
+from apps.listings.models import Listing, ListingCategory, ListingStatus, PickupLocation
 from apps.orders.models import Order
 from apps.reports.models import (
     ListingReport,
@@ -295,6 +295,7 @@ def dashboard(request):
         "orders_by_status_rows": order_rows,
         "activity": _recent_activity(),
         "nav_verification_count": stats["pending_verifications"],
+        "nav_reports_count": stats["open_reports"],
     }
     return render(request, "admin_portal/dashboard.html", context)
 
@@ -339,6 +340,7 @@ def verification_queue(request):
         "start_index": page.start_index() or 0,
         "end_index": page.end_index() or paginator.count,
         "nav_verification_count": tabs[0]["count"],
+        "nav_reports_count": _open_reports_count(),
     }
     return render(request, "admin_portal/verification_queue.html", context)
 
@@ -430,6 +432,7 @@ def verification_review(request, pk: int):
         "nav_verification_count": IdentityDocument.objects.filter(
             status__name=IDENTITY_DOCUMENT_STATUS_PENDING
         ).count(),
+        "nav_reports_count": _open_reports_count(),
     }
     return render(request, "admin_portal/verification_review.html", context)
 
@@ -530,6 +533,7 @@ def _pickup_location_context() -> dict:
             "name"
         ),
         "nav_verification_count": _identity_document_tab_counts()["pending"],
+        "nav_reports_count": _open_reports_count(),
     }
 
 
@@ -625,6 +629,161 @@ def pickup_location_restore(request, pk: int):
     location.save(update_fields=["deleted_at"])
     messages.success(
         request,
-        f"Pickup location \u201c{location.name}\u201d restored.",
+        f"Pickup location “{location.name}” restored.",
     )
     return redirect(reverse("portal-pickup-locations"))
+
+
+# ---------------------------------------------------------------------------
+# Listing categories (portal mirror of the `/admin/` category CRUD)
+#
+# Listing categories are the platform-wide pick list the Lender chooses from
+# when publishing a listing (CP-401). They are created and renamed by an
+# administrator; the mobile app only ever reads them through
+# `GET /api/v1/listings/categories/`. Because the list is empty on a fresh
+# database, publishing a listing is impossible until an administrator fills it
+# in -- which is what this page is for.
+
+
+class ListingCategoryPortalForm(forms.Form):
+    """
+    The `ListingCategory` rules restated for a server-rendered form: a trimmed,
+    non-blank name of at most 100 characters that no other category uses, and
+    an optional description.
+    """
+
+    name = forms.CharField(
+        max_length=100,
+        strip=True,
+        widget=forms.TextInput(
+            attrs={
+                "class": "field-input",
+                "placeholder": "e.g. Textbooks",
+            }
+        ),
+        error_messages={"required": "Category name cannot be blank."},
+    )
+    description = forms.CharField(
+        required=False,
+        widget=forms.Textarea(
+            attrs={
+                "class": "field-input",
+                "rows": 3,
+                "placeholder": "What belongs in this category (optional)",
+            }
+        ),
+    )
+
+    def __init__(self, *args, **kwargs):
+        self.instance = kwargs.pop("instance", None)
+        super().__init__(*args, **kwargs)
+
+    def clean_name(self) -> str:
+        name = self.cleaned_data["name"]
+        clash = ListingCategory.objects.filter(name__iexact=name)
+        if self.instance is not None:
+            clash = clash.exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise forms.ValidationError(f"A category named “{name}” already exists.")
+        return name
+
+
+def _listing_category_context() -> dict:
+    """Shared context for the category pages."""
+    return {
+        "active_nav": "categories",
+        "categories": ListingCategory.objects.annotate(
+            listing_count=Count("listings")
+        ).order_by("name"),
+        "nav_verification_count": _identity_document_tab_counts()["pending"],
+        "nav_reports_count": _open_reports_count(),
+    }
+
+
+@staff_login_required
+def listing_categories(request):
+    """
+    Category configuration: the pick list Lenders publish from, with an add
+    form. Creating a category follows PRG like the rest of the portal;
+    validation errors re-render the form inline.
+    """
+    if request.method == "POST":
+        form = ListingCategoryPortalForm(request.POST)
+        if form.is_valid():
+            ListingCategory.objects.create(
+                name=form.cleaned_data["name"],
+                description=form.cleaned_data["description"] or "",
+            )
+            messages.success(
+                request,
+                f"Category “{form.cleaned_data['name']}” added.",
+            )
+            return redirect(reverse("portal-listing-categories"))
+    else:
+        form = ListingCategoryPortalForm()
+
+    context = {
+        "page_title": "Categories",
+        "form": form,
+        **_listing_category_context(),
+    }
+    return render(request, "admin_portal/categories.html", context)
+
+
+@staff_login_required
+def listing_category_edit(request, pk: int):
+    """Rename a category or change its description."""
+    category = get_object_or_404(ListingCategory, pk=pk)
+
+    if request.method == "POST":
+        form = ListingCategoryPortalForm(request.POST, instance=category)
+        if form.is_valid():
+            category.name = form.cleaned_data["name"]
+            category.description = form.cleaned_data["description"] or ""
+            category.save(update_fields=["name", "description"])
+            messages.success(
+                request,
+                f"Category “{category.name}” updated.",
+            )
+            return redirect(reverse("portal-listing-categories"))
+    else:
+        form = ListingCategoryPortalForm(
+            initial={
+                "name": category.name,
+                "description": category.description or "",
+            },
+            instance=category,
+        )
+
+    context = {
+        "page_title": "Categories",
+        "form": form,
+        "editing": category,
+        **_listing_category_context(),
+    }
+    return render(request, "admin_portal/categories.html", context)
+
+
+@require_POST
+@staff_login_required
+def listing_category_delete(request, pk: int):
+    """
+    Delete a category. `Listing.category` is `on_delete=PROTECT`, so a category
+    that listings already point at cannot be deleted -- the admin is told which
+    listings are in the way instead of getting a database error.
+    """
+    category = get_object_or_404(ListingCategory, pk=pk)
+    in_use = category.listings.count()
+    if in_use:
+        messages.error(
+            request,
+            f"“{category.name}” is used by {in_use} listing"
+            f"{'s' if in_use != 1 else ''} and cannot be deleted. "
+            "Rename it instead, or move the listings to another category.",
+        )
+        return redirect(reverse("portal-listing-categories"))
+
+    name = category.name
+    category.delete()
+    messages.success(request, f"Category “{name}” deleted.")
+    return redirect(reverse("portal-listing-categories"))

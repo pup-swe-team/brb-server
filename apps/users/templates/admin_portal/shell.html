@@ -9,36 +9,48 @@
       <a class="nav-item {% if active_nav == 'dashboard' %}is-active{% endif %}" href="{% url 'portal-dashboard' %}">
         <svg class="nav-icon"><use href="#icon-dashboard"/></svg><span>Dashboard</span>
       </a>
-      <p class="nav-group">Moderation</p>
-      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="Planned for a later sprint">
-        <svg class="nav-icon"><use href="#icon-users"/></svg><span>Users</span>
-      </a>
+      <p class="nav-group">Verification <span class="nav-group-tag">Sprint 1</span></p>
       <a class="nav-item {% if active_nav == 'verification' %}is-active{% endif %}" href="{% url 'portal-verification-queue' %}">
         <svg class="nav-icon"><use href="#icon-verification"/></svg><span>Verification Queue</span>
         {% if nav_verification_count %}<span class="nav-badge">{{ nav_verification_count }}</span>{% endif %}
       </a>
-      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="Planned for a later sprint">
-        <svg class="nav-icon"><use href="#icon-reports"/></svg><span>Reports</span>
+      <p class="nav-group">Configuration <span class="nav-group-tag">Sprint 2</span></p>
+      <a class="nav-item {% if active_nav == 'categories' %}is-active{% endif %}" href="{% url 'portal-listing-categories' %}">
+        <svg class="nav-icon"><use href="#icon-categories"/></svg><span>Categories</span>
       </a>
-      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="Planned for a later sprint">
-        <svg class="nav-icon"><use href="#icon-unreturned"/></svg><span>Unreturned Cases</span>
-      </a>
-      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="Planned for a later sprint">
-        <svg class="nav-icon"><use href="#icon-disputes"/></svg><span>Disputes</span>
-      </a>
-      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="Planned for a later sprint">
-        <svg class="nav-icon"><use href="#icon-moderation"/></svg><span>Content Moderation</span>
-      </a>
-      <p class="nav-group">Configuration</p>
       <a class="nav-item {% if active_nav == 'pickup' %}is-active{% endif %}" href="{% url 'portal-pickup-locations' %}">
         <svg class="nav-icon"><use href="#icon-pickup"/></svg><span>Pickup Locations</span>
       </a>
-      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="Planned for a later sprint">
-        <svg class="nav-icon"><use href="#icon-settings"/></svg><span>System Settings</span>
+      <p class="nav-group">Moderation</p>
+      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="CP-1101 lands in Sprint 4, then the portal mirror CP-1109">
+        <svg class="nav-icon"><use href="#icon-users"/></svg><span>Users &amp; Roles</span>
+        <span class="nav-tag">CP-1109</span>
       </a>
-      <p class="nav-group">Audit</p>
-      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="Planned for a later sprint">
+      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="CP-901 and CP-902 land in Sprint 4, then the portal mirror CP-1111">
+        <svg class="nav-icon"><use href="#icon-reports"/></svg><span>Reports &amp; Flags</span>
+        {% if nav_reports_count %}<span class="nav-badge">{{ nav_reports_count }}</span>{% endif %}
+        <span class="nav-tag">CP-1111</span>
+      </a>
+      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="CP-1102 lands in Sprint 4, then the portal mirror CP-1110">
+        <svg class="nav-icon"><use href="#icon-moderation"/></svg><span>Listings &amp; Reviews</span>
+        <span class="nav-tag">CP-1110</span>
+      </a>
+      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="CP-506 lands in Sprint 5, then the portal mirror CP-1111">
+        <svg class="nav-icon"><use href="#icon-unreturned"/></svg><span>Unreturned Cases</span>
+        <span class="nav-tag">CP-1111</span>
+      </a>
+      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="CP-903 lands in Sprint 5">
+        <svg class="nav-icon"><use href="#icon-disputes"/></svg><span>Disputes</span>
+        <span class="nav-tag">CP-903</span>
+      </a>
+      <p class="nav-group">System <span class="nav-group-tag">Sprint 5</span></p>
+      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="CP-1104 lands in Sprint 5, then the portal mirror CP-1112">
+        <svg class="nav-icon"><use href="#icon-settings"/></svg><span>System Parameters</span>
+        <span class="nav-tag">CP-1112</span>
+      </a>
+      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="CP-1106 lands in Sprint 5, then the portal mirror CP-1113">
         <svg class="nav-icon"><use href="#icon-audit"/></svg><span>Audit Log</span>
+        <span class="nav-tag">CP-1113</span>
       </a>
     </nav>
   </aside>

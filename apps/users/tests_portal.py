@@ -16,8 +16,9 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.audit.models import AdminAccessLog
-from apps.listings.models import PickupLocation
+from apps.listings.models import Listing, ListingCategory, ListingStatus, PickupLocation
 from apps.notifications.models import Notification
+from apps.reports.models import UserReport, UserReportCategory
 from apps.users.models import (
     IdentityDocument,
     IdentityDocumentStatus,
@@ -412,3 +413,212 @@ class PickupLocationPortalTests(TestCase):
         restore_url = reverse("portal-pickup-location-restore", args=[self.old.pk])
         self.assertEqual(self.client.get(delete_url).status_code, 405)
         self.assertEqual(self.client.get(restore_url).status_code, 405)
+
+
+class PortalListingCategoryTests(TestCase):
+    """
+    Configuration > Categories: the pick list a Lender publishes from.
+
+    Categories gate listing creation (CP-401), and the mobile app only reads
+    them, so the administrator fills the list in here.
+    """
+
+    def setUp(self) -> None:
+        self.admin = make_user(
+            "admin-categories@iskolarngbayan.pup.edu.ph",
+            is_staff=True,
+            full_name="Ash Reyes",
+        )
+        self.client.force_login(self.admin)
+        self.url = reverse("portal-listing-categories")
+
+    def test_page_loads_with_the_empty_state(self) -> None:
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Add a category")
+        self.assertContains(response, "No categories yet.")
+
+    def test_add_creates_a_category(self) -> None:
+        response = self.client.post(
+            self.url, {"name": "Textbooks", "description": "Course books"}
+        )
+
+        self.assertRedirects(response, self.url)
+        category = ListingCategory.objects.get(name="Textbooks")
+        self.assertEqual(category.description, "Course books")
+
+    def test_blank_name_is_rejected(self) -> None:
+        response = self.client.post(self.url, {"name": "   "})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Category name cannot be blank.")
+        self.assertEqual(ListingCategory.objects.count(), 0)
+
+    def test_duplicate_name_is_rejected(self) -> None:
+        ListingCategory.objects.create(name="Textbooks")
+
+        response = self.client.post(self.url, {"name": "textbooks"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "already exists")
+        self.assertEqual(ListingCategory.objects.count(), 1)
+
+    def test_edit_renames_a_category(self) -> None:
+        category = ListingCategory.objects.create(name="Textbooks")
+        edit_url = reverse("portal-listing-category-edit", args=[category.pk])
+
+        page = self.client.get(edit_url)
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, 'value="Textbooks"')
+
+        response = self.client.post(
+            edit_url, {"name": "Books", "description": "Every book"}
+        )
+        self.assertRedirects(response, self.url)
+        category.refresh_from_db()
+        self.assertEqual(category.name, "Books")
+        self.assertEqual(category.description, "Every book")
+
+    def test_edit_accepts_the_name_it_already_has(self) -> None:
+        category = ListingCategory.objects.create(name="Textbooks")
+        edit_url = reverse("portal-listing-category-edit", args=[category.pk])
+
+        response = self.client.post(edit_url, {"name": "Textbooks"})
+
+        self.assertRedirects(response, self.url)
+        self.assertEqual(ListingCategory.objects.count(), 1)
+
+    def test_delete_removes_an_unused_category(self) -> None:
+        category = ListingCategory.objects.create(name="Textbooks")
+
+        response = self.client.post(
+            reverse("portal-listing-category-delete", args=[category.pk])
+        )
+
+        self.assertRedirects(response, self.url)
+        self.assertFalse(ListingCategory.objects.filter(pk=category.pk).exists())
+
+    def test_delete_is_refused_while_a_listing_uses_the_category(self) -> None:
+        category = ListingCategory.objects.create(name="Textbooks")
+        lender = make_user(
+            "lender-categories@iskolarngbayan.pup.edu.ph",
+            full_name="Bela Cruz",
+        )
+        Listing.objects.create(
+            lender=lender,
+            title="Calculus: Early Transcendentals",
+            description="Complete calculus reference in good condition.",
+            category=category,
+            condition="Good",
+            pickup_location=PickupLocation.objects.create(name="Main Library"),
+            rate_per_day="25.00",
+            is_ownership_confirmed=True,
+            status=ListingStatus.objects.create(name="active"),
+        )
+
+        response = self.client.post(
+            reverse("portal-listing-category-delete", args=[category.pk]),
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "cannot be deleted")
+        self.assertTrue(ListingCategory.objects.filter(pk=category.pk).exists())
+
+    def test_delete_rejects_get(self) -> None:
+        category = ListingCategory.objects.create(name="Textbooks")
+        delete_url = reverse("portal-listing-category-delete", args=[category.pk])
+
+        self.assertEqual(self.client.get(delete_url).status_code, 405)
+
+    def test_page_requires_an_administrator(self) -> None:
+        member = make_user("member-categories@iskolarngbayan.pup.edu.ph")
+        self.client.force_login(member)
+
+        response = self.client.get(self.url)
+
+        self.assertRedirects(response, reverse("portal-login"))
+
+
+class PortalSidebarTests(TestCase):
+    """
+    The sidebar names each admin capability after the sprint ticket and test
+    cases it covers, and says which ticket will switch it on (D-31).
+    """
+
+    def setUp(self) -> None:
+        self.admin = make_user(
+            "admin-sidebar@iskolarngbayan.pup.edu.ph",
+            is_staff=True,
+            full_name="Ash Reyes",
+        )
+        self.client.force_login(self.admin)
+
+    def test_sidebar_groups_follow_the_sprints(self) -> None:
+        response = self.client.get(reverse("portal-dashboard"))
+
+        self.assertEqual(response.status_code, 200)
+        for group in (
+            "Overview",
+            "Verification",
+            "Configuration",
+            "Moderation",
+            "System",
+        ):
+            self.assertContains(response, f">{group}")
+
+    def test_live_sections_are_linked(self) -> None:
+        response = self.client.get(reverse("portal-dashboard"))
+
+        self.assertContains(response, reverse("portal-verification-queue"))
+        self.assertContains(response, reverse("portal-listing-categories"))
+        self.assertContains(response, reverse("portal-pickup-locations"))
+
+    def test_locked_sections_carry_their_ticket(self) -> None:
+        response = self.client.get(reverse("portal-dashboard"))
+
+        for ticket in ("CP-1109", "CP-1110", "CP-1111", "CP-1112", "CP-1113", "CP-903"):
+            self.assertContains(response, ticket)
+
+    def test_locked_sections_are_not_links(self) -> None:
+        response = self.client.get(reverse("portal-dashboard"))
+
+        self.assertContains(response, "Users &amp; Roles")
+        self.assertContains(response, "Reports &amp; Flags")
+        self.assertContains(response, "Listings &amp; Reviews")
+        self.assertContains(response, "Unreturned Cases")
+        self.assertContains(response, "Disputes")
+        self.assertContains(response, "System Parameters")
+        self.assertContains(response, "Audit Log")
+
+    def test_reports_badge_counts_open_reports(self) -> None:
+        reporter = make_user("reporter-sidebar@iskolarngbayan.pup.edu.ph")
+        target = make_user("target-sidebar@iskolarngbayan.pup.edu.ph")
+        category = UserReportCategory.objects.create(name="Harassment")
+        UserReport.objects.create(
+            reporter=reporter,
+            target_user=target,
+            category=category,
+            description="Repeated abusive messages.",
+        )
+
+        response = self.client.get(reverse("portal-dashboard"))
+
+        self.assertContains(response, '<span class="nav-badge">1</span>', html=True)
+
+    def test_reports_badge_ignores_resolved_reports(self) -> None:
+        reporter = make_user("reporter-resolved@iskolarngbayan.pup.edu.ph")
+        target = make_user("target-resolved@iskolarngbayan.pup.edu.ph")
+        category = UserReportCategory.objects.create(name="Spam")
+        UserReport.objects.create(
+            reporter=reporter,
+            target_user=target,
+            category=category,
+            description="Already handled.",
+            status="resolved",
+        )
+
+        response = self.client.get(reverse("portal-dashboard"))
+
+        self.assertNotContains(response, 'class="nav-badge"')
