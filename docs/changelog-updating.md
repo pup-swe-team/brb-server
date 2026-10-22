@@ -5,6 +5,57 @@ behind a change, see [`DECISIONS.md`](DECISIONS.md). For scope and ticket
 checkboxes, see [`BRB_BACKEND_SPRINTS.md`](BRB_BACKEND_SPRINTS.md).
 
 
+## 2026-10-22 — Demo catalogue so the browse screens are not empty
+
+### Added
+
+- `manage.py seed_demo_data` — fills the two lookup tables the catalogue needs
+  (`listing_statuses`, `listing_categories`) and, with `--demo`, creates twelve
+  demo Lenders — each with an approved identity document, because publishing is
+  gated on one (CP-105) — and thirty listings spread across the eight
+  categories and the eight pickup locations. The command is idempotent, and
+  `--reset` deletes only the rows it created (matched on the `demo.lender`
+  email prefix), so the team's real accounts are never touched. Demo login:
+  `demo.lender01@iskolarngbayan.pup.edu.ph` / `DemoLender123!` (`--password`
+  changes it).
+
+### Changed
+
+- The team's Render database now carries that demo catalogue, so
+  `GET /api/v1/listings/` returns thirty items from twelve lenders while the
+  real accounts are still being verified. `.env` points at SQLite, so seeding
+  Render needs an explicit `DATABASE_URL` (see D-32).
+
+
+## 2026-10-22 — Admin sidebar renamed by capability, and a Categories page
+
+### Added
+
+- `/portal/categories/` — the administrator can now add, rename and delete the
+  listing categories a Lender publishes from (CP-401). The table ships empty,
+  and the mobile app only reads it through `GET /api/v1/listings/categories/`,
+  so without this page a listing cannot be published at all. The page mirrors
+  the category CRUD that already exists in the Django Admin, and it writes the
+  table directly: no new API endpoint. A category that listings already point
+  at cannot be deleted (`Listing.category` is `on_delete=PROTECT`) — the
+  administrator is told how many listings are in the way and is offered a
+  rename instead.
+
+### Changed
+
+- The CoPUPAdmin sidebar is grouped by admin domain instead of by the Figma
+  wireframe, and every item is named after the capability the test cases
+  exercise: "Users & Roles" (CP-1101/CP-206), "Reports & Flags"
+  (CP-901/CP-902), "Listings & Reviews" (CP-1102), "Unreturned Cases"
+  (CP-506/CP-1103), "Disputes" (CP-903), "System Parameters" (CP-1104) and
+  "Audit Log" (CP-1106).
+- A nav item that is not live yet now shows the ticket that will switch it on
+  (CP-1109..CP-1113) and, on hover, the base ticket and the sprint it lands
+  in — instead of the single tooltip "Planned for a later sprint". The items
+  are still locked: naming and ordering are free, starting a reserved portal
+  ticket before its base ticket lands is not (D-30/D-31).
+
+
 ## 2026-10-22 — Create-listing contract pinned by tests
 
 ### Changed
