@@ -4,6 +4,7 @@ from django.contrib.admin import helpers
 from django.http import HttpResponseRedirect
 from django.template.response import TemplateResponse
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.html import format_html
 
 from apps.audit.services import log_admin_document_access
@@ -14,6 +15,7 @@ from .models import (
     IdentityDocumentType,
     User,
 )
+from .services import deactivate_account, deactivation_blockers
 
 
 @admin.register(User)
@@ -51,6 +53,50 @@ class UserAdmin(admin.ModelAdmin):
         "email_change_sent_at",
     )
     date_hierarchy = "created_at"
+    actions = ("deactivate_selected_accounts", "reactivate_selected_accounts")
+
+    @admin.action(description="Deactivate selected accounts (CP-1004)")
+    def deactivate_selected_accounts(self, request, queryset) -> None:
+        """
+        The same close-out members can trigger themselves: status to
+        `deactivated`, `is_active` off, live tokens blacklisted. Accounts with
+        open orders or unreturned-item cases are skipped because those must be
+        settled first (CP-1004); administrators and the acting user are never
+        targets.
+        """
+        eligible = queryset.filter(is_active=True, is_superuser=False).exclude(
+            pk=request.user.pk
+        )
+        deactivated = 0
+        blocked = 0
+        for user in eligible:
+            if any(deactivation_blockers(user).values()):
+                blocked += 1
+                continue
+            deactivate_account(user)
+            deactivated += 1
+
+        skipped = queryset.count() - eligible.count()
+        message = f"Deactivated {deactivated} account(s)."
+        if blocked:
+            message += f" {blocked} skipped: open orders or unreturned-item cases."
+        if skipped:
+            message += (
+                f" {skipped} skipped: already inactive, an administrator, or you."
+            )
+        self.message_user(request, message)
+
+    @admin.action(description="Reactivate selected accounts (undo CP-1004)")
+    def reactivate_selected_accounts(self, request, queryset) -> None:
+        """Only `deactivated` accounts are restored; suspensions stay in place."""
+        reactivated = queryset.filter(
+            account_status=User.AccountStatusChoices.DEACTIVATED
+        ).update(
+            account_status=User.AccountStatusChoices.ACTIVE,
+            is_active=True,
+            updated_at=timezone.now(),
+        )
+        self.message_user(request, f"Reactivated {reactivated} account(s).")
 
 
 class RejectIdentityDocumentForm(forms.Form):
