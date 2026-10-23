@@ -127,3 +127,43 @@ class AvailabilityWindow(models.Model):
 
     def __str__(self) -> str:
         return f"{self.listing.title}: {self.start_date} to {self.end_date}"
+
+
+class BlockedDateRange(models.Model):
+    """
+    Automatically or manually blocked date range for a listing (CP-403).
+    When an order is confirmed, dates are blocked.
+    When an order is cancelled, declined, or completed, dates are released.
+    """
+
+    listing = models.ForeignKey(
+        Listing,
+        on_delete=models.CASCADE,
+        related_name="blocked_dates",
+    )
+    order = models.ForeignKey(
+        "orders.Order",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="blocked_dates",
+    )
+    start_date = models.DateField()
+    end_date = models.DateField()
+    reason = models.CharField(max_length=255, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "blocked_date_ranges"
+        verbose_name = "Blocked Date Range"
+        verbose_name_plural = "Blocked Date Ranges"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(start_date__lte=models.F("end_date")),
+                name="blocked_date_range_start_lte_end",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        order_info = f" (Order #{self.order_id})" if self.order_id else ""
+        return f"Blocked {self.listing.title}: {self.start_date} to {self.end_date}{order_info}"

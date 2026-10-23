@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
 import os
+import sys
 from datetime import timedelta
 from pathlib import Path
 
@@ -35,6 +36,20 @@ ALLOWED_HOSTS = [
     host.strip() for host in os.getenv("ALLOWED_HOSTS", "").split(",") if host.strip()
 ]
 
+# Render (and any reverse proxy) terminates TLS, so requests reach Django as
+# plain HTTP. Without this Django sees `http` and rejects `secure` cookies /
+# treats CSRF origins as mismatched behind the proxy.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+# Required for POSTs from the Admin/portal behind the proxy (Django rejects
+# CSRF for any origin not listed here once DEBUG=False). Comma-separated like
+# CORS_ALLOWED_ORIGINS, e.g. "https://brb-server-xxxx.onrender.com".
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+
 
 # Application definition
 
@@ -48,7 +63,11 @@ INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
+    # Must sit ABOVE django.contrib.staticfiles so whitenoise's `runserver`
+    # command wins; keeps local dev serving static the same way prod does.
+    "whitenoise.runserver_nostatic",
     "django.contrib.staticfiles",
+    "django.contrib.humanize",
     # local apps
     "apps.core",
     "apps.users",
@@ -64,6 +83,11 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # Serves /static/ in production too (Django won't do it itself when
+    # DEBUG=False). Directly below SecurityMiddleware per whitenoise's
+    # requirements. WHITENOISE_USE_FINDERS below keeps it working even if the
+    # deploy never runs `collectstatic`.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     # CORS must sit above CommonMiddleware so it can attach headers to every
     # response, including the ones CommonMiddleware generates itself (D-20).
     "corsheaders.middleware.CorsMiddleware",
@@ -99,14 +123,22 @@ WSGI_APPLICATION = "brb_server.wsgi.application"
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
-DATABASES = {
-    "default": dj_database_url.config(
-        default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
-        conn_max_age=600,
-        conn_health_checks=True,
-        ssl_require=os.getenv("DATABASE_URL", "").startswith("postgres"),
-    )
-}
+if "test" in sys.argv:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": ":memory:",
+        }
+    }
+else:
+    DATABASES = {
+        "default": dj_database_url.config(
+            default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
+            conn_max_age=600,
+            conn_health_checks=True,
+            ssl_require=os.getenv("DATABASE_URL", "").startswith("postgres"),
+        )
+    }
 
 
 # Password validation
@@ -144,7 +176,15 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
 STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_DIRS = [BASE_DIR / "static"]
+
+# Serve static files in production via whitenoise middleware. WHITENOISE_USE_FINDERS
+# keeps static working even if the deploy never runs `collectstatic`: whitenoise
+# then reads straight from each app's static/ directory (and STATICFILES_DIRS),
+# which is all this project needs for its admin/portal CSS. Running
+# `collectstatic` later is still fine and just adds gzip + caching.
+WHITENOISE_USE_FINDERS = True
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
@@ -156,6 +196,10 @@ AUTH_USER_MODEL = "users.User"
 # https://www.django-rest-framework.org/api-guide/settings/
 
 REST_FRAMEWORK = {
+    # Adds a machine-readable `code` to APIException responses so the client can
+    # branch on it (e.g. login returns `unverified_email`, per the documented
+    # contract in `users/serializers.py`). See `brb_server/exceptions.py`.
+    "EXCEPTION_HANDLER": "brb_server.exceptions.api_exception_handler",
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
@@ -178,6 +222,15 @@ REST_FRAMEWORK = {
         "rest_framework.parsers.MultiPartParser",
         "rest_framework.parsers.FormParser",
     ),
+    # Rate buckets for public, potentially abusable endpoints. The resend
+    # verification link (BE-BUG-0001), the password-reset request (CP-104) and
+    # the email-change request (CP-1002) are throttled so a stray script
+    # cannot use the shared mail backend as a relay.
+    "DEFAULT_THROTTLE_RATES": {
+        "resend-verification": "3/hour",
+        "password-reset": "3/hour",
+        "email-change": "3/hour",
+    },
 }
 
 # JSON Web Tokens (djangorestframework-simplejwt)
@@ -218,20 +271,26 @@ CORS_ALLOWED_ORIGINS = [
 # `identity_documents.document_data`, because Render's filesystem is ephemeral and
 # the free tier has no persistent disk (DECISIONS.md D-13).
 #
-# The backend below only serves legacy/profile image fields such as
-# `users.photo`. Those are cosmetic and regenerable by the user, so losing them on
-# redeploy is acceptable -- unlike a government ID, which is not.
+# Files under MEDIA_ROOT (listing photos, profile images, dispute evidence) are
+# served by the catch-all `media/<path>` route in `brb_server/urls.py`
+# (DECISIONS.md D-26): Render has no nginx and DEBUG=False, so Django's
+# `static()` helper would no-op. Those files are cosmetic and regenerable by the
+# user, so losing them on redeploy is acceptable -- unlike a government ID,
+# which is not.
 STORAGES = {
     "default": {
         "BACKEND": "django.core.files.storage.FileSystemStorage",
     },
     "staticfiles": {
-        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
     },
 }
 
 MEDIA_ROOT = BASE_DIR / "media"
-MEDIA_URL = "media/"
+# Leading slash required: ImageField URLs go through
+# `request.build_absolute_uri()`, and a relative "media/..." would urljoin
+# against the request path (e.g. /api/v1/listings/5/ -> /api/v1/listings/media/...).
+MEDIA_URL = "/media/"
 
 # PUP Community Webmail Validation (SRS Section 4.2)
 ALLOWED_STUDENT_EMAIL_DOMAIN = os.getenv(
@@ -255,6 +314,14 @@ EMAIL_BACKEND = os.getenv(
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "webmaster@localhost")
 EMAIL_VERIFICATION_REDIRECT_URL = os.getenv(
     "EMAIL_VERIFICATION_REDIRECT_URL", "brb://auth/verify-email"
+)
+# CP-104: deep link the password-reset email hands back to the app.
+PASSWORD_RESET_REDIRECT_URL = os.getenv(
+    "PASSWORD_RESET_REDIRECT_URL", "brb://auth/reset-password"
+)
+# CP-1002: same, for the change-of-email confirmation link.
+EMAIL_CHANGE_REDIRECT_URL = os.getenv(
+    "EMAIL_CHANGE_REDIRECT_URL", "brb://auth/verify-email-change"
 )
 # CP-102: an account that never verifies its email is removed after this many
 # days. Read through SystemConfig so it stays Admin-configurable (CP-1104).

@@ -4,6 +4,335 @@ Running record of what changed in `brb-server`, newest first. For the reasoning
 behind a change, see [`DECISIONS.md`](DECISIONS.md). For scope and ticket
 checkboxes, see [`BRB_BACKEND_SPRINTS.md`](BRB_BACKEND_SPRINTS.md).
 
+
+## 2026-10-23 - Three QA fixes: deactivation, pickup actions, ID format
+
+### Fixed
+
+- **BE-BUG-2004** - `POST /api/v1/auth/deactivate/` now requires the account
+  password. The view ignored the body it was sent, so any authenticated client
+  could deactivate an account without knowing the password. The new
+  `DeactivateAccountSerializer` checks it and answers `401 invalid_credentials`
+  - the same contract as the password-change endpoint (D-12) - before the
+  open-orders/cases blockers are evaluated. The mobile app already collected the
+  password and now sends it.
+- **BE-BUG-2003** - the administrator's pickup-location table labels the
+  destructive action **Remove** (and the section **Removed**) instead of
+  Archive. It is the same soft delete (`deleted_at`), so existing listings keep
+  their location and Restore still works; only the wording changed. The action
+  buttons sit in one aligned `.row-actions` row, underlined to read as links.
+- **BE-BUG-2005** - a PUP ID must have the printed shape
+  `20xx-xxxxx-MN-x`: `IdentityDocumentSubmissionSerializer` rejects a missing
+  campus/check segment (`2024-00123`) with an actionable message, while
+  government IDs keep the loose rule because their numbers differ per issuing
+  agency. The review page grows a matching check row, and the ID-number notes
+  are neutral grey until they confirm something (green only when true, red when
+  a flag is set) instead of always reading as success. The mobile form applies
+  the same regex before submitting and its placeholder shows the full shape.
+
+## 2026-10-22 — Demo catalogue so the browse screens are not empty
+
+### Added
+
+- `manage.py seed_demo_data` — fills the two lookup tables the catalogue needs
+  (`listing_statuses`, `listing_categories`) and, with `--demo`, creates twelve
+  demo Lenders — each with an approved identity document, because publishing is
+  gated on one (CP-105) — and thirty listings spread across the eight
+  categories and the eight pickup locations. The command is idempotent, and
+  `--reset` deletes only the rows it created (matched on the `demo.lender`
+  email prefix), so the team's real accounts are never touched. Demo login:
+  `demo.lender01@iskolarngbayan.pup.edu.ph` / `DemoLender123!` (`--password`
+  changes it).
+
+### Changed
+
+- The team's Render database now carries that demo catalogue, so
+  `GET /api/v1/listings/` returns thirty items from twelve lenders while the
+  real accounts are still being verified. `.env` points at SQLite, so seeding
+  Render needs an explicit `DATABASE_URL` (see D-32).
+
+
+## 2026-10-22 — Admin sidebar renamed by capability, and a Categories page
+
+### Added
+
+- `/portal/categories/` — the administrator can now add, rename and delete the
+  listing categories a Lender publishes from (CP-401). The table ships empty,
+  and the mobile app only reads it through `GET /api/v1/listings/categories/`,
+  so without this page a listing cannot be published at all. The page mirrors
+  the category CRUD that already exists in the Django Admin, and it writes the
+  table directly: no new API endpoint. A category that listings already point
+  at cannot be deleted (`Listing.category` is `on_delete=PROTECT`) — the
+  administrator is told how many listings are in the way and is offered a
+  rename instead.
+
+### Changed
+
+- The CoPUPAdmin sidebar is grouped by admin domain instead of by the Figma
+  wireframe, and every item is named after the capability the test cases
+  exercise: "Users & Roles" (CP-1101/CP-206), "Reports & Flags"
+  (CP-901/CP-902), "Listings & Reviews" (CP-1102), "Unreturned Cases"
+  (CP-506/CP-1103), "Disputes" (CP-903), "System Parameters" (CP-1104) and
+  "Audit Log" (CP-1106).
+- A nav item that is not live yet now shows the ticket that will switch it on
+  (CP-1109..CP-1113) and, on hover, the base ticket and the sprint it lands
+  in — instead of the single tooltip "Planned for a later sprint". The items
+  are still locked: naming and ordering are free, starting a reserved portal
+  ticket before its base ticket lands is not (D-30/D-31).
+
+
+## 2026-10-22 — Create-listing contract pinned by tests
+
+### Changed
+
+- `POST /api/v1/listings/` now has explicit regression tests for the fields a
+  client must always send: a non-blank `description`, a `category` id, and a
+  `pickup_location` id. A missing one is answered with a bare
+  `400 {"<field>": ["This field is required."]}`, which is easy to miss on the
+  client side, so the contract is now stated in the test names as well.
+
+  No behaviour changed; this only records the contract the mobile app has to
+  honour.
+
+
+## 2026-10-22 — Lender application endpoint and password-reset link validation
+
+### Added
+
+- `POST /api/v1/auth/apply-lender/` lets a borrower apply for the Lender role.
+  The role is a server-side fact stored on the account, so the client only
+  asks and renders the answer. The service refuses the application with a
+  message written for the person who tapped the button when the account is
+  not active, when the identity document has not been approved, when the
+  account is already a lender, and when a previous lender status was revoked.
+- `POST /api/v1/auth/password-reset/validate/` checks a password-reset link
+  without consuming it, so a client can tell a live link from a forged,
+  expired, or already-spent one before showing a new-password form.
+
+### Changed
+
+- Password-reset confirmation now validates the candidate password against the
+  account it is resetting, so the new password cannot be too similar to the
+  account's own details.
+
+
+## 2026-10-20 — Merge: listing search, lender profiles, availability calendar, pickup locations (CP-301, CP-302, CP-304, CP-403, CP-1105)
+
+Branch: `feature/sprint-2_CP-104-1001-1002-1004` (merged `feature/sprint-2_cp301-302-304-403-1105-search-profiles-calendar-locations`).
+
+### Changed
+
+- `/api/v1/listings/` is now a single collection view: GET searches (CP-301,
+  filters/sort as validated by `ListingSearchQuerySerializer`), POST publishes a
+  listing (CP-401, requires identity-verified active lender). The standalone
+  search view route and the singular `pickup-location/` routes from CP-401 were
+  retired; both sides reverse() to the merged view.
+- Pickup locations follow CP-1105: plural `pickup-locations/` routes,
+  soft-delete via `deleted_at`, read for any authenticated user, writes for
+  staff only, `description` field. The hard-delete admin-only endpoints and
+  the ProtectedError-400 guard are gone with them.
+- `ListingDetail` responses now embed `blocked_dates` (CP-403) alongside
+  reviews, and the lender search/profile endpoints live under
+  `/api/v1/lenders/` (CP-302/CP-304).
+- CP-301/302/304/403/1105 tests were ported from the single
+  `apps/listings/tests.py` into modules under `apps/listings/tests/`, with the
+  pickup tests rewritten against the CP-1105 endpoints.
+
+### Added (admin activation, same day)
+
+- `/admin/` now covers the whole listings domain: `ListingCategory`,
+  `ListingStatus` (read-only lookup — names are literal constants in the
+  services), `ListingPhoto`, `AvailabilityWindow` joined the `Listing`,
+  `PickupLocation` (with a soft-delete bulk action mirroring DELETE
+  `/api/v1/pickup-locations/<id>/`) and `BlockedDateRange` registrations, and
+  `users.User` itself is registered (password hash excluded from the form;
+  statuses searchable/filterable for incident support).
+- `docs/COPUP_ERD.md` gained the missing `BLOCKED_DATE_RANGES` table (CP-403)
+  in the listings domain.
+- New smoke tests: `/admin/` changelists render for every listings model plus
+  `User`, the pickup soft-delete action works, and `/portal/` (verification
+  admin, CP-106) renders for staff and bounces everyone else.
+
+## 2026-10-21 — Portal: pickup-location management
+
+Branch: `merging/sprint-2`.
+
+### Added
+
+- Added pickup-location management to `/portal/`. The previously-disabled
+  sidebar nav item is now live. Active locations list with an inline add form
+  and per-row Edit / Archive; Archived section lists soft-deleted rows with
+  Restore.
+- `PickupLocationPortalForm` restates the existing pickup-location rules
+  (trimmed, non-blank name up to 150 chars, optional description) with the same
+  `"Location name cannot be blank."` wording, so the portal and the API agree.
+- Portal-only **Restore** action for soft-deleted locations: `deleted_at` is
+  cleared, and the row returns to the listing-creation dropdown.
+- Routes: `portal-pickup-locations`, `portal-pickup-location-edit`,
+  `portal-pickup-location-delete`, `portal-pickup-location-restore` (delete and
+  restore are POST-only). All staff-gated via `staff_login_required` (D-03).
+- 11 tests in `tests_portal.py`: staff gating, active/archived split, trimmed
+  create feeding the API dropdown, blank-name rejection, edit (and 404 for
+  archived), soft-delete, restore, and GET rejection on the POST-only routes.
+
+### Changed
+
+- Portal page scope is now coordinated with the API work: this page mirrors the
+  existing pickup-location capability, and the remaining sidebar items activate
+  only once their backend counterparts exist. Tracked in the local-only
+  `BRB_BACKEND_SPRINTS.md`.
+
+## 2026-10-20 — Sprint 2: Search, Profiles, Calendar, and Locations (CP-301, CP-302, CP-304, CP-403, CP-1105)
+
+Branch: `feature/sprint-2_cp301-302-304-403-1105-search-profiles-calendar-locations`.
+
+### Added
+
+**CP-1105 — Fixed pickup locations (Admin CRUD)**
+- `apps/listings/permissions.py`: `IsAdminOrReadOnly` permission granting write permissions exclusively to staff administrators while permitting read access to authenticated borrowers and lenders.
+- `apps/listings/serializers.py`: `PickupLocationSerializer` with unique name validation and soft-deletion protection.
+- `apps/listings/views.py`: `PickupLocationListCreateView` (`GET`, `POST` `/api/v1/pickup-locations/`) and `PickupLocationDetailView` (`GET`, `PUT`, `PATCH`, `DELETE` `/api/v1/pickup-locations/<pk>/`). Soft-delete sets `deleted_at`.
+- Active pickup locations feed into the lender's listing-creation location dropdown set.
+
+**CP-403 — Availability calendar date blocking & release**
+- `apps/listings/models.py`: `BlockedDateRange` model with foreign keys to `Listing` and optional `Order`, plus `reason` (e.g. `order_confirmed`, `maintenance`). Includes database check constraint `start_date <= end_date`.
+- `apps/listings/migrations/0003_blockeddaterange.py`: Schema migration for `BlockedDateRange`.
+- `apps/listings/services.py`:
+  - `block_dates_for_order(order)`: atomically blocks date range upon order confirmation.
+  - `release_dates_for_order(order)`: atomically releases blocked dates upon cancellation or completion.
+  - `is_listing_available_for_range(listing, start_date, end_date)`: checks for overlapping blocked ranges and ensures requested dates fall within listing availability windows.
+- Registered `BlockedDateRange` in `apps/listings/admin.py`.
+
+**CP-301 — Search listings by keyword & filters**
+- `apps/listings/selectors.py`: `search_listings(...)` filtering by keyword (`title`, `description`), category ID, condition, pickup location ID, price range (`min_price`, `max_price`), free-only flag (`is_free=True` or `rate=0`), and date range availability.
+- Multi-field sorting: `price_asc`, `price_desc`, `newest`, `rating`.
+- Robust exclusion rules: excludes soft-deleted listings (`deleted_at`), inactive listings (`is_active=False`), admin-removed listings (`status='removed'`), and listings owned by unverified, inactive, suspended, or revoked lenders.
+- `apps/listings/serializers.py`: `ListingSearchQuerySerializer` (query param validation) and `ListingSearchResultSerializer`.
+- `apps/listings/views.py`: `ListingSearchView` (`GET /api/v1/listings/`).
+
+**CP-302 — Search for verified lenders**
+- `apps/users/selectors.py`: `search_lenders(query=...)` searching verified lenders by full name.
+- Annotates `active_listing_count` dynamically based on non-deleted, active, non-removed listings.
+- Robust exclusions: excludes suspended, revoked, inactive, or unverified lenders.
+- `apps/users/serializers.py`: `LenderSearchResultSerializer`.
+- `apps/users/views.py`: `LenderSearchView` (`GET /api/v1/lenders/`).
+- Routes mapped in `apps/users/lender_urls.py` and `brb_server/urls.py`.
+
+**CP-304 — Public lender profile endpoint**
+- `apps/users/selectors.py`: `get_lender_profile(lender_id)` aggregating lender info, active listings, and rating statistics (`average_rating`, `review_count`).
+- Review calculation joins through `order__listing__lender=lender` and excludes self-reviews, adhering to D-19 (reviewee is derived).
+- Information disclosure protection (Rule 9): queries for non-existent, unverified, inactive, suspended, or revoked lenders return `404 Not Found` rather than leaking status details.
+- `apps/users/serializers.py`: `LenderProfileSerializer` exposing public fields safely (no sensitive emails, phones, or document data).
+- `apps/users/views.py`: `LenderProfileView` (`GET /api/v1/lenders/<pk>/`).
+
+### Tests
+
+41 new automated tests across `apps/listings/tests.py` and `apps/users/tests.py`. Total test suite: **198 tests, all passing** with 0 warnings or errors.
+- `PickupLocationTests` (10 tests)
+- `AvailabilityCalendarTests` (8 tests)
+- `ListingSearchTests` (11 tests)
+- `LenderSearchTests` (6 tests)
+- `LenderProfileTests` (6 tests)
+## 2026-10-19 — Listing photos and media serving fixes (D-26)
+
+Branch: `feature/sprint-2_CP-104-1001-1002-1004`.
+
+### Fixed
+
+- **Listing photos now load in production** — added the missing `media/<path>`
+  route (`django.views.static.serve` over `MEDIA_ROOT`; Render has no nginx
+  and `DEBUG=False`, so nothing served uploads before) and changed `MEDIA_URL`
+  to the absolute `/media/`, which also stops photo URLs from resolving to
+  `.../api/v1/listings/media/...`.
+- **Photo uploads validate by content, not by client claims** — files whose
+  first bytes are not PNG/JPEG/WebP are rejected regardless of the declared
+  `content_type`, and non-file `photos` values (e.g. URL strings in a JSON
+  body) now return a 400 instead of creating a phantom `ListingPhoto` row.
+- **PATCH on a listing returns the photos you just sent** — the response was
+  built from the stale prefetch cache after `update_listing()` replaced
+  photos and availability windows.
+- **Deleting an in-use pickup location returns 400** instead of a 500
+  (`ProtectedError`); unreferenced locations still delete with 204.
+- Removed the no-op `paginate_by = 10` on the pickup-location list (DRF
+  reads `pagination_class`; the endpoint has always used the global
+  `PAGE_SIZE` of 20).
+
+## 2026-10-19 — Sprint 2 account lifecycle endpoints (D-25)
+
+Branch: `feature/sprint-2_CP-104-1001-1002-1004`.
+
+### Added
+
+- **CP-104 password recovery** — `POST /api/v1/auth/password-reset/` mails a
+  single-use link (generic anti-enumeration response, throttled 3/hour);
+  `POST /api/v1/auth/password-reset/confirm/` sets the new password, clears
+  any lockout and blacklists outstanding sessions. Link lifetime defaults to
+  60 minutes, Admin-configurable via
+  `system_configs.password_reset_expiry_minutes`.
+- **CP-1001 profile edit** — `PATCH /api/v1/auth/me/` persists full name,
+  contact number, bio, street address, municipality and province.
+- **CP-1001 password change** — `POST /api/v1/auth/password-change/` proves
+  the current password (401 `invalid_credentials` on mismatch), re-hashes the
+  new one and signs out every other session.
+- **CP-1002 email change** — `POST /api/v1/auth/email-change/` mails a
+  confirmation link to the new address (throttled 3/hour);
+  `POST /api/v1/auth/email-change/confirm/` swaps the addresses. The old
+  email stays the account of record until the link is confirmed; the new
+  address must satisfy the CP-101 PUP-domain and affiliation rules.
+- **CP-1004 deactivation** — `POST /api/v1/auth/deactivate/` closes the
+  account (status `deactivated`, `is_active` False, sessions blacklisted),
+  and refuses with a 400 naming the counts while open orders (borrowed or
+  lent) or open/escalated UnreturnedCases exist.
+
+### Changed
+
+- `apps/users/tokens.py` — the send-stamp hash logic is now driven by a
+  per-subclass `sent_at_field`, with `PasswordResetTokenGenerator` and
+  `EmailChangeTokenGenerator` added alongside the CP-102 generator (each
+  with its own salt, so tokens cannot cross endpoints). Behaviour of
+  verification tokens is unchanged.
+- `apps/users/serializers.py` — PUP-domain lookups extracted into
+  `pup_webmail_domains()`; registration behaviour is unchanged.
+- `users.0007` — adds `password_reset_sent_at`, `pending_email`,
+  `email_change_sent_at` (all nullable; backward-compatible).
+
+### Tests
+
+- `apps/users/tests.py` — 53 new tests: `PasswordResetTests` (15),
+  `ProfileUpdateTests` (8), `PasswordChangeTests` (7),
+  `EmailChangeTests` (13), `AccountDeactivationTests` (10). Suite total
+  314, all green.
+
+## 2026-10-19 — Verification bug-fix round (D-24)
+
+Branch: `checking/sprint-1`.
+
+### Fixed
+
+- **A resend retires the previous verification link (F-BUG-0002-001):** new
+  `User.email_verification_sent_at` column (`users.0006`) is stamped per
+  dispatch in `send_email_verification` and folded into the token HMAC
+  (`apps/users/tokens.py`), so the link already in the inbox stops verifying
+  once a new email is mailed. A failed send persists nothing, so a mail
+  outage leaves the previously mailed link working.
+- **Portal review and download no longer 500 on legacy submissions:**
+  `decrypt_document_data` (`apps/users/encryption.py`) returns bytes that are
+  not Fernet tokens unchanged — rows written before the CP-107 write path are
+  plaintext, and migration 0005 only rewrote rows that existed when it first
+  ran. Token-shaped bytes still decrypt, or raise, exactly as before.
+
+### Tests
+
+- `apps/users/tests.py` — three new `ResendVerificationTests` (superseded link
+  refused end-to-end by POST `/verify-email/`, freshly mailed link validates
+  across the DB round-trip, failed send keeps the old link valid);
+  `IdentityDocumentEncryptionTests` covers the legacy-plaintext read;
+  `test_submission_is_stored_with_a_pending_status` now decrypts before
+  comparing, since CP-107 encrypts at write time.
+- The third QA bug (profile "Verified" tag stale after admin approval) is a
+  `brb-client` fix — any-approved status scan, refresh-and-retry interceptor,
+  foreground refetch — recorded in `DECISIONS.md` D-24.
+
 Related documents:
 
 | Document | Purpose |
@@ -14,6 +343,185 @@ Related documents:
 | `docs/COPUP_ERD.md` | Data shape |
 | `docs/DECISIONS.md` | Decisions and their rationale |
 | `docs/changelog-updating.md` | **This file** — what changed |
+
+## 2026-10-16 — First Render Web Service deploy (D-23)
+
+Branch: `checking/sprint-1` (local, uncommitted).
+
+### Added
+
+- `render.yaml` — Render Blueprint for the `brb-server` Web Service: Python
+  3.12, build = `uv sync --frozen --no-dev` + full `migrate`, start =
+  `gunicorn brb_server.wsgi:application --bind 0.0.0.0:$PORT`, health check
+  at `/healthz/`, env contract (`DEBUG=False`, generated `SECRET_KEY`,
+  `ALLOWED_HOSTS`, `DATABASE_URL` and the encryption key filled in the
+  dashboard).
+- `brb_server/urls.py` + `apps/core/views.py` — `GET /healthz/` liveness
+  endpoint (no auth, no DB round-trip) for Render health checks.
+- `pyproject.toml` / `uv.lock` — `gunicorn` runtime dependency.
+
+### Changed
+
+- `brb_server/settings.py` — added `SECURE_PROXY_SSL_HEADER` (Render
+  terminates TLS) and env-driven `CSRF_TRUSTED_ORIGINS` (Admin/portal POSTs
+  are rejected behind the proxy without it once `DEBUG=False`).
+
+Related documents:
+
+| Document | Purpose |
+|---|---|
+| `CONTRIBUTING.md` | Team guide. Authoritative for conventions and quality gates |
+| `README.md` | How a teammate gets the project running |
+| `docs/BRB_BACKEND_SPRINTS.md` | What to build and when |
+| `docs/COPUP_ERD.md` | Data shape |
+| `docs/DECISIONS.md` | Decisions and their rationale |
+| `docs/changelog-updating.md` | **This file** — what changed |
+
+## 2026-10-13 — Admin accounts restricted to `@pup.edu.ph`
+
+Branch: `checking/sprint-1` (local, uncommitted).
+
+### Changed
+
+- `apps/users/models.py` — `UserManager.create_superuser` now rejects emails
+  outside `ALLOWED_FACULTY_EMAIL_DOMAIN` (`@pup.edu.ph`) with a `ValueError`;
+  `User.clean()` enforces the same rule for any `is_staff` account, so Django
+  Admin "Add/Change user" forms refuse `@gmail.com` / `@iskolarngbayan` for
+  staff. Registration was already enforced (serializer); this closes the
+  `createsuperuser` and Django Admin gaps.
+- `apps/users/models.py` — dropped `affiliation` from `REQUIRED_FIELDS` so
+  `createsuperuser` no longer prompts for it; superusers keep the D-20 default
+  `affiliation=Faculty`. This is a prompt-only change (no schema/ERD impact).
+
+### Tests
+
+- `apps/users/tests.py` — new `AdminAccountEmailDomainTests` (5 tests).
+
+Related documents:
+
+| Document | Purpose |
+|---|---|
+| `CONTRIBUTING.md` | Team guide. Authoritative for conventions and quality gates |
+| `README.md` | How a teammate gets the project running |
+| `docs/BRB_BACKEND_SPRINTS.md` | What to build and when |
+| `docs/COPUP_ERD.md` | Data shape |
+| `docs/DECISIONS.md` | Decisions and their rationale |
+| `docs/changelog-updating.md` | **This file** — what changed |
+
+## 2026-10-13 — Admin portal verification pages (BE-BUG-0006)
+
+Branch: `checking/sprint-1` (local, uncommitted). Mounted at `/portal/`.
+
+### Added
+
+- `apps/users/portal.py` — server-rendered admin pages (D-22): `AdminPortalLoginView`
+  (rejects non-staff sign-ins), `dashboard`, `verification_queue` (Pending /
+  Approved / Rejected tabs + pagination), `verification_review` (document
+  preview, submitted details, server-side checks), `verification_review_submit`
+  (approve/reject). Authority is `is_staff` via `staff_login_required`; a
+  non-staff member hitting any page is logged out. Reuses
+  `review_identity_document` so notifications, emails and audit entries stay one
+  code path.
+- `apps/users/portal_urls.py` + `brb_server/urls.py` — `/portal/` routes.
+- Templates in `apps/users/templates/admin_portal/` matching Figma screens 76
+  (sign-in), 77 (dashboard), 82 (queue), 83 (review), 84 (reject overlay).
+  Static assets: `apps/users/static/admin_portal/portal.css`, `portal.js`.
+- `apps/users/templatetags/portal_extras.py` — `|initials` and `|doc_type_label`
+  template filters.
+- `django.contrib.humanize` in `INSTALLED_APPS` (dashboard `|intcomma`).
+- `apps/users/encryption.py` — `detect_document_content_type` (PNG/JPEG/PDF
+  magic-number sniffing); `IdentityDocumentDownloadView` now uses it too.
+- `apps/users/tests_portal.py` — 16 tests: staff gating, login rejects
+  non-staff, queue tabs/pagination, review audit `view` entry, approve/reject
+  flows (notification + email), reject-requires-reason, no re-review.
+
+### Notes
+
+- The remaining admin screens (users, reports, content moderation, system
+  settings, audit log, …) are shown disabled in the sidebar as "planned for a
+  later sprint". Whitenoise/static serving for the deployed Render site is still
+  an open offer; Django Admin (and these pages) render unstyled when
+  `DEBUG=False`.
+
+## 2026-10-12 — `GET /api/v1/auth/me/` profile endpoint (BE-BUG-0002)
+
+Branch: `checking/sprint-1` (local, uncommitted).
+
+### Added
+
+- `MeView` (`apps/users/views.py`) + `auth-me` route (`apps/users/urls.py`):
+  `GET /api/v1/auth/me/` returns the authenticated caller's own row as
+  `UserResponseSerializer` (real `full_name`, `email`, `affiliation`, ...).
+  Requires authentication (project-wide `IsAuthenticated`); always reads
+  `request.user`, so it cannot return another account's details.
+- `MeViewTests` (`apps/users/tests.py`, 4 tests): returns the registered
+  affiliation verbatim, is scoped to the caller's own row only, and rejects
+  anonymous and bogus-token requests with `401`.
+
+### Why
+
+The client Profile page rendered a hardcoded placeholder badge (always
+"Student") and a hardcoded name, so a Staff/Faculty account looked like a
+Student (BE-BUG-0002). The client had no way to fetch its own account after
+login — only tokens were stored. The paired `brb-client` change makes
+`ProfileScreen` call `/auth/me/` and render the real details.
+
+---
+
+## 2026-10-12 — Auth error responses expose `code` (D-21)
+
+Branch: `checking/sprint-1` (local, uncommitted).
+
+### Added
+
+- `brb_server/exceptions.py`: project DRF exception handler
+  (`api_exception_handler`) that keeps DRF's default behaviour and appends
+  `response.data["code"] = exc.get_codes()` for every `APIException` whose
+  `detail` is a plain string.
+- `EXCEPTION_HANDLER` set in `REST_FRAMEWORK` (`brb_server/settings.py`).
+- Login 401 tests now assert the `code` (`invalid_credentials`, `unverified_email`,
+  `suspended`, `banned`).
+
+### Why
+
+The client branches on a machine-readable `code` — `LoginScreen` routes
+`unverified_email` back to the verify prompt and special-cases
+`invalid_credentials` — and `LoginSerializer` documents that code as its
+contract, but DRF's default handler never serialized it. `getApiErrorCode()`
+always returned `undefined`, so an unverified-email login showed a red error box
+instead of the verify-email redirect (FE-BUG-0002). See `DECISIONS.md` D-21.
+The paired `brb-client` fix (web token storage) makes login stop throwing on
+Expo Web, where `expo-secure-store` has no native module.
+
+---
+
+## 2026-10-12 — Resend-verification endpoint (BE-BUG-0001)
+
+Branch: `checking/sprint-1` (local, uncommitted).
+
+### Added
+
+- `POST /api/v1/auth/resend-verification/` — re-dispatches the CP-102
+  confirmation link. Accepts an email address; only when the address belongs to
+  an account that is unverified and in `pending_review` is a fresh link minted
+  and mailed. Returns the same generic 200 for every outcome so it cannot
+  enumerate registered addresses (consistent with the indistinguishable
+  failures of the verification endpoint itself).
+- `apps/users/services.py`: `resend_email_verification()`.
+- `apps/users/serializers.py`: `ResendVerificationSerializer`.
+- DRF `ScopedRateThrottle` on the new view with `resend-verification` limited to
+  `3/hour` via `DEFAULT_THROTTLE_RATES` in `brb_server/settings.py`, bounding
+  outbound mail volume from a public endpoint.
+- `apps/users/tests.py`: `ResendVerificationTests` (7 tests).
+
+### Why
+
+The frontend "Resend Email" button previously navigated straight to the
+"Email Verified" success screen and sent nothing (verify the client commit
+alongside this). The backend surfaced no such endpoint at all, so the button
+could not have worked as labelled. Client-side fix follows in `brb-client`.
+
+---
 
 ## 2026-10-11 — CORS headers for the browser client (D-20)
 

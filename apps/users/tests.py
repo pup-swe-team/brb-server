@@ -5,8 +5,10 @@ from urllib.parse import parse_qs
 from cryptography.fernet import Fernet, InvalidToken
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
+from django.contrib.auth.tokens import PasswordResetTokenGenerator as _DjangoTokenClock
 from django.core import mail
-from django.core.exceptions import ImproperlyConfigured
+from django.core.cache import cache
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from django.urls import reverse
@@ -15,13 +17,21 @@ from rest_framework import serializers, status
 from rest_framework.test import APITestCase
 
 from apps.audit.models import AdminAccessLog
+from apps.core.constants import PASSWORD_RESET_EXPIRY_MINUTES
 from apps.core.models import SystemConfig
+from apps.listings.models import Listing, ListingCategory, ListingStatus, PickupLocation
+from apps.orders.models import Order, OrderStatus, UnreturnedCase, UnreturnedCaseStatus
 
 from .encryption import decrypt_document_data, encrypt_document_data
 from .models import IdentityDocument, IdentityDocumentStatus, IdentityDocumentType
 from .permissions import IsIdentityVerified
 from .serializers import IdentityDocumentSubmissionSerializer
-from .services import build_email_verification_token, email_verification_token_generator
+from .services import (
+    build_email_verification_token,
+    email_change_token_generator,
+    email_verification_token_generator,
+    password_reset_token_generator,
+)
 from .tokens import EmailVerificationTokenGenerator
 
 User = get_user_model()
@@ -258,6 +268,45 @@ class UserRegistrationTests(APITestCase):
         self.assertEqual(response.data["user"]["lender_status"], "none")
 
 
+class AdminAccountEmailDomainTests(APITestCase):
+    """
+    Administrator (staff/superuser) accounts must use the faculty/staff PUP
+    domain (@pup.edu.ph) â€” the same rule registration enforces for Faculty/Staff.
+    `createsuperuser` and Django Admin forms must refuse @gmail.com etc.
+    """
+
+    def test_createsuperuser_rejects_gmail(self) -> None:
+        with self.assertRaises(ValueError):
+            User.objects.create_superuser("admin@gmail.com", "StrongPassword123!")
+
+    def test_createsuperuser_rejects_student_domain(self) -> None:
+        with self.assertRaises(ValueError):
+            User.objects.create_superuser(
+                "admin@iskolarngbayan.pup.edu.ph", "StrongPassword123!"
+            )
+
+    def test_createsuperuser_accepts_faculty_domain(self) -> None:
+        admin = User.objects.create_superuser(
+            "admin@pup.edu.ph",
+            "StrongPassword123!",
+            full_name="Admin Account",
+            contact_number="09171234567",
+        )
+        self.assertTrue(admin.is_staff)
+        self.assertTrue(admin.is_superuser)
+        self.assertEqual(admin.affiliation, User.AffiliationChoices.FACULTY)
+
+    def test_clean_rejects_staff_with_gmail(self) -> None:
+        staff = make_user("staff@iskolarngbayan.pup.edu.ph", is_staff=True)
+        staff.email = "staff@gmail.com"
+        with self.assertRaises(ValidationError):
+            staff.full_clean()
+
+    def test_clean_allows_non_staff_student_domain(self) -> None:
+        member = make_user("member@iskolarngbayan.pup.edu.ph")
+        member.full_clean()
+
+
 # ---------------------------------------------------------------------------
 # Shared helpers for CP-102 / CP-103 / CP-105
 # ---------------------------------------------------------------------------
@@ -352,7 +401,7 @@ in_memory_storage = override_settings(
 
 
 # ---------------------------------------------------------------------------
-# CP-102 — Verify email address
+# CP-102 â€” Verify email address
 # ---------------------------------------------------------------------------
 
 
@@ -545,6 +594,173 @@ class EmailVerificationTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
 
 
+@mock.patch.dict(
+    "rest_framework.throttling.SimpleRateThrottle.THROTTLE_RATES",
+    {"resend-verification": "100/min"},
+)
+class ResendVerificationTests(APITestCase):
+    """
+    Re-sending the CP-102 confirmation link (BE-BUG-0001).
+
+    The endpoint must actually mail a fresh link to an unverified account, keep
+    silent for every address it will not serve, and respond identically in all
+    cases so it cannot double as an account-existence probe.
+    """
+
+    def setUp(self) -> None:
+        self.url = reverse("auth-resend-verification")
+        self.unverified = make_user(
+            "still.waiting@iskolarngbayan.pup.edu.ph", verified=False
+        )
+
+    def test_resend_sends_fresh_link_to_unverified_account(self) -> None:
+        response = self.client.post(
+            self.url, {"email": self.unverified.email}, format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 1)
+        message = mail.outbox[0]
+        self.assertEqual(message.to, [self.unverified.email])
+
+        link = message.body.split("?", 1)[1].split()[0]
+        query = parse_qs(link)
+        # Re-read the row the way POST /verify-email/ does: the resend stamps
+        # `email_verification_sent_at` on its own instance, so this test's copy
+        # is stale until refreshed (F-BUG-0002-001 hashes that stamp).
+        self.unverified.refresh_from_db()
+        self.assertTrue(
+            email_verification_token_generator().check_token(
+                self.unverified, query["token"][0]
+            )
+        )
+
+    def test_resend_does_not_send_to_already_verified_account(self) -> None:
+        verified = make_user("already.done@iskolarngbayan.pup.edu.ph", verified=True)
+        response = self.client.post(self.url, {"email": verified.email}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_resend_does_not_send_to_unknown_email(self) -> None:
+        response = self.client.post(
+            self.url,
+            {"email": "nobody@iskolarngbayan.pup.edu.ph"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_resend_does_not_send_to_non_pending_account(self) -> None:
+        suspended = make_user(
+            "suspended@iskolarngbayan.pup.edu.ph",
+            verified=False,
+            account_status=User.AccountStatusChoices.SUSPENDED,
+        )
+        response = self.client.post(self.url, {"email": suspended.email}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_resend_response_is_indistinguishable(self) -> None:
+        """
+        The known-to-exist but unusable address and the unknown address both
+        return the same 200, so neither the endpoint caller nor a network
+        observer can tell registered accounts apart.
+        """
+        responses = []
+        for email in ("nobody@iskolarngbayan.pup.edu.ph", self.unverified.email):
+            response = self.client.post(self.url, {"email": email}, format="json")
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            responses.append(str(response.data["message"]))
+
+        self.assertEqual(len(set(responses)), 1)
+        # Only the valid, unverified account actually got a mail.
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_resend_swallows_email_failures(self) -> None:
+        with mock.patch(
+            "apps.users.services.send_email_verification",
+            side_effect=OSError("smtp down"),
+        ):
+            response = self.client.post(
+                self.url, {"email": self.unverified.email}, format="json"
+            )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_resend_requires_no_authentication(self) -> None:
+        response = self.client.post(
+            self.url, {"email": self.unverified.email}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_resend_supersedes_the_link_already_in_the_inbox(self) -> None:
+        """F-BUG-0002-001: the previously mailed link must stop verifying."""
+        stale_token = build_email_verification_token(self.unverified)
+
+        response = self.client.post(
+            self.url, {"email": self.unverified.email}, format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.unverified.refresh_from_db()
+        self.assertIsNotNone(self.unverified.email_verification_sent_at)
+
+        generator = email_verification_token_generator()
+        self.assertFalse(
+            generator.check_token(self.unverified, stale_token),
+            "The link mailed before the resend must no longer verify",
+        )
+        link = mail.outbox[-1].body.split("?", 1)[1].split()[0]
+        query = parse_qs(link)
+        self.assertTrue(
+            generator.check_token(self.unverified, query["token"][0]),
+            "The freshly mailed link must verify (DB round-trip of the send time)",
+        )
+
+    def test_old_link_cannot_verify_through_the_endpoint_after_a_resend(self) -> None:
+        """End-to-end: the superseded link is refused by POST /verify-email/."""
+        from django.utils.encoding import force_bytes
+        from django.utils.http import urlsafe_base64_encode
+
+        stale_token = build_email_verification_token(self.unverified)
+        self.client.post(self.url, {"email": self.unverified.email}, format="json")
+
+        response = self.client.post(
+            reverse("auth-verify-email"),
+            {
+                "uid": urlsafe_base64_encode(force_bytes(self.unverified.pk)),
+                "token": stale_token,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.unverified.refresh_from_db()
+        self.assertIsNone(self.unverified.email_verified_at)
+
+    def test_failed_resend_keeps_the_previous_link_working(self) -> None:
+        """A mail outage must not retire the only link the user has."""
+        stale_token = build_email_verification_token(self.unverified)
+
+        with mock.patch(
+            "apps.users.services.send_mail", side_effect=OSError("smtp down")
+        ):
+            response = self.client.post(
+                self.url, {"email": self.unverified.email}, format="json"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.unverified.refresh_from_db()
+        self.assertIsNone(self.unverified.email_verification_sent_at)
+        self.assertTrue(
+            email_verification_token_generator().check_token(
+                self.unverified, stale_token
+            )
+        )
+
+
 class EmailVerificationTokenGeneratorTests(APITestCase):
     """
     The CP-102 token has its own lifetime, independent of PASSWORD_RESET_TIMEOUT.
@@ -606,7 +822,7 @@ class EmailVerificationTokenGeneratorTests(APITestCase):
 
 
 # ---------------------------------------------------------------------------
-# CP-103 — Log in to account
+# CP-103 â€” Log in to account
 # ---------------------------------------------------------------------------
 
 
@@ -663,6 +879,7 @@ class LoginTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
         self.assertEqual(response.data["detail"], "Invalid email or password.")
+        self.assertEqual(response.data["code"], "invalid_credentials")
 
     def test_unknown_email_returns_the_identical_generic_error(self) -> None:
         """
@@ -706,6 +923,7 @@ class LoginTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
         self.assertIn("Confirm your email address", response.data["detail"])
+        self.assertEqual(response.data["code"], "unverified_email")
 
     def test_suspended_account_cannot_log_in(self) -> None:
         """AC-103.4: Suspended accounts are denied."""
@@ -717,6 +935,7 @@ class LoginTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
         self.assertIn("suspended", response.data["detail"])
+        self.assertEqual(response.data["code"], "suspended")
 
     def test_banned_account_cannot_log_in(self) -> None:
         """AC-103.4: Banned accounts are denied."""
@@ -728,6 +947,7 @@ class LoginTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
         self.assertIn("banned", response.data["detail"])
+        self.assertEqual(response.data["code"], "banned")
 
     def test_account_status_refusal_is_not_reachable_without_the_password(self) -> None:
         """
@@ -741,6 +961,58 @@ class LoginTests(APITestCase):
         response = self.login({"email": user.email, "password": "Guessing123456!"})
 
         self.assertEqual(response.data["detail"], "Invalid email or password.")
+
+
+class MeViewTests(APITestCase):
+    """
+    GET /api/v1/auth/me/ returns the caller's own real account details
+    (BE-BUG-0002) so the Profile page can stop hardcoding placeholder data.
+    """
+
+    def setUp(self) -> None:
+        self.me_url = reverse("auth-me")
+        self.login_url = reverse("auth-login")
+
+    def login(self, email: str, password: str = "StrongPassword123!"):
+        response = self.client.post(
+            self.login_url, {"email": email, "password": password}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        return response.data["tokens"]["access"]
+
+    def test_me_returns_the_authenticated_account_affiliation(self) -> None:
+        """The profile badge source must reflect what the account registered."""
+        user = make_user("staff@iskolarngbayan.pup.edu.ph", affiliation="Staff")
+        token = self.login(user.email)
+
+        response = self.client.get(self.me_url, HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["full_name"], user.full_name)
+        self.assertEqual(response.data["email"], user.email)
+        self.assertEqual(response.data["affiliation"], "Staff")
+
+    def test_me_reports_the_callers_own_row_only(self) -> None:
+        """The endpoint reads request.user, so it cannot leak another account."""
+        make_user("someone.else@iskolarngbayan.pup.edu.ph", affiliation="Faculty")
+        me = make_user("me@iskolarngbayan.pup.edu.ph", affiliation="Staff")
+        token = self.login(me.email)
+
+        response = self.client.get(self.me_url, HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["email"], me.email)
+        self.assertNotIn("someone.else@iskolarngbayan.pup.edu.ph", str(response.data))
+
+    def test_me_requires_authentication(self) -> None:
+        response = self.client.get(self.me_url)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_me_invalid_token_is_rejected(self) -> None:
+        response = self.client.get(
+            self.me_url, HTTP_AUTHORIZATION="Bearer not-a-real-token"
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
 @override_settings(CORS_ALLOW_ALL_ORIGINS=False)
@@ -1112,7 +1384,7 @@ class TokenLifecycleTests(APITestCase):
 
 
 # ---------------------------------------------------------------------------
-# CP-105 — Submit identity verification document
+# CP-105 â€” Submit identity verification document
 # ---------------------------------------------------------------------------
 
 
@@ -1128,7 +1400,7 @@ class IdentityDocumentSubmissionTests(APITestCase):
     def submit(self, **overrides):
         payload = {
             "document_type": "pup_id",
-            "id_number": "2024-00123",
+            "id_number": "2024-00123-MN-0",
             "name_on_document": "Juan Dela Cruz",
             "document_file": png_upload(),
             "consent_given": "true",
@@ -1145,11 +1417,14 @@ class IdentityDocumentSubmissionTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["status"], "pending")
         self.assertEqual(response.data["document_type"], "pup_id")
-        self.assertEqual(response.data["id_number"], "2024-00123")
+        self.assertEqual(response.data["id_number"], "2024-00123-MN-0")
 
         document = IdentityDocument.objects.get(user=self.user)
-        # The bytes are in the row itself, byte-for-byte as uploaded.
-        self.assertEqual(bytes(document.document_data), PNG_BYTES)
+        # CP-107 encrypts at write time, so read the row back through the
+        # decryptor rather than comparing raw bytes to the upload.
+        self.assertEqual(
+            decrypt_document_data(bytes(document.document_data)), PNG_BYTES
+        )
         self.assertEqual(document.status.name, "pending")
         self.assertIsNotNone(document.submitted_at)
 
@@ -1217,7 +1492,7 @@ class IdentityDocumentSubmissionTests(APITestCase):
         IdentityDocument.objects.create(
             user=other,
             document_type=IdentityDocumentType.objects.get(name="pup_id"),
-            id_number="2024-00123",
+            id_number="2024-00123-MN-0",
             document_data=PNG_BYTES,
             status=IdentityDocumentStatus.objects.get(name="pending"),
         )
@@ -1236,12 +1511,12 @@ class IdentityDocumentSubmissionTests(APITestCase):
         IdentityDocument.objects.create(
             user=other,
             document_type=IdentityDocumentType.objects.get(name="pup_id"),
-            id_number="2024-ABC01",
+            id_number="2024-ABC01-MN-0",
             document_data=PNG_BYTES,
             status=IdentityDocumentStatus.objects.get(name="pending"),
         )
 
-        response = self.submit(id_number="2024-abc01")
+        response = self.submit(id_number="2024-abc01-mn-0")
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("already linked", str(response.data["id_number"]))
@@ -1259,10 +1534,38 @@ class IdentityDocumentSubmissionTests(APITestCase):
         self.assertEqual(IdentityDocument.objects.filter(user=self.user).count(), 2)
 
     def test_id_number_is_normalised_to_upper_case(self) -> None:
-        response = self.submit(id_number=" 2024-lower ")
+        response = self.submit(id_number=" 2024-00123-mn-0 ")
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(response.data["id_number"], "2024-LOWER")
+        self.assertEqual(response.data["id_number"], "2024-00123-MN-0")
+
+    # --- PUP ID format (BE-BUG-2005) ---
+
+    def test_pup_id_without_the_campus_segment_is_rejected(self) -> None:
+        """Students kept dropping the branch segment ("2024-00123")."""
+        response = self.submit(id_number="2024-00123")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("20xx-xxxxx-MN-x", str(response.data["id_number"]))
+        self.assertFalse(IdentityDocument.objects.exists())
+
+    def test_pup_id_with_loose_separators_is_rejected(self) -> None:
+        for value in ("2024 00123 MN 0", "202400123MN0", "2024-0123-MN-0"):
+            response = self.submit(id_number=value)
+            with self.subTest(id_number=value):
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_pup_id_accepts_any_branch_code(self) -> None:
+        """The campus code is not pinned: only the dashed shape matters."""
+        response = self.submit(id_number="2024-00123-ST-1")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["id_number"], "2024-00123-ST-1")
+
+    def test_government_id_keeps_the_loose_format(self) -> None:
+        response = self.submit(document_type="government_id", id_number="N01-23-456789")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
     # --- mismatch flagging ---
 
@@ -1295,7 +1598,11 @@ class IdentityDocumentSubmissionTests(APITestCase):
             "Juan Dela-Cruz",
             "Juan  Dela Cruz.",
         ]:
-            response = self.submit(name_on_document=variant, id_number="X-1")
+            response = self.submit(
+                name_on_document=variant,
+                document_type="government_id",
+                id_number="X-1",
+            )
             with self.subTest(variant=variant):
                 self.assertFalse(
                     response.data["has_profile_mismatch"],
@@ -1396,7 +1703,7 @@ class IdentityDocumentSubmissionTests(APITestCase):
         ):
             payload = {
                 "document_type": "pup_id",
-                "id_number": "2024-00123",
+                "id_number": "2024-00123-MN-0",
                 "name_on_document": "Juan Dela Cruz",
                 "document_file": png_upload(),
                 "consent_given": "true",
@@ -1617,7 +1924,7 @@ class IdentityDocumentAdminTests(APITestCase):
 
 
 # ---------------------------------------------------------------------------
-# CP-106 — Admin review of identity verification
+# CP-106 â€” Admin review of identity verification
 # ---------------------------------------------------------------------------
 
 
@@ -1645,7 +1952,7 @@ class IdentityDocumentReviewTests(APITestCase):
         self.document = IdentityDocument.objects.create(
             user=self.submitter,
             document_type=self.doc_type,
-            id_number="2024-00123",
+            id_number="2024-00123-MN-0",
             document_data=PNG_BYTES,
             status=self.pending_status,
             name_on_document="Juan Dela Cruz",
@@ -1792,7 +2099,7 @@ class IdentityDocumentReviewTests(APITestCase):
         submit_url = reverse("identity-document-submit")
         new_payload = {
             "document_type": "pup_id",
-            "id_number": "2024-00123",
+            "id_number": "2024-00123-MN-0",
             "name_on_document": "Juan Dela Cruz",
             "document_file": png_upload("new_pup_id.png"),
             "consent_given": "true",
@@ -1851,9 +2158,86 @@ class IdentityDocumentReviewTests(APITestCase):
         self.assertEqual(self.document.reviewed_by, self.admin)
         self.assertIsNotNone(self.document.reviewed_at)
 
+    # --- CP-106 admin bulk reject action (TC-021, TC-022) ---
+
+    def _reject_action(self, post: dict):
+        from django.contrib import admin
+
+        model_admin = admin.site._registry[IdentityDocument]
+        model_admin.message_user = mock.MagicMock()
+
+        request = _request_for(self.admin)
+        request.POST = post
+        qs = IdentityDocument.objects.filter(pk=self.document.pk)
+        return model_admin, model_admin.reject_selected_documents(request, qs)
+
+    def test_admin_reject_action_renders_confirmation_page(self) -> None:
+        """Selecting the reject action shows the reason form before any change."""
+        _model_admin, response = self._reject_action({})
+
+        self.assertEqual(response.status_code, 200)
+        response.render()
+        content = response.content.decode()
+        self.assertIn("Reject selected identity documents", content)
+        self.assertIn(self.submitter.email, content)
+
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status.name, "pending")
+
+    def test_admin_reject_action_without_reason_is_blocked(self) -> None:
+        """TC-022: The action refuses a blank reason and leaves the document pending."""
+        model_admin, response = self._reject_action(
+            {"_reject_confirmed": "1", "rejection_reason": "   "}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        response.render()
+        self.assertTrue(response.context_data["form"].errors)
+
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status.name, "pending")
+        self.assertEqual(self.document.rejection_reason, "")
+        model_admin.message_user.assert_not_called()
+
+    def test_admin_reject_action_persists_decision_and_audit(self) -> None:
+        """TC-021: A confirmed reason rejects the document and logs the reviewer."""
+        reason = "Photo is blurry and the ID expiration date is illegible."
+        _model_admin, response = self._reject_action(
+            {"_reject_confirmed": "1", "rejection_reason": reason}
+        )
+
+        self.assertEqual(response.status_code, 302)
+
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status.name, "rejected")
+        self.assertEqual(self.document.rejection_reason, reason)
+        self.assertEqual(self.document.reviewed_by, self.admin)
+        self.assertIsNotNone(self.document.reviewed_at)
+        self.assertFalse(self.submitter.has_verified_identity())
+
+        self.assertTrue(
+            AdminAccessLog.objects.filter(
+                document=self.document, admin=self.admin, action="review"
+            ).exists()
+        )
+
+    def test_admin_reject_action_skips_already_reviewed_documents(self) -> None:
+        """Only pending rows are touched; finalized rows are left alone."""
+        self.review({"action": "approve"}, as_user=self.admin)
+
+        _model_admin, response = self._reject_action(
+            {"_reject_confirmed": "1", "rejection_reason": "Should not apply"}
+        )
+
+        self.assertEqual(response.status_code, 302)
+
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status.name, "approved")
+        self.assertEqual(self.document.rejection_reason, "")
+
 
 # ---------------------------------------------------------------------------
-# CP-107 — Document protection, encryption at rest, and audit logging
+# CP-107 â€” Document protection, encryption at rest, and audit logging
 # ---------------------------------------------------------------------------
 
 
@@ -1907,6 +2291,18 @@ class IdentityDocumentEncryptionTests(APITestCase):
             self.assertEqual(encrypt_document_data(PNG_BYTES), PNG_BYTES)
             self.assertEqual(decrypt_document_data(PNG_BYTES), PNG_BYTES)
 
+    def test_legacy_plaintext_row_reads_back_with_a_key_configured(self) -> None:
+        """
+        Rows written before encryption-at-rest must not raise InvalidToken.
+
+        Migration 0005 only rewrote rows that existed when it ran, so a
+        submission stored as plaintext stays plaintext in the row; decrypting
+        it used to raise and turn the portal review page and the download
+        endpoint into 500s.
+        """
+        with override_settings(IDENTITY_DOCUMENT_ENCRYPTION_KEY=self.key):
+            self.assertEqual(decrypt_document_data(PNG_BYTES), PNG_BYTES)
+
     def test_missing_key_in_production_fails_closed(self) -> None:
         """In production (DEBUG=False, non-sqlite DB) unset key raises ImproperlyConfigured."""
         with (
@@ -1944,7 +2340,7 @@ class IdentityDocumentSubmissionEncryptionTests(APITestCase):
         with override_settings(IDENTITY_DOCUMENT_ENCRYPTION_KEY=self.key):
             payload = {
                 "document_type": "pup_id",
-                "id_number": "2024-99991",
+                "id_number": "2024-99991-MN-0",
                 "name_on_document": "Juan Dela Cruz",
                 "document_file": png_upload(),
                 "consent_given": "true",
@@ -2228,3 +2624,1567 @@ class AdminAccessLogTests(APITestCase):
         self.assertIn("View", s)
         self.assertIn(str(self.document.id), s)
         self.assertIn(self.admin.full_name, s)
+
+
+# ---------------------------------------------------------------------------
+# CP-104 â€” Recover forgotten password
+# ---------------------------------------------------------------------------
+
+
+class PasswordResetTests(APITestCase):
+    """CP-104: mail a single-use, time-limited reset link."""
+
+    def setUp(self) -> None:
+        # The request endpoint is throttled; the LocMem cache outlives a single
+        # test method, so counts would otherwise leak across the class.
+        cache.clear()
+        self.request_url = reverse("auth-password-reset")
+        self.confirm_url = reverse("auth-password-reset-confirm")
+        self.user = make_user("forgot@iskolarngbayan.pup.edu.ph")
+
+    @staticmethod
+    def uid_for(user: User) -> str:
+        from django.utils.encoding import force_bytes
+        from django.utils.http import urlsafe_base64_encode
+
+        return urlsafe_base64_encode(force_bytes(user.pk))
+
+    @staticmethod
+    def emailed_link_parts(message) -> dict[str, str]:
+        query = parse_qs(message.body.split("?", 1)[1].split()[0])
+        return {key: values[0] for key, values in query.items()}
+
+    def request_reset(self, email: str | None = None):
+        return self.client.post(
+            self.request_url,
+            {"email": email or self.user.email},
+            format="json",
+        )
+
+    def confirm_payload(self, user: User | None = None, token: str | None = None):
+        target = user or self.user
+        return {
+            "uid": self.uid_for(target),
+            "token": token or password_reset_token_generator().make_token(target),
+            "password": "BrandNewPassword456!",
+            "password_confirm": "BrandNewPassword456!",
+        }
+
+    # --- requesting the link ---
+
+    def test_request_emails_a_reset_link_to_a_registered_address(self) -> None:
+        response = self.request_reset()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 1)
+        message = mail.outbox[0]
+        self.assertEqual(message.to, [self.user.email])
+        self.assertIn(self.uid_for(self.user), message.body)
+
+    def test_request_answers_generically_for_an_unknown_address(self) -> None:
+        """AC-104: the endpoint must not reveal which addresses exist."""
+        known = self.request_reset()
+        self.client.post(
+            self.request_url,
+            {"email": "nobody@iskolarngbayan.pup.edu.ph"},
+            format="json",
+        )
+
+        self.assertEqual(known.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 1)  # only the registered address heard back
+        self.assertEqual(
+            known.data["message"],
+            "If that email is registered, we have sent a password reset link.",
+        )
+
+    # --- confirming the link ---
+
+    def test_confirm_sets_and_hashes_the_new_password(self) -> None:
+        self.request_reset()
+        payload = self.emailed_link_parts(mail.outbox[0])
+
+        response = self.client.post(
+            self.confirm_url,
+            {
+                "uid": payload["uid"],
+                "token": payload["token"],
+                "password": "BrandNewPassword456!",
+                "password_confirm": "BrandNewPassword456!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        user = User.objects.get(pk=self.user.pk)
+        self.assertTrue(user.check_password("BrandNewPassword456!"))
+        # The old password is gone, and the stored value is a hash, not the text.
+        self.assertFalse(user.check_password("StrongPassword123!"))
+        self.assertNotIn("BrandNewPassword456!", user.password)
+
+    def test_new_password_can_log_in_and_the_old_one_cannot(self) -> None:
+        self.request_reset()
+        payload = self.emailed_link_parts(mail.outbox[0])
+        self.client.post(
+            self.confirm_url,
+            {
+                "uid": payload["uid"],
+                "token": payload["token"],
+                "password": "BrandNewPassword456!",
+                "password_confirm": "BrandNewPassword456!",
+            },
+            format="json",
+        )
+
+        old = self.client.post(
+            reverse("auth-login"),
+            {"email": self.user.email, "password": "StrongPassword123!"},
+            format="json",
+        )
+        new = self.client.post(
+            reverse("auth-login"),
+            {"email": self.user.email, "password": "BrandNewPassword456!"},
+            format="json",
+        )
+
+        self.assertEqual(old.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(new.status_code, status.HTTP_200_OK)
+
+    def test_a_used_link_is_rejected(self) -> None:
+        """AC-104: a reset link that already set a password must not work twice."""
+        self.request_reset()
+        payload = self.emailed_link_parts(mail.outbox[0])
+        body = {
+            "uid": payload["uid"],
+            "token": payload["token"],
+            "password": "BrandNewPassword456!",
+            "password_confirm": "BrandNewPassword456!",
+        }
+
+        first = self.client.post(self.confirm_url, body, format="json")
+        second = self.client.post(self.confirm_url, body, format="json")
+
+        self.assertEqual(first.status_code, status.HTTP_200_OK)
+        self.assertEqual(second.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("invalid or has expired", str(second.data["detail"]))
+
+    def test_an_expired_link_is_rejected(self) -> None:
+        """AC-104: links older than the window are refused."""
+        self.request_reset()
+        payload = self.emailed_link_parts(mail.outbox[0])
+
+        # Django's PasswordResetTokenGenerator._now() is deliberately naive
+        # (its _num_seconds arithmetic is against a naive epoch), so the
+        # patched clock must start from Django's own naive-local now.
+        with mock.patch(
+            "django.contrib.auth.tokens.PasswordResetTokenGenerator._now",
+            return_value=_DjangoTokenClock()._now() + timedelta(seconds=3601),
+        ):
+            response = self.client.post(
+                self.confirm_url,
+                {
+                    "uid": payload["uid"],
+                    "token": payload["token"],
+                    "password": "BrandNewPassword456!",
+                    "password_confirm": "BrandNewPassword456!",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("invalid or has expired", str(response.data["detail"]))
+        self.assertFalse(
+            User.objects.get(pk=self.user.pk).check_password("BrandNewPassword456!")
+        )
+
+    def test_link_lives_for_the_admin_configured_window(self) -> None:
+        """AC-104: the expiry is Admin-configurable, not hard-coded."""
+        SystemConfig.objects.create(
+            config_key=PASSWORD_RESET_EXPIRY_MINUTES, config_value="120"
+        )
+        self.request_reset()
+        payload = self.emailed_link_parts(mail.outbox[0])
+
+        # 90 minutes later: outside the 60-minute default, inside 120.
+        with mock.patch(
+            "django.contrib.auth.tokens.PasswordResetTokenGenerator._now",
+            return_value=_DjangoTokenClock()._now() + timedelta(minutes=90),
+        ):
+            response = self.client.post(
+                self.confirm_url,
+                {
+                    "uid": payload["uid"],
+                    "token": payload["token"],
+                    "password": "BrandNewPassword456!",
+                    "password_confirm": "BrandNewPassword456!",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_a_fresh_request_retires_the_previous_link(self) -> None:
+        """Pressing the button twice leaves exactly one live link."""
+        self.request_reset()
+        first_token = self.emailed_link_parts(mail.outbox[0])["token"]
+
+        self.request_reset()
+        second_token = self.emailed_link_parts(mail.outbox[1])["token"]
+
+        stale = self.client.post(
+            self.confirm_url,
+            {
+                "uid": self.uid_for(self.user),
+                "token": first_token,
+                "password": "BrandNewPassword456!",
+                "password_confirm": "BrandNewPassword456!",
+            },
+            format="json",
+        )
+        fresh = self.client.post(
+            self.confirm_url,
+            {
+                "uid": self.uid_for(self.user),
+                "token": second_token,
+                "password": "BrandNewPassword456!",
+                "password_confirm": "BrandNewPassword456!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(stale.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(fresh.status_code, status.HTTP_200_OK)
+
+    def test_a_reset_token_cannot_confirm_a_verification_link(self) -> None:
+        """The generators carry distinct salts; the tokens cannot cross over."""
+        reset_token = password_reset_token_generator().make_token(self.user)
+        self.assertFalse(
+            email_verification_token_generator().check_token(self.user, reset_token)
+        )
+
+    def test_mismatched_password_confirmation_is_refused(self) -> None:
+        response = self.client.post(
+            self.confirm_url,
+            {
+                "uid": self.uid_for(self.user),
+                "token": password_reset_token_generator().make_token(self.user),
+                "password": "BrandNewPassword456!",
+                "password_confirm": "DifferentPassword456!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("password_confirm", response.data)
+
+    def test_weak_new_password_is_refused(self) -> None:
+        response = self.client.post(
+            self.confirm_url,
+            {
+                "uid": self.uid_for(self.user),
+                "token": password_reset_token_generator().make_token(self.user),
+                "password": "password",
+                "password_confirm": "password",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("password", response.data)
+
+    def test_successful_reset_clears_an_active_lockout(self) -> None:
+        self.user.failed_login_attempts = 5
+        self.user.locked_until = timezone.now() + timedelta(minutes=10)
+        self.user.save()
+
+        self.request_reset()
+        payload = self.emailed_link_parts(mail.outbox[0])
+        self.client.post(
+            self.confirm_url,
+            {
+                "uid": payload["uid"],
+                "token": payload["token"],
+                "password": "BrandNewPassword456!",
+                "password_confirm": "BrandNewPassword456!",
+            },
+            format="json",
+        )
+
+        user = User.objects.get(pk=self.user.pk)
+        self.assertEqual(user.failed_login_attempts, 0)
+        self.assertIsNone(user.locked_until)
+
+    def test_reset_blacklists_outstanding_sessions(self) -> None:
+        login = self.client.post(
+            reverse("auth-login"),
+            {"email": self.user.email, "password": "StrongPassword123!"},
+            format="json",
+        )
+        refresh = login.data["tokens"]["refresh"]
+
+        self.request_reset()
+        payload = self.emailed_link_parts(mail.outbox[0])
+        self.client.post(
+            self.confirm_url,
+            {
+                "uid": payload["uid"],
+                "token": payload["token"],
+                "password": "BrandNewPassword456!",
+                "password_confirm": "BrandNewPassword456!",
+            },
+            format="json",
+        )
+
+        refreshed = self.client.post(
+            reverse("auth-token-refresh"), {"refresh": refresh}, format="json"
+        )
+        self.assertEqual(refreshed.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_mail_outage_does_not_fail_the_request(self) -> None:
+        with mock.patch(
+            "apps.users.services.send_mail", side_effect=OSError("smtp down")
+        ):
+            response = self.request_reset()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(User.objects.get(pk=self.user.pk).password_reset_sent_at)
+
+
+# ---------------------------------------------------------------------------
+# CP-1001 â€” Edit profile information
+# ---------------------------------------------------------------------------
+
+
+class ProfileUpdateTests(APITestCase):
+    """CP-1001: persist profile field updates through PATCH /auth/me/."""
+
+    def setUp(self) -> None:
+        self.user = make_user("profile@iskolarngbayan.pup.edu.ph")
+        self.url = reverse("auth-me")
+        self.client.force_authenticate(self.user)
+
+    def test_patch_persists_profile_fields(self) -> None:
+        response = self.client.patch(
+            self.url,
+            {
+                "full_name": "Maria Clara",
+                "contact_number": "+639171234567",
+                "bio": "BSIT student, prefers reviewers over textbooks.",
+                "street_address": "123 Sampaguita St",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        user = User.objects.get(pk=self.user.pk)
+        self.assertEqual(user.full_name, "Maria Clara")
+        self.assertEqual(user.contact_number, "+639171234567")
+        self.assertEqual(user.bio, "BSIT student, prefers reviewers over textbooks.")
+        self.assertEqual(user.street_address, "123 Sampaguita St")
+
+    def test_patch_response_is_the_me_shape(self) -> None:
+        response = self.client.patch(
+            self.url, {"full_name": "Maria Clara"}, format="json"
+        )
+
+        self.assertEqual(response.data["full_name"], "Maria Clara")
+        self.assertEqual(response.data["email"], self.user.email)
+
+    def test_patch_cannot_change_the_email(self) -> None:
+        """Email changes belong to CP-1002's re-verification flow, not a PATCH."""
+        response = self.client.patch(
+            self.url, {"email": "hijack@iskolarngbayan.pup.edu.ph"}, format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(User.objects.get(pk=self.user.pk).email, self.user.email)
+
+    def test_patch_cannot_set_a_password(self) -> None:
+        """Password changes belong to the password-change endpoint."""
+        response = self.client.patch(self.url, {"password": "sneaky"}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(
+            User.objects.get(pk=self.user.pk).check_password("StrongPassword123!")
+        )
+
+    def test_short_full_name_is_rejected(self) -> None:
+        response = self.client.patch(self.url, {"full_name": "A"}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("full_name", response.data)
+
+    def test_bad_contact_number_is_rejected(self) -> None:
+        response = self.client.patch(
+            self.url, {"contact_number": "12345"}, format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("contact_number", response.data)
+
+    def test_province_can_be_set_by_id(self) -> None:
+        from .models import Province
+
+        province = Province.objects.create(name="Metro Manila")
+
+        response = self.client.patch(self.url, {"province": province.pk}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(User.objects.get(pk=self.user.pk).province_id, province.pk)
+
+    def test_requires_authentication(self) -> None:
+        self.client.force_authenticate(user=None)
+
+        response = self.client.patch(self.url, {"full_name": "X"}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class PasswordChangeTests(APITestCase):
+    """CP-1001: change the password from inside the app."""
+
+    def setUp(self) -> None:
+        self.user = make_user("change@iskolarngbayan.pup.edu.ph")
+        self.url = reverse("auth-password-change")
+        self.client.force_authenticate(self.user)
+
+    def change_payload(self, **overrides) -> dict[str, str]:
+        payload = {
+            "current_password": "StrongPassword123!",
+            "new_password": "BrandNewPassword456!",
+            "new_password_confirm": "BrandNewPassword456!",
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_change_rehashes_and_activates_the_new_password(self) -> None:
+        response = self.client.post(self.url, self.change_payload(), format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        user = User.objects.get(pk=self.user.pk)
+        self.assertTrue(user.check_password("BrandNewPassword456!"))
+        self.assertFalse(user.check_password("StrongPassword123!"))
+
+        login = self.client.post(
+            reverse("auth-login"),
+            {"email": self.user.email, "password": "BrandNewPassword456!"},
+            format="json",
+        )
+        self.assertEqual(login.status_code, status.HTTP_200_OK)
+
+    def test_wrong_current_password_is_an_authentication_failure(self) -> None:
+        """D-12: a bad credential is a 401 with a code, not a 400."""
+        response = self.client.post(
+            self.url,
+            self.change_payload(current_password="WrongPassword123!"),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(response.data["code"], "invalid_credentials")
+        self.assertTrue(
+            User.objects.get(pk=self.user.pk).check_password("StrongPassword123!")
+        )
+
+    def test_mismatched_confirmation_is_refused(self) -> None:
+        response = self.client.post(
+            self.url,
+            self.change_payload(new_password_confirm="DifferentPassword456!"),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("new_password_confirm", response.data)
+
+    def test_weak_new_password_is_refused(self) -> None:
+        response = self.client.post(
+            self.url,
+            self.change_payload(
+                new_password="password", new_password_confirm="password"
+            ),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("new_password", response.data)
+
+    def test_change_blacklists_outstanding_sessions(self) -> None:
+        login = self.client.post(
+            reverse("auth-login"),
+            {"email": self.user.email, "password": "StrongPassword123!"},
+            format="json",
+        )
+        refresh = login.data["tokens"]["refresh"]
+
+        self.client.post(self.url, self.change_payload(), format="json")
+
+        refreshed = self.client.post(
+            reverse("auth-token-refresh"), {"refresh": refresh}, format="json"
+        )
+        self.assertEqual(refreshed.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_change_clears_an_active_lockout(self) -> None:
+        self.user.failed_login_attempts = 5
+        self.user.locked_until = timezone.now() + timedelta(minutes=10)
+        self.user.save()
+
+        self.client.post(self.url, self.change_payload(), format="json")
+
+        user = User.objects.get(pk=self.user.pk)
+        self.assertEqual(user.failed_login_attempts, 0)
+        self.assertIsNone(user.locked_until)
+
+    def test_requires_authentication(self) -> None:
+        self.client.force_authenticate(user=None)
+
+        response = self.client.post(self.url, self.change_payload(), format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+# ---------------------------------------------------------------------------
+# CP-1002 â€” Change registered email with re-verification
+# ---------------------------------------------------------------------------
+
+
+class EmailChangeTests(APITestCase):
+    """CP-1002: confirm a new address before it becomes the account's email."""
+
+    NEW_EMAIL = "newaddr@iskolarngbayan.pup.edu.ph"
+
+    def setUp(self) -> None:
+        # Throttled endpoint; reset the throttle cache between test methods.
+        cache.clear()
+        self.user = make_user("current@iskolarngbayan.pup.edu.ph")
+        self.request_url = reverse("auth-email-change")
+        self.confirm_url = reverse("auth-email-change-confirm")
+        self.client.force_authenticate(self.user)
+
+    @staticmethod
+    def uid_for(user: User) -> str:
+        from django.utils.encoding import force_bytes
+        from django.utils.http import urlsafe_base64_encode
+
+        return urlsafe_base64_encode(force_bytes(user.pk))
+
+    @staticmethod
+    def emailed_link_parts(message) -> dict[str, str]:
+        query = parse_qs(message.body.split("?", 1)[1].split()[0])
+        return {key: values[0] for key, values in query.items()}
+
+    def request_change(self, new_email: str | None = None):
+        return self.client.post(
+            self.request_url,
+            {"new_email": new_email or self.NEW_EMAIL},
+            format="json",
+        )
+
+    def test_request_keeps_the_old_email_and_mails_the_new_one(self) -> None:
+        """AC-1002: the previous email stays the account of record until verified."""
+        response = self.request_change()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 1)
+        message = mail.outbox[0]
+        self.assertEqual(message.to, [self.NEW_EMAIL])
+        self.assertIn(self.user.email, message.body)
+
+        user = User.objects.get(pk=self.user.pk)
+        self.assertEqual(user.email, "current@iskolarngbayan.pup.edu.ph")
+        self.assertEqual(user.pending_email, self.NEW_EMAIL)
+
+    def test_old_email_still_logs_in_before_the_change_is_confirmed(self) -> None:
+        self.request_change()
+
+        login = self.client.post(
+            reverse("auth-login"),
+            {"email": self.user.email, "password": "StrongPassword123!"},
+            format="json",
+        )
+        self.assertEqual(login.status_code, status.HTTP_200_OK)
+
+    def test_confirm_swaps_the_addresses(self) -> None:
+        self.request_change()
+        payload = self.emailed_link_parts(mail.outbox[0])
+
+        response = self.client.post(
+            self.confirm_url,
+            {"uid": payload["uid"], "token": payload["token"]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        user = User.objects.get(pk=self.user.pk)
+        self.assertEqual(user.email, self.NEW_EMAIL)
+        self.assertIsNone(user.pending_email)
+        self.assertIsNone(user.email_change_sent_at)
+        self.assertIsNotNone(user.email_verified_at)
+
+    def test_new_email_logs_in_after_the_swap_and_the_old_one_does_not(self) -> None:
+        self.request_change()
+        payload = self.emailed_link_parts(mail.outbox[0])
+        self.client.post(
+            self.confirm_url,
+            {"uid": payload["uid"], "token": payload["token"]},
+            format="json",
+        )
+        self.client.force_authenticate(user=None)
+
+        new_login = self.client.post(
+            reverse("auth-login"),
+            {"email": self.NEW_EMAIL, "password": "StrongPassword123!"},
+            format="json",
+        )
+        old_login = self.client.post(
+            reverse("auth-login"),
+            {
+                "email": "current@iskolarngbayan.pup.edu.ph",
+                "password": "StrongPassword123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(new_login.status_code, status.HTTP_200_OK)
+        self.assertEqual(old_login.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_non_pup_domain_is_rejected(self) -> None:
+        response = self.request_change("someone@gmail.com")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("new_email", response.data)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_domain_mismatching_the_affiliation_is_rejected(self) -> None:
+        """A Student cannot move to @pup.edu.ph: CP-101 would never allow it."""
+        response = self.request_change("newaddr@pup.edu.ph")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("new_email", response.data)
+
+    def test_faculty_account_must_stay_on_faculty_domain(self) -> None:
+        faculty = make_user(
+            "faculty@pup.edu.ph",
+            affiliation=User.AffiliationChoices.FACULTY,
+        )
+        self.client.force_authenticate(faculty)
+
+        response = self.request_change("newaddr@iskolarngbayan.pup.edu.ph")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_another_accounts_email_is_rejected(self) -> None:
+        make_user(self.NEW_EMAIL)
+
+        response = self.request_change()
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("new_email", response.data)
+
+    def test_the_current_email_is_rejected_as_the_new_email(self) -> None:
+        response = self.request_change(self.user.email)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_a_fresh_request_retires_the_previous_link(self) -> None:
+        self.request_change()
+        first_token = self.emailed_link_parts(mail.outbox[0])["token"]
+
+        self.request_change()
+        second_token = self.emailed_link_parts(mail.outbox[1])["token"]
+
+        stale = self.client.post(
+            self.confirm_url,
+            {"uid": self.uid_for(self.user), "token": first_token},
+            format="json",
+        )
+        fresh = self.client.post(
+            self.confirm_url,
+            {"uid": self.uid_for(self.user), "token": second_token},
+            format="json",
+        )
+
+        self.assertEqual(stale.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(fresh.status_code, status.HTTP_200_OK)
+
+    def test_garbage_link_is_refused_generically(self) -> None:
+        response = self.client.post(
+            self.confirm_url, {"uid": "bogus", "token": "bogus"}, format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("invalid or has expired", str(response.data["detail"]))
+
+    def test_confirm_is_refused_when_nobody_has_a_pending_email(self) -> None:
+        response = self.client.post(
+            self.confirm_url,
+            {"uid": self.uid_for(self.user), "token": "anything-at-all-0"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("invalid or has expired", str(response.data["detail"]))
+
+    def test_confirm_is_refused_if_the_pending_email_was_taken(self) -> None:
+        """The address is re-checked at swap time; the world may have moved."""
+        self.request_change()
+        payload = self.emailed_link_parts(mail.outbox[0])
+        make_user(self.NEW_EMAIL)
+
+        response = self.client.post(
+            self.confirm_url,
+            {"uid": payload["uid"], "token": payload["token"]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            User.objects.get(pk=self.user.pk).email, "current@iskolarngbayan.pup.edu.ph"
+        )
+
+    def test_an_email_change_token_cannot_verify_an_account(self) -> None:
+        token = email_change_token_generator().make_token(self.user)
+        self.assertFalse(
+            email_verification_token_generator().check_token(self.user, token)
+        )
+
+
+# ---------------------------------------------------------------------------
+# CP-1004 â€” Deactivate account
+# ---------------------------------------------------------------------------
+
+
+class AccountDeactivationTests(APITestCase):
+    """CP-1004: close the account, but only once everything outstanding is settled."""
+
+    def setUp(self) -> None:
+        self.user = make_user("closing@iskolarngbayan.pup.edu.ph")
+        self.url = reverse("auth-deactivate")
+        self.client.force_authenticate(self.user)
+
+    def deactivate(self):
+        """Close the account with the password the endpoint now requires."""
+        return self.client.post(
+            self.url, {"password": "StrongPassword123!"}, format="json"
+        )
+
+    @staticmethod
+    def ensure_order_status(name: str) -> OrderStatus:
+        status_row, _ = OrderStatus.objects.get_or_create(name=name)
+        return status_row
+
+    @staticmethod
+    def make_listing(lender: User) -> Listing:
+        category, _ = ListingCategory.objects.get_or_create(name="Textbooks")
+        location, _ = PickupLocation.objects.get_or_create(name="Main Gate")
+        listing_status, _ = ListingStatus.objects.get_or_create(name="active")
+        return Listing.objects.create(
+            lender=lender,
+            title="Calculus textbook",
+            description="2nd edition, light highlighting.",
+            category=category,
+            condition="Good",
+            pickup_location=location,
+            status=listing_status,
+        )
+
+    def make_order(
+        self, borrower: User, listing: Listing, status_name: str = "requested"
+    ) -> Order:
+        return Order.objects.create(
+            listing=listing,
+            borrower=borrower,
+            start_date=timezone.localdate(),
+            end_date=timezone.localdate() + timedelta(days=2),
+            status=self.ensure_order_status(status_name),
+        )
+
+    @staticmethod
+    def make_case(order: Order, status_name: str = "open") -> UnreturnedCase:
+        case_status, _ = UnreturnedCaseStatus.objects.get_or_create(name=status_name)
+        return UnreturnedCase.objects.create(order=order, status=case_status)
+
+    def test_deactivation_succeeds_with_nothing_outstanding(self) -> None:
+        response = self.deactivate()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        user = User.objects.get(pk=self.user.pk)
+        self.assertEqual(user.account_status, User.AccountStatusChoices.DEACTIVATED)
+        self.assertFalse(user.is_active)
+
+    def test_deactivation_requires_the_password(self) -> None:
+        """BE-BUG-2004: the token alone used to be enough."""
+        response = self.client.post(self.url, {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("password", response.data)
+        user = User.objects.get(pk=self.user.pk)
+        self.assertTrue(user.is_active)
+        self.assertEqual(user.account_status, User.AccountStatusChoices.ACTIVE)
+
+    def test_a_wrong_password_does_not_deactivate(self) -> None:
+        response = self.client.post(
+            self.url, {"password": "NotMyPassword123!"}, format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(response.data["code"], "invalid_credentials")
+        user = User.objects.get(pk=self.user.pk)
+        self.assertTrue(user.is_active)
+        self.assertEqual(user.account_status, User.AccountStatusChoices.ACTIVE)
+
+    def test_a_wrong_password_is_rejected_before_the_blockers(self) -> None:
+        """A stolen token cannot use the blocker counts to probe the account."""
+        lender = make_user("lender@iskolarngbayan.pup.edu.ph")
+        self.make_order(self.user, self.make_listing(lender), "requested")
+
+        response = self.client.post(
+            self.url, {"password": "NotMyPassword123!"}, format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertNotIn("open_orders", response.data)
+
+    def test_deactivated_account_cannot_log_in(self) -> None:
+        self.deactivate()
+        self.client.force_authenticate(user=None)
+
+        login = self.client.post(
+            reverse("auth-login"),
+            {"email": self.user.email, "password": "StrongPassword123!"},
+            format="json",
+        )
+
+        self.assertEqual(login.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(login.data["code"], "inactive")
+
+    def test_deactivation_blacklists_outstanding_sessions(self) -> None:
+        login = self.client.post(
+            reverse("auth-login"),
+            {"email": self.user.email, "password": "StrongPassword123!"},
+            format="json",
+        )
+        refresh = login.data["tokens"]["refresh"]
+
+        self.deactivate()
+
+        refreshed = self.client.post(
+            reverse("auth-token-refresh"), {"refresh": refresh}, format="json"
+        )
+        self.assertEqual(refreshed.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_open_borrowed_order_blocks_deactivation(self) -> None:
+        lender = make_user("lender@iskolarngbayan.pup.edu.ph")
+        self.make_order(self.user, self.make_listing(lender), "requested")
+
+        response = self.deactivate()
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["open_orders"], 1)
+        self.assertIn("open orders", response.data["detail"])
+        user = User.objects.get(pk=self.user.pk)
+        self.assertTrue(user.is_active)
+        self.assertEqual(user.account_status, User.AccountStatusChoices.ACTIVE)
+
+    def test_open_lender_side_order_blocks_deactivation(self) -> None:
+        """A Lender with an in-flight borrow of their own item cannot vanish."""
+        borrower = make_user("borrower@iskolarngbayan.pup.edu.ph")
+        self.make_order(borrower, self.make_listing(self.user), "confirmed")
+
+        response = self.deactivate()
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["open_orders"], 1)
+
+    def test_open_unreturned_case_blocks_deactivation(self) -> None:
+        lender = make_user("lender@iskolarngbayan.pup.edu.ph")
+        order = self.make_order(self.user, self.make_listing(lender), "unreturned")
+        self.make_case(order, "open")
+
+        response = self.deactivate()
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["open_unreturned_cases"], 1)
+
+    def test_every_in_flight_status_blocks(self) -> None:
+        """Requested, confirmed, active, overdue and unreturned all count as open."""
+        lender = make_user("lender@iskolarngbayan.pup.edu.ph")
+        listing = self.make_listing(lender)
+        for status_name in (
+            "requested",
+            "confirmed",
+            "active",
+            "overdue",
+            "unreturned",
+        ):
+            self.make_order(self.user, listing, status_name)
+
+        response = self.deactivate()
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["open_orders"], 5)
+
+    def test_terminal_orders_do_not_block(self) -> None:
+        lender = make_user("lender@iskolarngbayan.pup.edu.ph")
+        listing = self.make_listing(lender)
+        for status_name in ("completed", "declined", "cancelled", "expired"):
+            self.make_order(self.user, listing, status_name)
+
+        response = self.deactivate()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_resolved_unreturned_case_does_not_block(self) -> None:
+        lender = make_user("lender@iskolarngbayan.pup.edu.ph")
+        order = self.make_order(self.user, self.make_listing(lender), "completed")
+        self.make_case(order, "returned")
+
+        response = self.deactivate()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_requires_authentication(self) -> None:
+        self.client.force_authenticate(user=None)
+
+        response = self.deactivate()
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class LenderSearchTests(APITestCase):
+    """
+    Test suite for CP-302: Search for Lenders.
+    Covers name search query logic, exclusion of suspended/revoked lenders and non-lenders,
+    annotation of active listing counts, and strict privacy boundaries.
+    """
+
+    def setUp(self) -> None:
+        self.search_url = reverse("lender-search")
+
+        self.caller = User.objects.create_user(
+            email="caller@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Caller Student",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.caller.account_status = User.AccountStatusChoices.ACTIVE
+        self.caller.save(update_fields=["account_status"])
+
+        # Eligible Lender 1: Juan Dela Cruz (Active, 2 active listings + 1 deactivated)
+        self.lender_juan = User.objects.create_user(
+            email="juan.lender@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Juan Dela Cruz",
+            affiliation=User.AffiliationChoices.STUDENT,
+            bio="Engineering student with spare calculators and books",
+        )
+        self.lender_juan.account_status = User.AccountStatusChoices.ACTIVE
+        self.lender_juan.lender_status = User.LenderStatusChoices.ACTIVE
+        self.lender_juan.save(update_fields=["account_status", "lender_status"])
+
+        # Eligible Lender 2: Maria Santos (Active, 0 listings)
+        self.lender_maria = User.objects.create_user(
+            email="maria.lender@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Maria Santos",
+            affiliation=User.AffiliationChoices.FACULTY,
+            bio="Physics faculty member",
+        )
+        self.lender_maria.account_status = User.AccountStatusChoices.ACTIVE
+        self.lender_maria.lender_status = User.LenderStatusChoices.ACTIVE
+        self.lender_maria.save(update_fields=["account_status", "lender_status"])
+
+        # Ineligible 1: Non-lender (lender_status='none')
+        self.borrower_pedro = User.objects.create_user(
+            email="pedro.borrower@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Pedro Borrower",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.borrower_pedro.account_status = User.AccountStatusChoices.ACTIVE
+        self.borrower_pedro.lender_status = User.LenderStatusChoices.NONE
+        self.borrower_pedro.save(update_fields=["account_status", "lender_status"])
+
+        # Ineligible 2: Suspended Lender
+        self.suspended_juan = User.objects.create_user(
+            email="suspended.juan@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Suspended Juan",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.suspended_juan.account_status = User.AccountStatusChoices.SUSPENDED
+        self.suspended_juan.lender_status = User.LenderStatusChoices.ACTIVE
+        self.suspended_juan.save(update_fields=["account_status", "lender_status"])
+
+        # Ineligible 3: Banned Lender
+        self.banned_lender = User.objects.create_user(
+            email="banned.lender@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Banned Lender",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.banned_lender.account_status = User.AccountStatusChoices.BANNED
+        self.banned_lender.lender_status = User.LenderStatusChoices.ACTIVE
+        self.banned_lender.save(update_fields=["account_status", "lender_status"])
+
+        # Ineligible 4: Revoked Lender
+        self.revoked_lender = User.objects.create_user(
+            email="revoked.lender@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Revoked Lender",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.revoked_lender.account_status = User.AccountStatusChoices.ACTIVE
+        self.revoked_lender.lender_status = User.LenderStatusChoices.REVOKED
+        self.revoked_lender.save(update_fields=["account_status", "lender_status"])
+
+        # Ineligible 5: Deactivated User
+        self.deactivated_user = User.objects.create_user(
+            email="deactivated.user@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Deactivated User",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.deactivated_user.account_status = User.AccountStatusChoices.DEACTIVATED
+        self.deactivated_user.lender_status = User.LenderStatusChoices.ACTIVE
+        self.deactivated_user.save(update_fields=["account_status", "lender_status"])
+
+        # Set up Listings for Juan
+        from apps.listings.models import (
+            Listing,
+            ListingCategory,
+            ListingStatus,
+            PickupLocation,
+        )
+
+        cat, _ = ListingCategory.objects.get_or_create(name="Textbooks")
+        loc = PickupLocation.objects.create(name="Main Library")
+        status_active, _ = ListingStatus.objects.get_or_create(name="active")
+        status_deactivated, _ = ListingStatus.objects.get_or_create(name="deactivated")
+
+        Listing.objects.create(
+            lender=self.lender_juan,
+            title="Calculus Vol 1",
+            description="Book 1",
+            category=cat,
+            pickup_location=loc,
+            status=status_active,
+            condition="Good",
+        )
+        Listing.objects.create(
+            lender=self.lender_juan,
+            title="Calculus Vol 2",
+            description="Book 2",
+            category=cat,
+            pickup_location=loc,
+            status=status_active,
+            condition="Good",
+        )
+        Listing.objects.create(
+            lender=self.lender_juan,
+            title="Old Notes",
+            description="Deactivated item",
+            category=cat,
+            pickup_location=loc,
+            status=status_deactivated,
+            condition="Fair",
+        )
+
+    def test_unauthenticated_request_is_denied(self) -> None:
+        """Unauthenticated request is rejected with 401."""
+        response = self.client.get(self.search_url)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_search_all_returns_only_active_eligible_lenders(self) -> None:
+        """Search returns only active accounts with active lender status."""
+        self.client.force_authenticate(user=self.caller)
+        response = self.client.get(self.search_url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 2)
+
+        returned_ids = [item["id"] for item in response.data["results"]]
+        self.assertIn(self.lender_juan.id, returned_ids)
+        self.assertIn(self.lender_maria.id, returned_ids)
+
+        self.assertNotIn(self.borrower_pedro.id, returned_ids)
+        self.assertNotIn(self.suspended_juan.id, returned_ids)
+        self.assertNotIn(self.banned_lender.id, returned_ids)
+        self.assertNotIn(self.revoked_lender.id, returned_ids)
+        self.assertNotIn(self.deactivated_user.id, returned_ids)
+
+    def test_keyword_search_by_name(self) -> None:
+        """Query parameter ?q= filters lenders by full_name case-insensitively."""
+        self.client.force_authenticate(user=self.caller)
+
+        # "Juan" matches "Juan Dela Cruz", but "Suspended Juan" must remain excluded
+        response = self.client.get(self.search_url, {"q": "Juan"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["id"], self.lender_juan.id)
+
+        # "maria" (lowercase) matches "Maria Santos"
+        response2 = self.client.get(self.search_url, {"q": "maria"})
+        self.assertEqual(response2.status_code, status.HTTP_200_OK)
+        self.assertEqual(response2.data["count"], 1)
+        self.assertEqual(response2.data["results"][0]["id"], self.lender_maria.id)
+
+        # Nonexistent name
+        response3 = self.client.get(self.search_url, {"q": "Nobody Here"})
+        self.assertEqual(response3.status_code, status.HTTP_200_OK)
+        self.assertEqual(response3.data["count"], 0)
+
+    def test_active_listing_count_annotation(self) -> None:
+        """Active listing count accurately counts only active listings per lender."""
+        self.client.force_authenticate(user=self.caller)
+        response = self.client.get(self.search_url)
+
+        results_by_id = {item["id"]: item for item in response.data["results"]}
+        # Juan has 2 active and 1 deactivated -> active_listing_count == 2
+        self.assertEqual(results_by_id[self.lender_juan.id]["active_listing_count"], 2)
+        # Maria has 0 listings -> active_listing_count == 0
+        self.assertEqual(results_by_id[self.lender_maria.id]["active_listing_count"], 0)
+
+    def test_no_private_data_leaked(self) -> None:
+        """Lender search responses omit sensitive contact and document information."""
+        self.client.force_authenticate(user=self.caller)
+        response = self.client.get(self.search_url)
+
+        for lender_item in response.data["results"]:
+            self.assertIn("id", lender_item)
+            self.assertIn("full_name", lender_item)
+            self.assertIn("affiliation", lender_item)
+            self.assertIn("bio", lender_item)
+            self.assertIn("active_listing_count", lender_item)
+
+            # Strictly forbidden fields
+            self.assertNotIn("email", lender_item)
+            self.assertNotIn("contact_number", lender_item)
+            self.assertNotIn("street_address", lender_item)
+            self.assertNotIn("password", lender_item)
+
+
+class LenderProfileTests(APITestCase):
+    """
+    Test suite for CP-304: View public Lender profile.
+    Covers fetching public lender profile, average rating calculation from completed orders,
+    active listing display, exclusion of suspended/revoked lenders (404),
+    and strict privacy protection.
+    """
+
+    def setUp(self) -> None:
+        from apps.listings.models import (
+            Listing,
+            ListingCategory,
+            ListingStatus,
+            PickupLocation,
+        )
+        from apps.orders.models import Order, OrderStatus
+        from apps.reviews.models import Review
+
+        self.caller = User.objects.create_user(
+            email="profile.caller@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Caller Student",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.caller.account_status = User.AccountStatusChoices.ACTIVE
+        self.caller.save(update_fields=["account_status"])
+
+        # Eligible Lender: Juan Dela Cruz
+        self.lender = User.objects.create_user(
+            email="juan.profile@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Juan Dela Cruz",
+            affiliation=User.AffiliationChoices.STUDENT,
+            bio="Engineering major, happy to lend lab items and textbooks",
+        )
+        self.lender.account_status = User.AccountStatusChoices.ACTIVE
+        self.lender.lender_status = User.LenderStatusChoices.ACTIVE
+        self.lender.save(update_fields=["account_status", "lender_status"])
+
+        # Borrower 1 & Borrower 2
+        self.borrower1 = User.objects.create_user(
+            email="borrower1@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Borrower One",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.borrower1.account_status = User.AccountStatusChoices.ACTIVE
+        self.borrower1.save(update_fields=["account_status"])
+
+        self.borrower2 = User.objects.create_user(
+            email="borrower2@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Borrower Two",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.borrower2.account_status = User.AccountStatusChoices.ACTIVE
+        self.borrower2.save(update_fields=["account_status"])
+
+        # Ineligible Users
+        self.regular_borrower = User.objects.create_user(
+            email="reg.borrower@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Regular Borrower",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.regular_borrower.account_status = User.AccountStatusChoices.ACTIVE
+        self.regular_borrower.lender_status = User.LenderStatusChoices.NONE
+        self.regular_borrower.save(update_fields=["account_status", "lender_status"])
+
+        self.suspended_lender = User.objects.create_user(
+            email="suspended.prof@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Suspended Lender",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.suspended_lender.account_status = User.AccountStatusChoices.SUSPENDED
+        self.suspended_lender.lender_status = User.LenderStatusChoices.ACTIVE
+        self.suspended_lender.save(update_fields=["account_status", "lender_status"])
+
+        self.revoked_lender = User.objects.create_user(
+            email="revoked.prof@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Revoked Lender",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        self.revoked_lender.account_status = User.AccountStatusChoices.ACTIVE
+        self.revoked_lender.lender_status = User.LenderStatusChoices.REVOKED
+        self.revoked_lender.save(update_fields=["account_status", "lender_status"])
+
+        # Listings for Juan
+        cat, _ = ListingCategory.objects.get_or_create(name="Textbooks")
+        loc = PickupLocation.objects.create(name="East Wing")
+        status_active, _ = ListingStatus.objects.get_or_create(name="active")
+        status_deactivated, _ = ListingStatus.objects.get_or_create(name="deactivated")
+
+        self.listing1 = Listing.objects.create(
+            lender=self.lender,
+            title="Calculus Vol 1",
+            description="Book 1",
+            category=cat,
+            pickup_location=loc,
+            status=status_active,
+            condition="Good",
+            rate_per_day=20.00,
+        )
+        self.listing2 = Listing.objects.create(
+            lender=self.lender,
+            title="Physics Vol 1",
+            description="Book 2",
+            category=cat,
+            pickup_location=loc,
+            status=status_active,
+            condition="Like New",
+            rate_per_day=25.00,
+        )
+        self.listing_deactivated = Listing.objects.create(
+            lender=self.lender,
+            title="Deactivated Chemistry Book",
+            description="Book 3",
+            category=cat,
+            pickup_location=loc,
+            status=status_deactivated,
+            condition="Fair",
+            rate_per_day=10.00,
+        )
+
+        # Orders & Reviews
+        order_completed, _ = OrderStatus.objects.get_or_create(name="completed")
+
+        order1 = Order.objects.create(
+            listing=self.listing1,
+            borrower=self.borrower1,
+            start_date=timezone.now().date(),
+            end_date=timezone.now().date(),
+            status=order_completed,
+        )
+        order2 = Order.objects.create(
+            listing=self.listing2,
+            borrower=self.borrower2,
+            start_date=timezone.now().date(),
+            end_date=timezone.now().date(),
+            status=order_completed,
+        )
+
+        # Review 1: Borrower 1 rates Juan 5 stars
+        Review.objects.create(
+            order=order1,
+            reviewer=self.borrower1,
+            rating=5,
+            comment="Great lender! Fast handover.",
+        )
+
+        # Review 2: Borrower 2 rates Juan 4 stars
+        Review.objects.create(
+            order=order2,
+            reviewer=self.borrower2,
+            rating=4,
+            comment="Book was in great condition.",
+        )
+
+        # Review 3: Juan rates Borrower 1 3 stars (about borrower, must NOT be counted in Juan's rating)
+        Review.objects.create(
+            order=order1,
+            reviewer=self.lender,
+            rating=3,
+            comment="Returned a bit late.",
+        )
+
+        # Review 4: Deleted review (must NOT be counted)
+        order3 = Order.objects.create(
+            listing=self.listing1,
+            borrower=self.borrower2,
+            start_date=timezone.now().date(),
+            end_date=timezone.now().date(),
+            status=order_completed,
+        )
+        Review.objects.create(
+            order=order3,
+            reviewer=self.borrower2,
+            rating=1,
+            comment="Deleted complaint",
+            deleted_at=timezone.now(),
+        )
+
+        self.profile_url = reverse("lender-profile", kwargs={"pk": self.lender.pk})
+
+    def test_unauthenticated_request_is_denied(self) -> None:
+        """Unauthenticated caller cannot view lender profile (401)."""
+        response = self.client.get(self.profile_url)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_get_lender_profile_success(self) -> None:
+        """Fetches lender profile with correct rating average and active listings."""
+        self.client.force_authenticate(user=self.caller)
+        response = self.client.get(self.profile_url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["id"], self.lender.pk)
+        self.assertEqual(response.data["full_name"], "Juan Dela Cruz")
+        self.assertEqual(response.data["affiliation"], "Student")
+        self.assertEqual(
+            response.data["bio"],
+            "Engineering major, happy to lend lab items and textbooks",
+        )
+
+        # Rating: (5 + 4) / 2 = 4.5
+        self.assertEqual(response.data["average_rating"], 4.5)
+        self.assertEqual(response.data["review_count"], 2)
+
+        # Active listings: listing1 and listing2 only (deactivated excluded)
+        active_listings = response.data["active_listings"]
+        self.assertEqual(len(active_listings), 2)
+        listing_ids = [item["id"] for item in active_listings]
+        self.assertIn(self.listing1.id, listing_ids)
+        self.assertIn(self.listing2.id, listing_ids)
+        self.assertNotIn(self.listing_deactivated.id, listing_ids)
+
+    def test_lender_with_no_reviews_returns_none_rating_and_zero_count(self) -> None:
+        """Lender without reviews returns average_rating=None and review_count=0."""
+        new_lender = User.objects.create_user(
+            email="new.lender@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="New Lender",
+            affiliation=User.AffiliationChoices.STUDENT,
+        )
+        new_lender.account_status = User.AccountStatusChoices.ACTIVE
+        new_lender.lender_status = User.LenderStatusChoices.ACTIVE
+        new_lender.save(update_fields=["account_status", "lender_status"])
+
+        url = reverse("lender-profile", kwargs={"pk": new_lender.pk})
+        self.client.force_authenticate(user=self.caller)
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(response.data["average_rating"])
+        self.assertEqual(response.data["review_count"], 0)
+        self.assertEqual(response.data["active_listings"], [])
+
+    def test_ineligible_lenders_return_404(self) -> None:
+        """Non-existent, non-lender, suspended, or revoked users return 404 (Rule 9)."""
+        self.client.force_authenticate(user=self.caller)
+
+        # Non-existent user
+        res_nonexistent = self.client.get(
+            reverse("lender-profile", kwargs={"pk": 999999})
+        )
+        self.assertEqual(res_nonexistent.status_code, status.HTTP_404_NOT_FOUND)
+
+        # Regular borrower (lender_status='none')
+        res_borrower = self.client.get(
+            reverse("lender-profile", kwargs={"pk": self.regular_borrower.pk})
+        )
+        self.assertEqual(res_borrower.status_code, status.HTTP_404_NOT_FOUND)
+
+        # Suspended lender
+        res_suspended = self.client.get(
+            reverse("lender-profile", kwargs={"pk": self.suspended_lender.pk})
+        )
+        self.assertEqual(res_suspended.status_code, status.HTTP_404_NOT_FOUND)
+
+        # Revoked lender
+        res_revoked = self.client.get(
+            reverse("lender-profile", kwargs={"pk": self.revoked_lender.pk})
+        )
+        self.assertEqual(res_revoked.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_privacy_no_private_contact_leaked(self) -> None:
+        """Lender profile strictly excludes private contact information."""
+        self.client.force_authenticate(user=self.caller)
+        response = self.client.get(self.profile_url)
+
+        self.assertNotIn("email", response.data)
+        self.assertNotIn("contact_number", response.data)
+        self.assertNotIn("street_address", response.data)
+        self.assertNotIn("password", response.data)
+
+
+class AdminPortalSmokeTests(APITestCase):
+    """The /portal/ admin surface renders for staff and rejects everyone else."""
+
+    def setUp(self) -> None:
+        self.login_url = reverse("portal-login")
+        self.dashboard_url = reverse("portal-dashboard")
+        self.staff = User.objects.create_superuser(
+            email="portaladmin@pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Portal Admin",
+        )
+        self.regular = User.objects.create_user(
+            email="student@iskolarngbayan.pup.edu.ph",
+            password="StrongPassword123!",
+            full_name="Regular Student",
+        )
+
+    def test_login_page_renders_publicly(self) -> None:
+        response = self.client.get(self.login_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_dashboard_redirects_anonymous_to_login(self) -> None:
+        response = self.client.get(self.dashboard_url)
+        self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+        self.assertIn("portal/login", response.url)
+
+    def test_dashboard_renders_for_staff(self) -> None:
+        self.client.force_login(self.staff)
+        response = self.client.get(self.dashboard_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_non_staff_is_bounced_to_login(self) -> None:
+        self.client.force_login(self.regular)
+        response = self.client.get(self.dashboard_url)
+        self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+        self.assertIn("portal/login", response.url)
+
+
+# ---------------------------------------------------------------------------
+# CP-1003 -- Apply for the Lender role
+# ---------------------------------------------------------------------------
+
+
+class ApplyLenderTests(APITestCase):
+    """TC-100: a verified borrower can apply for the Lender role."""
+
+    def setUp(self) -> None:
+        self.url = reverse("auth-apply-lender")
+        self.user = make_user("borrower@iskolarngbayan.pup.edu.ph")
+        self.client.force_authenticate(self.user)
+
+    def approve_identity(self, user: User) -> None:
+        IdentityDocument.objects.create(
+            user=user,
+            document_type=IdentityDocumentType.objects.get(name="pup_id"),
+            id_number="APPROVED-LENDER-1",
+            document_data=PNG_BYTES,
+            status=IdentityDocumentStatus.objects.get(name="approved"),
+            consent_given=True,
+            consented_at=timezone.now(),
+        )
+
+    def test_a_verified_borrower_is_granted_the_lender_role(self) -> None:
+        self.approve_identity(self.user)
+        self.assertEqual(self.user.lender_status, User.LenderStatusChoices.NONE)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.lender_status, User.LenderStatusChoices.ACTIVE)
+
+    def test_the_response_echoes_the_new_lender_status(self) -> None:
+        self.approve_identity(self.user)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(
+            response.data["user"]["lender_status"],
+            User.LenderStatusChoices.ACTIVE,
+        )
+
+    def test_an_unverified_user_is_refused(self) -> None:
+        """Email verification (CP-102) is not identity verification (CP-105)."""
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Identity verification", str(response.data["detail"]))
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.lender_status, User.LenderStatusChoices.NONE)
+
+    def test_a_pending_document_is_not_enough(self) -> None:
+        IdentityDocument.objects.create(
+            user=self.user,
+            document_type=IdentityDocumentType.objects.get(name="pup_id"),
+            id_number="PENDING-LENDER-1",
+            document_data=PNG_BYTES,
+            status=IdentityDocumentStatus.objects.get(name="pending"),
+            consent_given=True,
+            consented_at=timezone.now(),
+        )
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.lender_status, User.LenderStatusChoices.NONE)
+
+    def test_an_inactive_account_is_refused(self) -> None:
+        self.approve_identity(self.user)
+        self.user.account_status = User.AccountStatusChoices.SUSPENDED
+        self.user.save(update_fields=["account_status"])
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.lender_status, User.LenderStatusChoices.NONE)
+
+    def test_applying_twice_is_refused(self) -> None:
+        self.approve_identity(self.user)
+        self.client.post(self.url)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("already a lender", str(response.data["detail"]))
+
+    def test_a_revoked_lender_cannot_re_apply(self) -> None:
+        """Revocation is a trust decision; re-applying would undo it."""
+        self.approve_identity(self.user)
+        self.user.lender_status = User.LenderStatusChoices.REVOKED
+        self.user.save(update_fields=["lender_status"])
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.lender_status, User.LenderStatusChoices.REVOKED)
+
+    def test_an_anonymous_caller_is_denied(self) -> None:
+        self.client.force_authenticate(None)
+
+        response = self.client.post(self.url)
+
+        self.assertIn(
+            response.status_code,
+            (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN),
+        )

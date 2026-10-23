@@ -194,10 +194,26 @@ erDiagram
         date end_date
     }
 
+    BLOCKED_DATE_RANGES {
+        int id PK
+        int listing_id FK
+        int order_id FK "nullable (CP-403)"
+        date start_date
+        date end_date
+        string reason
+        datetime created_at
+    }
+
+    ORDERS {
+        int id PK
+    }
+
     USERS ||--o{ LISTINGS : "owns (lender_id)"
     PICKUP_LOCATIONS ||--o{ LISTINGS : "is used by"
     LISTINGS ||--o{ LISTING_PHOTOS : has
     LISTINGS ||--o{ AVAILABILITY_WINDOWS : has
+    LISTINGS ||--o{ BLOCKED_DATE_RANGES : "is blocked on"
+    ORDERS ||--o{ BLOCKED_DATE_RANGES : "blocks dates while active"
 ```
 
 ---

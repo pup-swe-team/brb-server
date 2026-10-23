@@ -1,0 +1,61 @@
+{% extends "admin_portal/shell.html" %}
+{% block title %}Categories &middot; CoPUPAdmin{% endblock %}
+{% block content %}
+<nav class="crumbs" aria-label="Breadcrumb"><span>Configuration</span> / <a href="{% url 'portal-listing-categories' %}">Categories</a></nav>
+<div class="page-heading">
+  <h1>Categories</h1>
+</div>
+
+<div class="card">
+  <h2>{% if editing %}Edit &ldquo;{{ editing.name }}&rdquo;{% else %}Add a category{% endif %}</h2>
+  <form method="post" novalidate>
+    {% csrf_token %}
+    <div class="field {% if form.name.errors %}is-invalid{% endif %}">
+      <label for="{{ form.name.id_for_label }}">Category name <em>*</em></label>
+      {{ form.name }}
+      {% for error in form.name.errors %}<span class="field-error">{{ error }}</span>{% endfor %}
+    </div>
+    <div class="field {% if form.description.errors %}is-invalid{% endif %}">
+      <label for="{{ form.description.id_for_label }}">Description</label>
+      {{ form.description }}
+      {% for error in form.description.errors %}<span class="field-error">{{ error }}</span>{% endfor %}
+    </div>
+    <button class="btn btn-primary" type="submit">{% if editing %}Save changes{% else %}Add category{% endif %}</button>
+    {% if editing %}<a class="btn btn-ghost" href="{% url 'portal-listing-categories' %}">Cancel</a>{% endif %}
+  </form>
+</div>
+
+<div class="card">
+  <h2>Categories ({{ categories|length }})</h2>
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Name</th><th>Description</th><th>Listings</th><th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for category in categories %}
+        <tr>
+          <td data-label="Name">{{ category.name }}</td>
+          <td data-label="Description">{{ category.description|default:"—" }}</td>
+          <td data-label="Listings">{{ category.listing_count }}</td>
+          <td data-label="Actions">
+            <div class="row-actions">
+              <a class="link" href="{% url 'portal-listing-category-edit' category.pk %}">Edit</a>
+              <form method="post" action="{% url 'portal-listing-category-delete' category.pk %}">
+                {% csrf_token %}
+                <button class="btn btn-ghost" type="submit">Remove</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="4" class="table-empty">No categories yet. Lenders cannot publish a listing until at least one category exists.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="empty-note">Categories feed the category dropdown of the listing-creation form and the category filter of search. A category that already has listings cannot be removed &mdash; rename it instead.</p>
+</div>
+{% endblock %}

@@ -2,6 +2,7 @@ import typing
 
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser, BaseUserManager
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
@@ -77,6 +78,18 @@ class UserManager(BaseUserManager):
         if extra_fields.get("is_superuser") is not True:
             raise ValueError("Superuser must have is_superuser=True.")
 
+        # Administrator accounts are limited to the faculty/staff PUP domain
+        # (same rule the Django Admin "add user" form enforces via clean()).
+        admin_domain = getattr(
+            settings, "ALLOWED_FACULTY_EMAIL_DOMAIN", "pup.edu.ph"
+        ).lower()
+        email_domain = email.lower().rsplit("@", 1)[-1] if "@" in email else email
+        if email_domain != admin_domain:
+            raise ValueError(
+                f"Superuser email must use an @{admin_domain} address; "
+                f"got @{email_domain}."
+            )
+
         return self.create_user(email, password, **extra_fields)
 
 
@@ -119,6 +132,23 @@ class User(AbstractUser):
     bio = models.TextField(blank=True, null=True)
     photo = models.ImageField(upload_to="profile_photos/", blank=True, null=True)
     email_verified_at = models.DateTimeField(blank=True, null=True)
+    # When the confirmation email was last dispatched. Folded into the CP-102
+    # token hash (see apps/users/tokens.py), so each resend mints a different
+    # token and the link already sitting in the inbox stops verifying
+    # (F-BUG-0002-001). Nullable, so the migration is a backward-compatible add.
+    email_verification_sent_at = models.DateTimeField(blank=True, null=True)
+    # CP-104: when the password-reset link was last mailed. Folded into the
+    # reset token's HMAC (see apps/users/tokens.py) exactly the way
+    # `email_verification_sent_at` is, so requesting a new link retires the
+    # one already in the inbox. Nullable, backward-compatible add.
+    password_reset_sent_at = models.DateTimeField(blank=True, null=True)
+    # CP-1002: the address the user asked to move to. `email` remains the
+    # account of record until the new address is confirmed through the mailed
+    # link, so a pending change can never lock anyone out of the account.
+    pending_email = models.EmailField(blank=True, null=True)
+    # CP-1002: when the confirmation email for `pending_email` was last
+    # dispatched; the same supersession role as `email_verification_sent_at`.
+    email_change_sent_at = models.DateTimeField(blank=True, null=True)
     account_status = models.CharField(
         max_length=20,
         choices=AccountStatusChoices.choices,
@@ -159,7 +189,6 @@ class User(AbstractUser):
     REQUIRED_FIELDS: typing.ClassVar[list[str]] = [
         "full_name",
         "contact_number",
-        "affiliation",
     ]
 
     class Meta:
@@ -169,6 +198,24 @@ class User(AbstractUser):
 
     def __str__(self) -> str:
         return f"{self.full_name} ({self.email})"
+
+    def clean(self) -> None:
+        """Form-level validation (runs on every Django Admin add/edit user)."""
+        super().clean()
+        if self.is_staff and "@" in (self.email or ""):
+            admin_domain = getattr(
+                settings, "ALLOWED_FACULTY_EMAIL_DOMAIN", "pup.edu.ph"
+            ).lower()
+            email_domain = self.email.lower().rsplit("@", 1)[-1]
+            if email_domain != admin_domain:
+                raise ValidationError(
+                    {
+                        "email": (
+                            "Administrator accounts must use an @"
+                            f"{admin_domain} address."
+                        )
+                    }
+                )
 
     @property
     def is_email_verified(self) -> bool:

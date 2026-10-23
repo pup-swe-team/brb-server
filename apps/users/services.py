@@ -4,24 +4,32 @@ from datetime import timedelta
 from django.conf import settings
 from django.core.mail import send_mail
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 
 from apps.core.constants import (
     DEFAULT_EMAIL_VERIFICATION_EXPIRY_DAYS,
+    DEFAULT_PASSWORD_RESET_EXPIRY_MINUTES,
     EMAIL_VERIFICATION_EXPIRY_DAYS,
+    PASSWORD_RESET_EXPIRY_MINUTES,
 )
 from apps.core.selectors import get_int_config
 from apps.notifications.constants import NOTIFICATION_TYPE_VERIFICATION_RESULT
 from apps.notifications.models import Notification, NotificationType
+from apps.orders.models import Order, UnreturnedCase
 
 from .constants import (
     IDENTITY_DOCUMENT_STATUS_APPROVED,
     IDENTITY_DOCUMENT_STATUS_REJECTED,
 )
 from .models import IdentityDocument, IdentityDocumentStatus, User
-from .tokens import EmailVerificationTokenGenerator
+from .tokens import (
+    EmailChangeTokenGenerator,
+    EmailVerificationTokenGenerator,
+    PasswordResetTokenGenerator,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,14 +85,18 @@ def build_email_verification_token(user: User) -> str:
     """
     Mint a stateless verification token for `user` (CP-102).
 
-    The token embeds the user's id, email, current password hash and a
-    timestamp, signed with `SECRET_KEY`. That makes it self-expiring and free of
-    any storage -- which is why `docs/COPUP_ERD.md` needs no new table for
-    CP-102. CP-104's reset link reuses the same mechanism with a shorter lifetime.
+    The token embeds the user's id, email, current password hash, the time the
+    latest confirmation email was sent and a timestamp, signed with
+    `SECRET_KEY`. That makes it self-expiring and free of any storage -- which
+    is why `docs/COPUP_ERD.md` needs no new table for CP-102. CP-104's reset
+    link reuses the same mechanism with a shorter lifetime.
 
-    It is not single-use by construction, but that is safe here: `verify_user_email`
-    is idempotent, and the token also breaks the moment the user's password or
-    last-login changes, so a leaked link cannot be replayed after first use.
+    It is not single-use by construction, but that is safe here:
+    `verify_user_email` is idempotent. What a resend does change is the send
+    time folded into the hash, so each dispatch mails a different token and
+    the link already in the inbox stops verifying (F-BUG-0002-001). The token
+    still breaks the moment the user's password or last-login changes, so a
+    leaked link cannot outlive those either.
     """
     return email_verification_token_generator().make_token(user)
 
@@ -100,10 +112,17 @@ def send_email_verification(user: User) -> None:
     """
     Email the confirmation link for a freshly registered account (CP-102).
 
+    The send time is stamped onto `user` before the link is minted (the token
+    hashes it), and saved only once `send_mail` accepts the message: a resend
+    therefore retires the link already in the inbox, while a mail outage
+    retires nothing -- nothing is persisted, so the previously mailed link
+    keeps working until a resend actually lands (F-BUG-0002-001).
+
     Raises whatever `send_mail` raises. Callers decide how loud that is: the
     registration view swallows it so a mail outage cannot leave the caller
     retrying a registration the account already has.
     """
+    user.email_verification_sent_at = timezone.now()
     verification_url = build_email_verification_url(user)
 
     send_mail(
@@ -119,6 +138,7 @@ def send_email_verification(user: User) -> None:
         recipient_list=[user.email],
         fail_silently=False,
     )
+    user.save(update_fields=["email_verification_sent_at", "updated_at"])
 
 
 def verify_user_email(user: User) -> None:
@@ -138,6 +158,358 @@ def verify_user_email(user: User) -> None:
         if user.account_status == User.AccountStatusChoices.PENDING_REVIEW:
             user.account_status = User.AccountStatusChoices.ACTIVE
         user.save(update_fields=["email_verified_at", "account_status", "updated_at"])
+
+
+def resend_email_verification(email: str) -> None:
+    """
+    Re-dispatch the CP-102 confirmation link to an account that still needs it.
+
+    Exists so a user who never received (or lost) the first email can ask for a
+    fresh one without re-registering (BE-BUG-0001). It is deliberately
+    non-committal: an unknown address, an already-verified account, or a
+    non-pending account all silently do nothing, and the caller always returns
+    the same generic message -- otherwise this public endpoint becomes a probe
+    for which addresses are registered (and which have confirmed).
+    """
+    user = User.objects.filter(email__iexact=email.strip()).first()
+    if user is None:
+        return
+    if user.email_verified_at is not None:
+        return
+    if user.account_status != User.AccountStatusChoices.PENDING_REVIEW:
+        return
+    send_email_verification(user)
+
+
+# ---------------------------------------------------------------------------
+# CP-104 -- password reset
+# ---------------------------------------------------------------------------
+
+
+def password_reset_expiry_minutes() -> int:
+    """Minutes a reset link stays valid, Admin-configurable (CP-104)."""
+    return get_int_config(
+        PASSWORD_RESET_EXPIRY_MINUTES, DEFAULT_PASSWORD_RESET_EXPIRY_MINUTES
+    )
+
+
+def password_reset_token_generator() -> PasswordResetTokenGenerator:
+    """Generator whose lifetime matches the CP-104 expiry window."""
+    return PasswordResetTokenGenerator(
+        max_age_seconds=password_reset_expiry_minutes() * 60
+    )
+
+
+def build_password_reset_url(user: User) -> str:
+    """Confirmation link handed to the user in the reset email."""
+    uid = urlsafe_base64_encode(force_bytes(user.pk))
+    token = password_reset_token_generator().make_token(user)
+    return f"{settings.PASSWORD_RESET_REDIRECT_URL}?uid={uid}&token={token}"
+
+
+def send_password_reset(user: User) -> None:
+    """
+    Email a reset link to the account (CP-104).
+
+    Same dispatch discipline as `send_email_verification`: the send time is
+    stamped before the token is minted (the token hashes it) and saved only
+    once `send_mail` accepts the message, so a fresh request retires the link
+    already in the inbox while a mail outage retires nothing.
+
+    Single-use needs no column: the token hash covers the password hash, so
+    the `set_password` in the confirm step kills the token that got there.
+    Raises whatever `send_mail` raises; the view logs and swallows it.
+    """
+    user.password_reset_sent_at = timezone.now()
+    reset_url = build_password_reset_url(user)
+
+    send_mail(
+        subject="Reset your BRB password",
+        message=(
+            f"Hi {user.full_name},\n\n"
+            "Use the link below to choose a new password. It can only be used "
+            f"once and expires in {password_reset_expiry_minutes()} minute(s):\n\n"
+            f"{reset_url}\n\n"
+            "If you did not request this, you can ignore this message -- "
+            "your password has not changed.\n"
+        ),
+        from_email=None,  # falls back to settings.DEFAULT_FROM_EMAIL
+        recipient_list=[user.email],
+        fail_silently=False,
+    )
+    user.save(update_fields=["password_reset_sent_at", "updated_at"])
+
+
+def request_password_reset(email: str) -> None:
+    """
+    Dispatch a reset link for `email`, if such an account exists (CP-104).
+
+    Deliberately non-committal, like `resend_email_verification`: an unknown
+    address silently does nothing and the caller always returns the same
+    generic message, so this public endpoint cannot be used to probe which
+    addresses are registered. Every existing account is served -- a suspended
+    or deactivated account can change its password but still cannot log in,
+    which is enforced at login time.
+    """
+    user = User.objects.filter(email__iexact=email.strip()).first()
+    if user is None:
+        return
+    send_password_reset(user)
+
+
+def apply_new_password(user: User, password: str) -> None:
+    """
+    Set a new password and retire everything the old one protected (CP-104,
+    CP-1001).
+
+    Re-hashes through `set_password`, clears any CP-103 lockout (proving inbox
+    or current-password access is a stronger signal than the streak), and
+    blacklists every outstanding refresh token so sessions opened with the old
+    password cannot outlive it. The password change also invalidates any
+    unspent password-reset token, because the token hash covers the password
+    hash.
+    """
+    with transaction.atomic():
+        user.set_password(password)
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        user.save(
+            update_fields=[
+                "password",
+                "failed_login_attempts",
+                "locked_until",
+                "updated_at",
+            ]
+        )
+    blacklist_outstanding_tokens(user)
+
+
+def blacklist_outstanding_tokens(user: User) -> None:
+    """
+    Invalidate every refresh token SimpleJWT still has on file for `user`.
+
+    Used by CP-1001's password change and CP-1004's deactivation: a refresh
+    token is the session, so leaving one outstanding would let a caller keep
+    minting access tokens after the password changed or the account closed.
+    Each token is blacklisted individually because the blacklist table is
+    one-row-per-token by design.
+    """
+    from rest_framework_simplejwt.token_blacklist.models import (
+        BlacklistedToken,
+        OutstandingToken,
+    )
+
+    for outstanding in OutstandingToken.objects.filter(user=user):
+        BlacklistedToken.objects.get_or_create(token=outstanding)
+
+
+# ---------------------------------------------------------------------------
+# CP-1002 -- change of registered email
+# ---------------------------------------------------------------------------
+
+
+def email_change_token_generator() -> EmailChangeTokenGenerator:
+    """
+    Generator for change-of-email confirmations.
+
+    The window follows the CP-102 grace period rather than CP-104's: both
+    confirm that the person controls an address, whereas a reset link grants
+    the power to change credentials and earns the shorter leash.
+    """
+    return EmailChangeTokenGenerator(
+        max_age_seconds=email_verification_expiry_days() * 24 * 60 * 60
+    )
+
+
+def build_email_change_url(user: User) -> str:
+    """Confirmation link mailed to the new address."""
+    uid = urlsafe_base64_encode(force_bytes(user.pk))
+    token = email_change_token_generator().make_token(user)
+    return f"{settings.EMAIL_CHANGE_REDIRECT_URL}?uid={uid}&token={token}"
+
+
+def send_email_change(user: User) -> None:
+    """
+    Email the confirmation link to `user.pending_email` (CP-1002).
+
+    Dispatch discipline matches `send_email_verification`: stamp first, send,
+    persist only on success, so each dispatch supersedes the previous link and
+    a mail outage changes nothing. `pending_email` must be set by the caller
+    before this runs.
+    """
+    user.email_change_sent_at = timezone.now()
+    change_url = build_email_change_url(user)
+
+    send_mail(
+        subject="Confirm your new BRB email address",
+        message=(
+            f"Hi {user.full_name},\n\n"
+            "Confirm this new email address for your BRB account:\n\n"
+            f"{change_url}\n\n"
+            f"Until you confirm, {user.email} stays your account's email "
+            "address. If you did not request this, you can ignore this "
+            "message.\n"
+        ),
+        from_email=None,  # falls back to settings.DEFAULT_FROM_EMAIL
+        recipient_list=[user.pending_email],
+        fail_silently=False,
+    )
+    user.save(update_fields=["email_change_sent_at", "updated_at"])
+
+
+def confirm_email_change(user: User) -> None:
+    """
+    Promote `pending_email` to `email` (CP-1002).
+
+    The serializer re-checks that the address is still free immediately before
+    this runs. The old address stops being the account of record here;
+    `email_verified_at` is untouched, because confirming the mailed link *is*
+    the proof for the new address. Any CP-102 token minted for the old address
+    dies with the swap: the parent hash covers the email.
+    """
+    user.email = user.pending_email
+    user.pending_email = None
+    user.email_change_sent_at = None
+    user.save(
+        update_fields=["email", "pending_email", "email_change_sent_at", "updated_at"]
+    )
+
+
+# ---------------------------------------------------------------------------
+# CP-1004 -- account deactivation
+# ---------------------------------------------------------------------------
+
+# Order statuses that mean a borrow is still in flight. "Requested" counts:
+# the item is spoken for, and letting the Borrower vanish leaves the Lender
+# holding a request they cannot answer. Terminal states (completed, declined,
+# expired, cancelled) do not block.
+DEACTIVATION_BLOCKING_ORDER_STATUSES = (
+    "requested",
+    "confirmed",
+    "active",
+    "returned",
+    "overdue",
+    "unreturned",
+    "disputed",
+)
+
+# Unreturned-case statuses that still need the account around to resolve.
+DEACTIVATION_BLOCKING_CASE_STATUSES = ("open", "escalated")
+
+
+def deactivation_blockers(user: User) -> dict[str, int]:
+    """
+    Count what must be settled before the account may close (CP-1004).
+
+    Both roles are checked: orders the user borrowed, and orders placed
+    against the user's own listings -- a Lender with an active handover cannot
+    deactivate either. Unreturned cases are counted separately because the
+    checklist names them alongside open orders, and they outlive the order
+    statuses that would otherwise look closed.
+    """
+    borrowed_or_lent = Q(borrower=user) | Q(listing__lender=user)
+    open_orders = (
+        Order.objects.filter(
+            borrowed_or_lent,
+            status__name__in=DEACTIVATION_BLOCKING_ORDER_STATUSES,
+        )
+        .distinct()
+        .count()
+    )
+    open_cases = (
+        UnreturnedCase.objects.filter(
+            Q(order__borrower=user) | Q(order__listing__lender=user),
+            status__name__in=DEACTIVATION_BLOCKING_CASE_STATUSES,
+        )
+        .distinct()
+        .count()
+    )
+    return {"open_orders": open_orders, "open_unreturned_cases": open_cases}
+
+
+def deactivate_account(user: User) -> None:
+    """
+    Close the account (CP-1004).
+
+    `is_active = False` is what actually revokes access: SimpleJWT's
+    `USER_AUTHENTICATION_RULE` refuses tokens for inactive users, and
+    `LoginSerializer` reports the refusal as `inactive`. `account_status`
+    records the reason for the UI and the Admin. Outstanding refresh tokens
+    are blacklisted so live sessions die with the account. Listings are left
+    alone: CP-205 owns the lender-revocation cascade, and CP-301's search
+    filters exclude listings whose lender is no longer active, so a
+    deactivated account's listings drop out of search without being deleted.
+    """
+    with transaction.atomic():
+        user.account_status = User.AccountStatusChoices.DEACTIVATED
+        user.is_active = False
+        user.save(update_fields=["account_status", "is_active", "updated_at"])
+    blacklist_outstanding_tokens(user)
+
+
+# ---------------------------------------------------------------------------
+# CP-1003 -- apply for the Lender role
+# ---------------------------------------------------------------------------
+
+
+class LenderApplicationError(Exception):
+    """
+    Why a lender application was refused (CP-1003).
+
+    The message is written for an end user: it reaches the mobile client
+    verbatim in the `detail` field.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+def apply_for_lender_role(user: User) -> User:
+    """
+    Grant the Lender role to a verified borrower (CP-1003).
+
+    The role is a server-side fact, not a UI toggle: `users.lender_status`
+    is what `IsActiveLender` checks before a listing may be created, and what
+    CP-301's search filters read. The client therefore has nothing to decide
+    -- it asks, and the backend answers.
+
+    Preconditions, all checked here so the rule holds no matter which screen
+    calls the endpoint:
+
+    * the account must be active -- a suspended or deactivated account must
+      not be able to pick up new responsibilities;
+    * the identity must have been Admin-approved, because lending means
+      handing something over to a stranger and CP-105 makes verification the
+      gate for exactly that;
+    * the account must not already be a lender, and a revoked lender may not
+      quietly re-apply -- revocation is a trust decision, and re-applying
+      without an Admin's say-so would undo it.
+    """
+    if user.account_status != User.AccountStatusChoices.ACTIVE:
+        raise LenderApplicationError(
+            "Your account is not active, so you cannot become a lender right now."
+        )
+
+    if not user.has_verified_identity():
+        raise LenderApplicationError(
+            "Identity verification is required before you can become a lender. "
+            "Submit an identity document and wait for review to complete."
+        )
+
+    if user.lender_status == User.LenderStatusChoices.ACTIVE:
+        raise LenderApplicationError("You are already a lender.")
+
+    if user.lender_status == User.LenderStatusChoices.REVOKED:
+        raise LenderApplicationError(
+            "Your lender status was revoked. Please contact an administrator."
+        )
+
+    with transaction.atomic():
+        user.lender_status = User.LenderStatusChoices.ACTIVE
+        user.save(update_fields=["lender_status", "updated_at"])
+
+    return user
 
 
 def deactivate_unverified_users(*, now=None) -> list[int]:

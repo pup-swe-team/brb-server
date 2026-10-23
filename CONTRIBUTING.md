@@ -402,6 +402,9 @@ implement and test, not in which tables exist.
    - Note: `Alumni` is **not** a supported affiliation (DECISIONS.md D-15). The
      enum is exactly `Student`, `Faculty`, `Staff`. Do not add it back.
   - Faculty and Staff: `@pup.edu.ph`
+- Administrator (staff/superuser) accounts are additionally restricted to
+  `@pup.edu.ph` **only** — `createsuperuser` and Django Admin forms refuse any
+  other domain (e.g. `@gmail.com`, even `@iskolarngbayan.pup.edu.ph`).
 - All other domains must be rejected with a user-friendly error message.
 
 #### 2. Dual-Role Permission Checks (FR4, FR5, NFR 4.2)
