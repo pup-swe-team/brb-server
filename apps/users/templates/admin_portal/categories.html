@@ -41,11 +41,13 @@
           <td data-label="Description">{{ category.description|default:"—" }}</td>
           <td data-label="Listings">{{ category.listing_count }}</td>
           <td data-label="Actions">
-            <a class="link" href="{% url 'portal-listing-category-edit' category.pk %}">Edit</a>
-            <form method="post" action="{% url 'portal-listing-category-delete' category.pk %}">
-              {% csrf_token %}
-              <button class="btn btn-ghost" type="submit">Delete</button>
-            </form>
+            <div class="row-actions">
+              <a class="link" href="{% url 'portal-listing-category-edit' category.pk %}">Edit</a>
+              <form method="post" action="{% url 'portal-listing-category-delete' category.pk %}">
+                {% csrf_token %}
+                <button class="btn btn-ghost" type="submit">Remove</button>
+              </form>
+            </div>
           </td>
         </tr>
         {% empty %}
@@ -54,6 +56,6 @@
       </tbody>
     </table>
   </div>
-  <p class="empty-note">Categories feed the category dropdown of the listing-creation form and the category filter of search. A category that already has listings cannot be deleted &mdash; rename it instead.</p>
+  <p class="empty-note">Categories feed the category dropdown of the listing-creation form and the category filter of search. A category that already has listings cannot be removed &mdash; rename it instead.</p>
 </div>
 {% endblock %}

@@ -797,5 +797,5 @@ def listing_category_delete(request, pk: int):
 
     name = category.name
     category.delete()
-    messages.success(request, f"Category “{name}” deleted.")
+    messages.success(request, f"Category “{name}” removed.")
     return redirect(reverse("portal-listing-categories"))
