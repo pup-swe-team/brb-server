@@ -5,10 +5,22 @@ behind a change, see [`DECISIONS.md`](DECISIONS.md). For scope and ticket
 checkboxes, see [`BRB_BACKEND_SPRINTS.md`](BRB_BACKEND_SPRINTS.md).
 
 
-## 2026-10-23 - Three QA fixes: deactivation, pickup actions, ID format
+## 2026-10-23 - QA fixes: listing creation resilience, deactivation, pickup actions, ID format
 
 ### Fixed
 
+- **BE-BUG-2006** (CP-401, TC-045) — listing creation (`POST /api/v1/listings/`)
+  now accepts real-world mobile and web payload variations without client
+  failures. The serializer normalizes alternative photo keys (`photo`,
+  `photos[]`, `image`, `images`), handles ISO 8601 timestamps with 'T' and
+  timezones from native date pickers (`split("T")[0]`), accepts `available_from`
+  and `available_to` top-level date aliases, coerces checkbox strings (`"on"`,
+  `"true"`), accepts select component object payloads (`category`,
+  `pickup_location` as dict or stringified JSON `{"id": ...}` alongside
+  `category_id`/`pickup_location_id`), and treats empty string `rate_per_day: ""`
+  as `None` for free items. Also documented the permission precondition for QA:
+  test accounts granted lender role directly in DB must also have an approved
+  `IdentityDocument` record to satisfy `IsIdentityVerified`.
 - **BE-BUG-2004** - `POST /api/v1/auth/deactivate/` now requires the account
   password. The view ignored the body it was sent, so any authenticated client
   could deactivate an account without knowing the password. The new
