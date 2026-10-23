@@ -5,6 +5,31 @@ behind a change, see [`DECISIONS.md`](DECISIONS.md). For scope and ticket
 checkboxes, see [`BRB_BACKEND_SPRINTS.md`](BRB_BACKEND_SPRINTS.md).
 
 
+## 2026-10-23 - Three QA fixes: deactivation, pickup actions, ID format
+
+### Fixed
+
+- **BE-BUG-2004** - `POST /api/v1/auth/deactivate/` now requires the account
+  password. The view ignored the body it was sent, so any authenticated client
+  could deactivate an account without knowing the password. The new
+  `DeactivateAccountSerializer` checks it and answers `401 invalid_credentials`
+  - the same contract as the password-change endpoint (D-12) - before the
+  open-orders/cases blockers are evaluated. The mobile app already collected the
+  password and now sends it.
+- **BE-BUG-2003** - the administrator's pickup-location table labels the
+  destructive action **Remove** (and the section **Removed**) instead of
+  Archive. It is the same soft delete (`deleted_at`), so existing listings keep
+  their location and Restore still works; only the wording changed. The action
+  buttons sit in one aligned `.row-actions` row, underlined to read as links.
+- **BE-BUG-2005** - a PUP ID must have the printed shape
+  `20xx-xxxxx-MN-x`: `IdentityDocumentSubmissionSerializer` rejects a missing
+  campus/check segment (`2024-00123`) with an actionable message, while
+  government IDs keep the loose rule because their numbers differ per issuing
+  agency. The review page grows a matching check row, and the ID-number notes
+  are neutral grey until they confirm something (green only when true, red when
+  a flag is set) instead of always reading as success. The mobile form applies
+  the same regex before submitting and its placeholder shows the full shape.
+
 ## 2026-10-22 — Demo catalogue so the browse screens are not empty
 
 ### Added

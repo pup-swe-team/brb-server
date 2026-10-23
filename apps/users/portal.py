@@ -41,7 +41,11 @@ from apps.reports.models import (
     UserReport,
 )
 
-from .constants import IDENTITY_DOCUMENT_STATUS_PENDING
+from .constants import (
+    IDENTITY_DOCUMENT_STATUS_PENDING,
+    IDENTITY_DOCUMENT_TYPE_PUP_ID,
+    PUP_ID_NUMBER_REGEX,
+)
 from .encryption import decrypt_document_data, detect_document_content_type
 from .models import IdentityDocument, IdentityDocumentStatus, User
 from .services import review_identity_document
@@ -396,6 +400,14 @@ def verification_review(request, pk: int):
             "pass": document.user.is_email_verified,
         },
     ]
+    if document.document_type.name == IDENTITY_DOCUMENT_TYPE_PUP_ID:
+        checks.insert(
+            1,
+            {
+                "label": "ID number uses the PUP format (20xx-xxxxx-MN-x)",
+                "pass": PUP_ID_NUMBER_REGEX.match(document.id_number) is not None,
+            },
+        )
 
     details = [
         {
@@ -541,7 +553,7 @@ def _pickup_location_context() -> dict:
 def pickup_locations(request):
     """
     Pickup-location management page (CP-1108): active locations with add form,
-    archived (soft-deleted) locations with Restore. Create follows PRG like the
+    removed (soft-deleted) locations with Restore. Create follows PRG like the
     rest of the portal; validation errors re-render the form inline.
     """
     if request.method == "POST":
@@ -569,7 +581,7 @@ def pickup_locations(request):
 
 @staff_login_required
 def pickup_location_edit(request, pk: int):
-    """Edit one active location (CP-1108). Archived rows are not editable."""
+    """Edit one active location (CP-1108). Removed rows are not editable."""
     location = get_object_or_404(PickupLocation, pk=pk, deleted_at__isnull=True)
 
     if request.method == "POST":
@@ -604,7 +616,7 @@ def pickup_location_edit(request, pk: int):
 @staff_login_required
 def pickup_location_soft_delete(request, pk: int):
     """
-    Archive a location (CP-1108): the same `deleted_at` stamp the API's
+    Remove a location (CP-1108): the same `deleted_at` stamp the API's
     DELETE applies, so the listing-creation dropdown drops it immediately.
     """
     location = get_object_or_404(PickupLocation, pk=pk, deleted_at__isnull=True)
@@ -612,7 +624,7 @@ def pickup_location_soft_delete(request, pk: int):
     location.save(update_fields=["deleted_at"])
     messages.success(
         request,
-        f"Pickup location \u201c{location.name}\u201d archived.",
+        f"Pickup location \u201c{location.name}\u201d removed.",
     )
     return redirect(reverse("portal-pickup-locations"))
 
@@ -621,7 +633,7 @@ def pickup_location_soft_delete(request, pk: int):
 @staff_login_required
 def pickup_location_restore(request, pk: int):
     """
-    Restore an archived location (CP-1108). Portal-only convenience (D-30):
+    Restore a removed location (CP-1108). Portal-only convenience (D-30):
     the API has no un-delete counterpart, so this is the supported way back.
     """
     location = get_object_or_404(PickupLocation, pk=pk, deleted_at__isnull=False)

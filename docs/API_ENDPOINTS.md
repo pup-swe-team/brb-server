@@ -47,7 +47,7 @@ in the same commit.
 | POST | `/api/v1/auth/password-change/` | user (current password required) |
 | POST | `/api/v1/auth/email-change/` | user (throttled 3/hour) |
 | POST | `/api/v1/auth/email-change/confirm/` | public (link sent to the new address) |
-| POST | `/api/v1/auth/deactivate/` | user (blocked by open orders/cases) |
+| POST | `/api/v1/auth/deactivate/` | user (body `{"password"}`; wrong password -> 401 `invalid_credentials`; blocked by open orders/cases) |
 
 ## Cron — `/api/v1/jobs/`
 
@@ -59,7 +59,7 @@ in the same commit.
 
 | Method | Path | Auth |
 |---|---|---|
-| POST | `/api/v1/identity/documents/` | user (multipart upload) |
+| POST | `/api/v1/identity/documents/` | user (multipart; PUP ID must be `20xx-xxxxx-MN-x`) |
 | GET | `/api/v1/identity/documents/list/` | user |
 | GET | `/api/v1/identity/documents/<id>/download/` | admin |
 | POST | `/api/v1/identity/documents/<id>/review/` | admin |

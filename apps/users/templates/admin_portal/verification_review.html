@@ -35,7 +35,7 @@
           <dt>{{ detail.label }}</dt>
           <dd>{{ detail.value }}</dd>
           {% if detail.note %}
-          <span class="detail-note {% if detail.ok is False %}is-warn{% endif %}">{{ detail.note }}</span>
+          <span class="detail-note {% if detail.ok is True %}is-pass{% elif detail.ok is False %}is-warn{% endif %}">{{ detail.note }}</span>
           {% endif %}
         </div>
         {% endfor %}

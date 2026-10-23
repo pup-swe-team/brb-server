@@ -26,8 +26,10 @@ from .constants import (
     ALLOWED_IDENTITY_DOCUMENT_CONTENT_TYPES,
     ALLOWED_REGISTRATION_AFFILIATIONS,
     IDENTITY_DOCUMENT_STATUS_PENDING,
+    IDENTITY_DOCUMENT_TYPE_PUP_ID,
     MAX_IDENTITY_DOCUMENT_BYTES,
     PHILIPPINES_MOBILE_REGEX,
+    PUP_ID_NUMBER_REGEX,
     normalize_name,
 )
 from .encryption import encrypt_document_data
@@ -322,6 +324,23 @@ class IdentityDocumentSubmissionSerializer(serializers.Serializer):
         pending_status = IdentityDocumentStatus.objects.get(
             name=IDENTITY_DOCUMENT_STATUS_PENDING
         )
+
+        # BE-BUG-2005: a PUP ID is printed with the campus segment, so an entry
+        # without it ("2024-00123") is a typo, not a different ID scheme. Only
+        # the dashed shape is enforced because the campus code varies per
+        # branch; government IDs keep the loose rule.
+        if (
+            document_type.name == IDENTITY_DOCUMENT_TYPE_PUP_ID
+            and not PUP_ID_NUMBER_REGEX.match(attrs["id_number"])
+        ):
+            raise serializers.ValidationError(
+                {
+                    "id_number": (
+                        "Use the PUP ID format, dashes included: "
+                        "20xx-xxxxx-MN-x (e.g. 2024-00123-MN-0)."
+                    )
+                }
+            )
 
         # Flag, do not reject: a name that differs from the registration is a
         # reason for CP-106's Admin to check, and the ticket asks for a flag.
@@ -797,6 +816,32 @@ class PasswordChangeSerializer(serializers.Serializer):
 
         attrs["user"] = user
         return attrs
+
+
+class DeactivateAccountSerializer(serializers.Serializer):
+    """
+    Prove the password before closing the caller's own account (CP-1004).
+
+    BE-BUG-2004: the endpoint used to accept any request from a valid access
+    token, so a borrowed phone was enough to deactivate an account. A wrong
+    password is an *authentication* failure (401, code `invalid_credentials`)
+    per D-12, matching `PasswordChangeSerializer` and login -- not a field
+    error that would let a stolen token grind through passwords.
+    """
+
+    password = serializers.CharField(write_only=True, style={"input_type": "password"})
+
+    default_error_messages = {
+        "invalid_credentials": "Password is incorrect.",
+    }
+
+    def validate_password(self, value: str) -> str:
+        user = self.context["request"].user
+        if not user.check_password(value):
+            raise AuthenticationFailed(
+                self.error_messages["invalid_credentials"], code="invalid_credentials"
+            )
+        return value
 
 
 class EmailChangeSerializer(serializers.Serializer):

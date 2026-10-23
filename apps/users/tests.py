@@ -1400,7 +1400,7 @@ class IdentityDocumentSubmissionTests(APITestCase):
     def submit(self, **overrides):
         payload = {
             "document_type": "pup_id",
-            "id_number": "2024-00123",
+            "id_number": "2024-00123-MN-0",
             "name_on_document": "Juan Dela Cruz",
             "document_file": png_upload(),
             "consent_given": "true",
@@ -1417,7 +1417,7 @@ class IdentityDocumentSubmissionTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["status"], "pending")
         self.assertEqual(response.data["document_type"], "pup_id")
-        self.assertEqual(response.data["id_number"], "2024-00123")
+        self.assertEqual(response.data["id_number"], "2024-00123-MN-0")
 
         document = IdentityDocument.objects.get(user=self.user)
         # CP-107 encrypts at write time, so read the row back through the
@@ -1492,7 +1492,7 @@ class IdentityDocumentSubmissionTests(APITestCase):
         IdentityDocument.objects.create(
             user=other,
             document_type=IdentityDocumentType.objects.get(name="pup_id"),
-            id_number="2024-00123",
+            id_number="2024-00123-MN-0",
             document_data=PNG_BYTES,
             status=IdentityDocumentStatus.objects.get(name="pending"),
         )
@@ -1511,12 +1511,12 @@ class IdentityDocumentSubmissionTests(APITestCase):
         IdentityDocument.objects.create(
             user=other,
             document_type=IdentityDocumentType.objects.get(name="pup_id"),
-            id_number="2024-ABC01",
+            id_number="2024-ABC01-MN-0",
             document_data=PNG_BYTES,
             status=IdentityDocumentStatus.objects.get(name="pending"),
         )
 
-        response = self.submit(id_number="2024-abc01")
+        response = self.submit(id_number="2024-abc01-mn-0")
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("already linked", str(response.data["id_number"]))
@@ -1534,10 +1534,38 @@ class IdentityDocumentSubmissionTests(APITestCase):
         self.assertEqual(IdentityDocument.objects.filter(user=self.user).count(), 2)
 
     def test_id_number_is_normalised_to_upper_case(self) -> None:
-        response = self.submit(id_number=" 2024-lower ")
+        response = self.submit(id_number=" 2024-00123-mn-0 ")
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(response.data["id_number"], "2024-LOWER")
+        self.assertEqual(response.data["id_number"], "2024-00123-MN-0")
+
+    # --- PUP ID format (BE-BUG-2005) ---
+
+    def test_pup_id_without_the_campus_segment_is_rejected(self) -> None:
+        """Students kept dropping the branch segment ("2024-00123")."""
+        response = self.submit(id_number="2024-00123")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("20xx-xxxxx-MN-x", str(response.data["id_number"]))
+        self.assertFalse(IdentityDocument.objects.exists())
+
+    def test_pup_id_with_loose_separators_is_rejected(self) -> None:
+        for value in ("2024 00123 MN 0", "202400123MN0", "2024-0123-MN-0"):
+            response = self.submit(id_number=value)
+            with self.subTest(id_number=value):
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_pup_id_accepts_any_branch_code(self) -> None:
+        """The campus code is not pinned: only the dashed shape matters."""
+        response = self.submit(id_number="2024-00123-ST-1")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["id_number"], "2024-00123-ST-1")
+
+    def test_government_id_keeps_the_loose_format(self) -> None:
+        response = self.submit(document_type="government_id", id_number="N01-23-456789")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
     # --- mismatch flagging ---
 
@@ -1570,7 +1598,11 @@ class IdentityDocumentSubmissionTests(APITestCase):
             "Juan Dela-Cruz",
             "Juan  Dela Cruz.",
         ]:
-            response = self.submit(name_on_document=variant, id_number="X-1")
+            response = self.submit(
+                name_on_document=variant,
+                document_type="government_id",
+                id_number="X-1",
+            )
             with self.subTest(variant=variant):
                 self.assertFalse(
                     response.data["has_profile_mismatch"],
@@ -1671,7 +1703,7 @@ class IdentityDocumentSubmissionTests(APITestCase):
         ):
             payload = {
                 "document_type": "pup_id",
-                "id_number": "2024-00123",
+                "id_number": "2024-00123-MN-0",
                 "name_on_document": "Juan Dela Cruz",
                 "document_file": png_upload(),
                 "consent_given": "true",
@@ -1920,7 +1952,7 @@ class IdentityDocumentReviewTests(APITestCase):
         self.document = IdentityDocument.objects.create(
             user=self.submitter,
             document_type=self.doc_type,
-            id_number="2024-00123",
+            id_number="2024-00123-MN-0",
             document_data=PNG_BYTES,
             status=self.pending_status,
             name_on_document="Juan Dela Cruz",
@@ -2067,7 +2099,7 @@ class IdentityDocumentReviewTests(APITestCase):
         submit_url = reverse("identity-document-submit")
         new_payload = {
             "document_type": "pup_id",
-            "id_number": "2024-00123",
+            "id_number": "2024-00123-MN-0",
             "name_on_document": "Juan Dela Cruz",
             "document_file": png_upload("new_pup_id.png"),
             "consent_given": "true",
@@ -2308,7 +2340,7 @@ class IdentityDocumentSubmissionEncryptionTests(APITestCase):
         with override_settings(IDENTITY_DOCUMENT_ENCRYPTION_KEY=self.key):
             payload = {
                 "document_type": "pup_id",
-                "id_number": "2024-99991",
+                "id_number": "2024-99991-MN-0",
                 "name_on_document": "Juan Dela Cruz",
                 "document_file": png_upload(),
                 "consent_given": "true",
@@ -3328,6 +3360,12 @@ class AccountDeactivationTests(APITestCase):
         self.url = reverse("auth-deactivate")
         self.client.force_authenticate(self.user)
 
+    def deactivate(self):
+        """Close the account with the password the endpoint now requires."""
+        return self.client.post(
+            self.url, {"password": "StrongPassword123!"}, format="json"
+        )
+
     @staticmethod
     def ensure_order_status(name: str) -> OrderStatus:
         status_row, _ = OrderStatus.objects.get_or_create(name=name)
@@ -3365,15 +3403,48 @@ class AccountDeactivationTests(APITestCase):
         return UnreturnedCase.objects.create(order=order, status=case_status)
 
     def test_deactivation_succeeds_with_nothing_outstanding(self) -> None:
-        response = self.client.post(self.url)
+        response = self.deactivate()
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         user = User.objects.get(pk=self.user.pk)
         self.assertEqual(user.account_status, User.AccountStatusChoices.DEACTIVATED)
         self.assertFalse(user.is_active)
 
+    def test_deactivation_requires_the_password(self) -> None:
+        """BE-BUG-2004: the token alone used to be enough."""
+        response = self.client.post(self.url, {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("password", response.data)
+        user = User.objects.get(pk=self.user.pk)
+        self.assertTrue(user.is_active)
+        self.assertEqual(user.account_status, User.AccountStatusChoices.ACTIVE)
+
+    def test_a_wrong_password_does_not_deactivate(self) -> None:
+        response = self.client.post(
+            self.url, {"password": "NotMyPassword123!"}, format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(response.data["code"], "invalid_credentials")
+        user = User.objects.get(pk=self.user.pk)
+        self.assertTrue(user.is_active)
+        self.assertEqual(user.account_status, User.AccountStatusChoices.ACTIVE)
+
+    def test_a_wrong_password_is_rejected_before_the_blockers(self) -> None:
+        """A stolen token cannot use the blocker counts to probe the account."""
+        lender = make_user("lender@iskolarngbayan.pup.edu.ph")
+        self.make_order(self.user, self.make_listing(lender), "requested")
+
+        response = self.client.post(
+            self.url, {"password": "NotMyPassword123!"}, format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertNotIn("open_orders", response.data)
+
     def test_deactivated_account_cannot_log_in(self) -> None:
-        self.client.post(self.url)
+        self.deactivate()
         self.client.force_authenticate(user=None)
 
         login = self.client.post(
@@ -3393,7 +3464,7 @@ class AccountDeactivationTests(APITestCase):
         )
         refresh = login.data["tokens"]["refresh"]
 
-        self.client.post(self.url)
+        self.deactivate()
 
         refreshed = self.client.post(
             reverse("auth-token-refresh"), {"refresh": refresh}, format="json"
@@ -3404,7 +3475,7 @@ class AccountDeactivationTests(APITestCase):
         lender = make_user("lender@iskolarngbayan.pup.edu.ph")
         self.make_order(self.user, self.make_listing(lender), "requested")
 
-        response = self.client.post(self.url)
+        response = self.deactivate()
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.data["open_orders"], 1)
@@ -3418,7 +3489,7 @@ class AccountDeactivationTests(APITestCase):
         borrower = make_user("borrower@iskolarngbayan.pup.edu.ph")
         self.make_order(borrower, self.make_listing(self.user), "confirmed")
 
-        response = self.client.post(self.url)
+        response = self.deactivate()
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.data["open_orders"], 1)
@@ -3428,7 +3499,7 @@ class AccountDeactivationTests(APITestCase):
         order = self.make_order(self.user, self.make_listing(lender), "unreturned")
         self.make_case(order, "open")
 
-        response = self.client.post(self.url)
+        response = self.deactivate()
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.data["open_unreturned_cases"], 1)
@@ -3446,7 +3517,7 @@ class AccountDeactivationTests(APITestCase):
         ):
             self.make_order(self.user, listing, status_name)
 
-        response = self.client.post(self.url)
+        response = self.deactivate()
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.data["open_orders"], 5)
@@ -3457,7 +3528,7 @@ class AccountDeactivationTests(APITestCase):
         for status_name in ("completed", "declined", "cancelled", "expired"):
             self.make_order(self.user, listing, status_name)
 
-        response = self.client.post(self.url)
+        response = self.deactivate()
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
@@ -3466,14 +3537,14 @@ class AccountDeactivationTests(APITestCase):
         order = self.make_order(self.user, self.make_listing(lender), "completed")
         self.make_case(order, "returned")
 
-        response = self.client.post(self.url)
+        response = self.deactivate()
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
     def test_requires_authentication(self) -> None:
         self.client.force_authenticate(user=None)
 
-        response = self.client.post(self.url)
+        response = self.deactivate()
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 

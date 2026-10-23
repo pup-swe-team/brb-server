@@ -31,7 +31,7 @@ from .tests import PNG_BYTES, make_user
 def make_document(
     user,
     *,
-    id_number: str = "2024-00100",
+    id_number: str = "2024-00100-MN-0",
     document_type_name: str = "pup_id",
     status_name: str = "pending",
 ):
@@ -194,7 +194,7 @@ class PortalVerificationReviewTests(TestCase):
             full_name="Bela Cruz",
             account_status="active",
         )
-        self.document = make_document(self.member, id_number="2024-77200")
+        self.document = make_document(self.member, id_number="2024-77200-MN-0")
         self.client.force_login(self.admin)
 
     def test_review_page_shows_document_name_and_details(self) -> None:
@@ -206,6 +206,46 @@ class PortalVerificationReviewTests(TestCase):
         self.assertContains(response, "Submitted ID")
         self.assertContains(response, "Matches the ID and account name")
         self.assertContains(response, "Consent recorded: ID storage")
+
+    def test_review_page_confirms_a_well_formed_pup_id(self) -> None:
+        response = self.client.get(
+            reverse("portal-verification-review", args=[self.document.pk])
+        )
+
+        check = self._format_check(response)
+        self.assertTrue(check["pass"])
+        self.assertContains(response, "ID number uses the PUP format")
+        self.assertContains(response, "2024-77200-MN-0")
+
+    def test_review_page_flags_a_malformed_pup_id(self) -> None:
+        """BE-BUG-2005: legacy or mistyped numbers lose the campus segment."""
+        self.document.id_number = "2024-77200"
+        self.document.save(update_fields=["id_number"])
+        response = self.client.get(
+            reverse("portal-verification-review", args=[self.document.pk])
+        )
+
+        check = self._format_check(response)
+        self.assertFalse(check["pass"])
+
+    def test_government_id_skips_the_pup_format_check(self) -> None:
+        self.document.document_type = IdentityDocumentType.objects.get(
+            name="government_id"
+        )
+        self.document.id_number = "N01-23-456789"
+        self.document.save(update_fields=["document_type", "id_number"])
+        response = self.client.get(
+            reverse("portal-verification-review", args=[self.document.pk])
+        )
+
+        self.assertNotContains(response, "ID number uses the PUP format")
+
+    def _format_check(self, response) -> dict:
+        return next(
+            check
+            for check in response.context["checks"]
+            if check["label"].startswith("ID number uses the PUP format")
+        )
 
     def test_viewing_page_logs_an_audit_entry(self) -> None:
         url = reverse("portal-verification-review", args=[self.document.pk])
@@ -324,6 +364,24 @@ class PickupLocationPortalTests(TestCase):
         self.assertContains(response, "Main Library Front Desk")
         self.assertContains(response, "Old Gym Entrance")
         self.assertContains(response, self.url)
+
+    def test_actions_read_remove_not_archive(self) -> None:
+        """BE-BUG-2003: the review action matches the user story wording."""
+        self.client.force_login(self.admin)
+        response = self.client.get(self.url)
+
+        self.assertContains(response, ">Remove<")
+        self.assertContains(response, "Removed (1)")
+        self.assertContains(response, 'class="row-actions"')
+        self.assertNotContains(response, "Archive")
+
+    def test_remove_reports_the_new_wording(self) -> None:
+        self.client.force_login(self.admin)
+        response = self.client.post(
+            reverse("portal-pickup-location-delete", args=[self.lobby.pk]),
+            follow=True,
+        )
+        self.assertContains(response, "removed.")
 
     def test_nav_link_is_enabled_on_shell(self) -> None:
         self.client.force_login(self.admin)

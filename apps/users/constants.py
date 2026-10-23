@@ -34,6 +34,11 @@ ALLOWED_IDENTITY_DOCUMENT_CONTENT_TYPES = (
     "application/pdf",
 )
 
+# A PUP ID number is printed as year-number-campus-check, e.g. 2024-00123-MN-0.
+# The campus code differs per branch (MN for Manila), so only the dashed shape
+# is enforced (BE-BUG-2005); the value is compared case-insensitively.
+PUP_ID_NUMBER_REGEX = re.compile(r"^\d{4}-\d{5}-[A-Z]{2}-\d$")
+
 # Name comparison for the CP-105 mismatch flag: case, punctuation and spacing
 # differ freely between a registration form and a printed ID, so compare on
 # letters and digits only.

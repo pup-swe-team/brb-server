@@ -18,6 +18,7 @@ from .encryption import decrypt_document_data, detect_document_content_type
 from .models import IdentityDocument, User
 from .selectors import get_lender_profile, search_lenders
 from .serializers import (
+    DeactivateAccountSerializer,
     EmailChangeConfirmSerializer,
     EmailChangeSerializer,
     EmailVerificationSerializer,
@@ -440,13 +441,20 @@ class DeactivateAccountView(APIView):
     Close the caller's own account (CP-1004).
     POST /api/v1/auth/deactivate/
 
-    Refused with a 400 naming the blockers while open orders (borrowed or
+    The password is proven first (BE-BUG-2004): a wrong one is a 401, so a
+    borrowed access token cannot close someone else's account. Then the request
+    is refused with a 400 naming the blockers while open orders (borrowed or
     lent) or unresolved unreturned-item cases exist. On success the account is
     marked deactivated, `is_active` goes False so no token can be used or
     refreshed, and outstanding sessions are blacklisted.
     """
 
     def post(self, request: Request) -> Response:
+        serializer = DeactivateAccountSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+
         blockers = deactivation_blockers(request.user)
         if any(blockers.values()):
             # A plain Response rather than ValidationError: DRF stringifies
