@@ -70,6 +70,8 @@ def pup_webmail_domains() -> tuple[str, str]:
 class UserResponseSerializer(serializers.ModelSerializer):
     """Serializer for exposing user data in API responses (FR1, FR2)."""
 
+    photo_url = serializers.SerializerMethodField()
+
     class Meta:
         model = User
         fields = (
@@ -82,8 +84,22 @@ class UserResponseSerializer(serializers.ModelSerializer):
             "lender_status",
             "email_verified_at",
             "created_at",
+            "photo_url",
         )
         read_only_fields = fields
+
+    def get_photo_url(self, obj):
+        request = self.context.get("request")
+        photo = getattr(obj, "photo", None)
+        if not photo:
+            return None
+        try:
+            url = photo.url
+        except Exception:
+            return None
+        if request is not None:
+            return request.build_absolute_uri(url)
+        return url
 
 
 class UserRegistrationSerializer(serializers.Serializer):
@@ -737,9 +753,10 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
     Covers the text/location fields on the profile screen. `email` is absent
     on purpose -- CP-1002 owns that change and its re-verification dance --
     and `password` is absent because CP-1001's password change is a separate
-    endpoint that proves the current password first. `photo` is left to a
-    multipart endpoint when the client needs it.
+    endpoint that proves the current password first.
     """
+
+    photo = serializers.ImageField(required=False, allow_null=True)
 
     class Meta:
         model = User
@@ -750,6 +767,7 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
             "street_address",
             "municipality",
             "province",
+            "photo",
         )
 
     def validate_full_name(self, value: str) -> str:
