@@ -516,3 +516,161 @@ class ListingCreateViewTests(BaseListingTestCase):
         response = self.client.post(self.create_url, data=payload, format="multipart")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("pickup_location", response.data)
+
+    # =========================================================================
+    # BE-BUG-2006 (TC-045): Client payload flexibility & alias normalization
+    # =========================================================================
+
+    def test_create_listing_with_singular_photo_key(self):
+        """Mobile client sending 'photo' (singular) is accepted."""
+        self.client.force_authenticate(user=self.owner)
+        payload = self._valid_payload(self._create_test_image("single.jpg"))
+        payload["photo"] = payload.pop("photos")[0]
+
+        response = self.client.post(self.create_url, data=payload, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(len(response.data["photos"]), 1)
+
+    def test_create_listing_with_array_bracket_photo_key(self):
+        """Web/FormData client sending 'photos[]' key is accepted."""
+        self.client.force_authenticate(user=self.owner)
+        payload = self._valid_payload(self._create_test_image("bracket.jpg"))
+        payload["photos[]"] = payload.pop("photos")[0]
+
+        response = self.client.post(self.create_url, data=payload, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(len(response.data["photos"]), 1)
+
+    def test_create_listing_with_iso_timestamp_dates(self):
+        """Date pickers submitting ISO timestamp strings with 'T' are parsed cleanly."""
+        self.client.force_authenticate(user=self.owner)
+        tomorrow = timezone.now().date() + timedelta(days=2)
+        next_week = tomorrow + timedelta(days=5)
+
+        payload = self._valid_payload(self._create_test_image())
+        payload["start_date"] = f"{tomorrow.isoformat()}T00:00:00.000Z"
+        payload["end_date"] = f"{next_week.isoformat()}T23:59:59Z"
+
+        response = self.client.post(self.create_url, data=payload, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(
+            response.data["availability_windows"][0]["start_date"],
+            tomorrow.isoformat(),
+        )
+        self.assertEqual(
+            response.data["availability_windows"][0]["end_date"],
+            next_week.isoformat(),
+        )
+
+    def test_create_listing_with_available_from_to_aliases(self):
+        """Clients submitting 'available_from' and 'available_to' are normalized."""
+        self.client.force_authenticate(user=self.owner)
+        tomorrow = timezone.now().date() + timedelta(days=1)
+        next_week = tomorrow + timedelta(days=4)
+
+        payload = self._valid_payload(self._create_test_image())
+        payload.pop("start_date")
+        payload.pop("end_date")
+        payload["available_from"] = tomorrow.isoformat()
+        payload["available_to"] = next_week.isoformat()
+
+        response = self.client.post(self.create_url, data=payload, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(
+            response.data["availability_windows"][0]["start_date"],
+            tomorrow.isoformat(),
+        )
+
+    def test_create_listing_with_json_string_category_and_location(self):
+        """Select components passing stringified JSON {'id': ...} via multipart are accepted."""
+        self.client.force_authenticate(user=self.owner)
+        payload = self._valid_payload(self._create_test_image())
+        payload["category"] = json.dumps(
+            {"id": self.category.id, "name": self.category.name}
+        )
+        payload["pickup_location"] = json.dumps(
+            {
+                "id": self.pickup_location.id,
+                "name": self.pickup_location.name,
+            }
+        )
+
+        response = self.client.post(self.create_url, data=payload, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["category"]["id"], self.category.id)
+        self.assertEqual(
+            response.data["pickup_location"]["id"], self.pickup_location.id
+        )
+
+    def test_create_listing_with_dict_category_and_location_in_serializer(self):
+        """Serializer directly accepts dict objects for category and pickup_location."""
+        from apps.listings.serializers import ListingCreateSerializer
+
+        tomorrow = timezone.now().date() + timedelta(days=1)
+        next_week = tomorrow + timedelta(days=3)
+        image = self._create_test_image()
+        data = {
+            "title": "Camera Rig",
+            "description": "Professional camera rig",
+            "condition": "Like New",
+            "category": {"id": self.category.id, "name": self.category.name},
+            "pickup_location": {
+                "id": self.pickup_location.id,
+                "name": self.pickup_location.name,
+            },
+            "is_ownership_confirmed": True,
+            "photos": [image],
+            "availability_windows": [
+                {
+                    "start_date": tomorrow.isoformat(),
+                    "end_date": next_week.isoformat(),
+                }
+            ],
+        }
+        serializer = ListingCreateSerializer(data=data)
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(serializer.validated_data["category"], self.category)
+        self.assertEqual(
+            serializer.validated_data["pickup_location"], self.pickup_location
+        )
+
+    def test_create_listing_with_id_aliases(self):
+        """Field aliases 'category_id' and 'pickup_location_id' are mapped."""
+        self.client.force_authenticate(user=self.owner)
+        payload = self._valid_payload(self._create_test_image())
+        payload["category_id"] = payload.pop("category")
+        payload["pickup_location_id"] = payload.pop("pickup_location")
+
+        response = self.client.post(self.create_url, data=payload, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_create_listing_with_checkbox_string_on(self):
+        """HTML/form-data checkbox submitting 'on' or 'true' is coerced."""
+        self.client.force_authenticate(user=self.owner)
+        payload = self._valid_payload(self._create_test_image())
+        payload["is_ownership_confirmed"] = "on"
+
+        response = self.client.post(self.create_url, data=payload, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(response.data["is_ownership_confirmed"])
+
+    def test_create_listing_with_ownership_confirmed_alias(self):
+        """Alias 'ownership_confirmed' is accepted."""
+        self.client.force_authenticate(user=self.owner)
+        payload = self._valid_payload(self._create_test_image())
+        payload.pop("is_ownership_confirmed")
+        payload["ownership_confirmed"] = True
+
+        response = self.client.post(self.create_url, data=payload, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(response.data["is_ownership_confirmed"])
+
+    def test_create_listing_with_empty_rate_per_day(self):
+        """Empty string rate_per_day is treated as None (free listing)."""
+        self.client.force_authenticate(user=self.owner)
+        payload = self._valid_payload(self._create_test_image())
+        payload["rate_per_day"] = ""
+
+        response = self.client.post(self.create_url, data=payload, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertIsNone(response.data["rate_per_day"])

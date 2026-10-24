@@ -78,6 +78,14 @@ in the same commit.
 | POST | `/api/v1/listings/<id>/deactivate/` | owner |
 | POST | `/api/v1/listings/<id>/reactivate/` | owner |
 
+> **Listing Creation Payload Flexibility (BE-BUG-2006 / CP-401):**
+> - **Photos:** Accepts `photos`, `photo`, `photos[]`, `image`, or `images` in `request.FILES`.
+> - **Categories & Pickup Locations:** Accepts integer ID, `category_id` / `pickup_location_id`, or object/stringified JSON (`{"id": ...}`).
+> - **Dates & Availability:** Accepts ISO timestamp strings (e.g. `2026-10-25T00:00:00.000Z`) or `YYYY-MM-DD`. Accepts `available_from` and `available_to` top-level aliases in addition to `start_date` / `end_date` and `availability_windows`.
+> - **Ownership Confirmation:** Accepts boolean or form checkbox strings (`"on"`, `"true"`, `"1"`, `"yes"`), and alias `ownership_confirmed`.
+> - **Pricing:** Accepts empty string `""` or `null` for free listings (`rate_per_day`).
+> - **Permissions:** Requires `IsIdentityVerified` + `IsActiveLender`. Manually seeded QA accounts in the database must have `lender_status = 'active'` AND an approved `IdentityDocument` row (`status = 'approved'`).
+
 > There is also a legacy alias `GET/PUT/PATCH/DELETE /api/v1/<id>` (name
 > `listing-detail-legacy`) pointing at the same detail view. Use
 > `/api/v1/listings/<id>/` in clients; the bare alias is scheduled for cleanup.

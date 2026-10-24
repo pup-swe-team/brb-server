@@ -42,14 +42,24 @@ def _extract_and_validate_photos(serializer: serializers.BaseSerializer) -> list
     """Pull photos from the request and validate size plus real content by magic bytes."""
     request = serializer.context.get("request")
     photos: list[Any] = []
+    photo_keys = ("photos", "photo", "photos[]", "image", "images")
+
     if request and request.FILES:
-        photos = request.FILES.getlist("photos")
-    if not photos and "photos" in serializer.initial_data:
-        initial_photos = serializer.initial_data.get("photos")
-        if isinstance(initial_photos, list):
-            photos = initial_photos
-        elif initial_photos:
-            photos = [initial_photos]
+        for key in photo_keys:
+            extracted = request.FILES.getlist(key)
+            if extracted:
+                photos.extend(extracted)
+                break
+    if not photos and serializer.initial_data:
+        for key in photo_keys:
+            if key in serializer.initial_data:
+                initial_photos = serializer.initial_data.get(key)
+                if isinstance(initial_photos, list):
+                    photos.extend(initial_photos)
+                elif initial_photos:
+                    photos.append(initial_photos)
+                if photos:
+                    break
 
     allowed = ", ".join(
         t.split("/")[-1].upper() for t in ALLOWED_LISTING_PHOTO_CONTENT_TYPES
@@ -320,6 +330,77 @@ class ListingCreateSerializer(serializers.ModelSerializer):
             "pickup_location",
         ]
 
+    def to_internal_value(self, data):
+        if hasattr(data, "_mutable"):
+            was_mutable = data._mutable
+            data._mutable = True
+            try:
+                self._normalize_create_payload(data)
+                return super().to_internal_value(data)
+            finally:
+                data._mutable = was_mutable
+
+        if isinstance(data, dict):
+            data = dict(data)
+            self._normalize_create_payload(data)
+
+        return super().to_internal_value(data)
+
+    def _normalize_create_payload(self, data: Any) -> None:
+        # Category normalization
+        if "category_id" in data and "category" not in data:
+            data["category"] = data["category_id"]
+        elif "category" in data:
+            raw_cat = data["category"]
+            if isinstance(raw_cat, dict):
+                data["category"] = raw_cat.get("id")
+            elif isinstance(raw_cat, str) and raw_cat.strip().startswith("{"):
+                try:
+                    parsed = json.loads(raw_cat)
+                    if isinstance(parsed, dict) and "id" in parsed:
+                        data["category"] = parsed["id"]
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+        # Pickup location normalization
+        if "pickup_location_id" in data and "pickup_location" not in data:
+            data["pickup_location"] = data["pickup_location_id"]
+        elif "pickup_location" in data:
+            raw_loc = data["pickup_location"]
+            if isinstance(raw_loc, dict):
+                data["pickup_location"] = raw_loc.get("id")
+            elif isinstance(raw_loc, str) and raw_loc.strip().startswith("{"):
+                try:
+                    parsed = json.loads(raw_loc)
+                    if isinstance(parsed, dict) and "id" in parsed:
+                        data["pickup_location"] = parsed["id"]
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+        # Ownership confirmation alias and truthy string coercion
+        if "ownership_confirmed" in data and "is_ownership_confirmed" not in data:
+            data["is_ownership_confirmed"] = data["ownership_confirmed"]
+        if "is_ownership_confirmed" in data:
+            val = data["is_ownership_confirmed"]
+            if isinstance(val, str):
+                if val.lower() in ("on", "true", "1", "yes"):
+                    data["is_ownership_confirmed"] = True
+                elif val.lower() in ("false", "0", "no", ""):
+                    data["is_ownership_confirmed"] = False
+
+        # Rate per day: empty string means None (free item)
+        if "rate_per_day" in data and data["rate_per_day"] == "":
+            if hasattr(data, "setlist"):
+                data.pop("rate_per_day", None)
+            else:
+                data["rate_per_day"] = None
+
+        # Availability date aliases
+        if "available_from" in data and "start_date" not in data:
+            data["start_date"] = data["available_from"]
+        if "available_to" in data and "end_date" not in data:
+            data["end_date"] = data["available_to"]
+
     def validate_is_ownership_confirmed(self, value: bool) -> bool:
         if not value:
             raise serializers.ValidationError(
@@ -338,8 +419,9 @@ class ListingCreateSerializer(serializers.ModelSerializer):
         if isinstance(val, date):
             return val
         if isinstance(val, str):
+            clean_str = val.strip().split("T")[0]
             try:
-                return date.fromisoformat(val.strip())
+                return date.fromisoformat(clean_str)
             except ValueError:
                 raise serializers.ValidationError(
                     f"Date '{val}' must be in YYYY-MM-DD format."
@@ -369,11 +451,19 @@ class ListingCreateSerializer(serializers.ModelSerializer):
                 )
         elif isinstance(raw_windows, list):
             windows_data = raw_windows
-        elif "start_date" in self.initial_data and "end_date" in self.initial_data:
+        elif (
+            "start_date" in self.initial_data or "available_from" in self.initial_data
+        ) and ("end_date" in self.initial_data or "available_to" in self.initial_data):
+            start_val = self.initial_data.get("start_date") or self.initial_data.get(
+                "available_from"
+            )
+            end_val = self.initial_data.get("end_date") or self.initial_data.get(
+                "available_to"
+            )
             windows_data = [
                 {
-                    "start_date": self.initial_data["start_date"],
-                    "end_date": self.initial_data["end_date"],
+                    "start_date": start_val,
+                    "end_date": end_val,
                 }
             ]
 
@@ -474,8 +564,9 @@ class ListingUpdateSerializer(serializers.ModelSerializer):
         if isinstance(val, date):
             return val
         if isinstance(val, str):
+            clean_str = val.strip().split("T")[0]
             try:
-                return date.fromisoformat(val.strip())
+                return date.fromisoformat(clean_str)
             except ValueError:
                 raise serializers.ValidationError(
                     f"Date '{val}' must be in YYYY-MM-DD format."

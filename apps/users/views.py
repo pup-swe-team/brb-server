@@ -6,6 +6,7 @@ from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
 from rest_framework import generics, permissions, status
 from rest_framework.authentication import SessionAuthentication
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -195,23 +196,31 @@ class MeView(APIView):
 
     Always reports `request.user`'s own row, so a client cannot look at or
     edit anyone else's profile through this endpoint. The PATCH half accepts
-    only the profile fields CP-1001 covers; email and password changes live
-    behind their own endpoints with their own proofs.
+    the profile fields CP-1001 covers; email and password changes live behind
+    their own endpoints with their own proofs. Profile photos are accepted via
+    multipart uploads.
     """
+
+    parser_classes = (MultiPartParser, FormParser, JSONParser)
 
     def get(self, request: Request) -> Response:
         return Response(
-            UserResponseSerializer(request.user).data, status=status.HTTP_200_OK
+            UserResponseSerializer(request.user, context={"request": request}).data,
+            status=status.HTTP_200_OK,
         )
 
     def patch(self, request: Request) -> Response:
         serializer = ProfileUpdateSerializer(
-            instance=request.user, data=request.data, partial=True
+            instance=request.user,
+            data=request.data,
+            partial=True,
+            context={"request": request},
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(
-            UserResponseSerializer(request.user).data, status=status.HTTP_200_OK
+            UserResponseSerializer(request.user, context={"request": request}).data,
+            status=status.HTTP_200_OK,
         )
 
 

@@ -28,6 +28,7 @@ from .permissions import IsIdentityVerified
 from .serializers import IdentityDocumentSubmissionSerializer
 from .services import (
     build_email_verification_token,
+    deactivate_account,
     email_change_token_generator,
     email_verification_token_generator,
     password_reset_token_generator,
@@ -4187,4 +4188,68 @@ class ApplyLenderTests(APITestCase):
         self.assertIn(
             response.status_code,
             (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN),
+        )
+
+
+class UserAdminActionTests(APITestCase):
+    """Bulk deactivate/reactivate from /admin/ (superadmin maintenance)."""
+
+    def setUp(self) -> None:
+        self.admin = make_user(
+            "admin-actions@iskolarngbayan.pup.edu.ph",
+            is_staff=True,
+            full_name="Ash Reyes",
+        )
+        self.admin.is_superuser = True
+        self.admin.save(update_fields=["is_superuser"])
+        self.member = make_user("member-actions@iskolarngbayan.pup.edu.ph")
+        self.client.force_login(self.admin)
+
+    def run_action(self, action: str, users: list[User]):
+        return self.client.post(
+            reverse("admin:users_user_changelist"),
+            {
+                "action": action,
+                "_selected_action": [user.pk for user in users],
+            },
+            follow=True,
+        )
+
+    def test_deactivate_action_closes_the_account(self) -> None:
+        response = self.run_action("deactivate_selected_accounts", [self.member])
+
+        self.assertContains(response, "Deactivated 1 account(s).")
+        self.member.refresh_from_db()
+        self.assertEqual(
+            self.member.account_status, User.AccountStatusChoices.DEACTIVATED
+        )
+        self.assertFalse(self.member.is_active)
+
+    def test_deactivate_action_never_targets_the_acting_administrator(self) -> None:
+        response = self.run_action("deactivate_selected_accounts", [self.admin])
+
+        self.assertContains(response, "Deactivated 0 account(s).")
+        self.admin.refresh_from_db()
+        self.assertTrue(self.admin.is_active)
+        self.assertEqual(self.admin.account_status, User.AccountStatusChoices.ACTIVE)
+
+    def test_reactivate_action_restores_a_deactivated_account(self) -> None:
+        deactivate_account(self.member)
+
+        response = self.run_action("reactivate_selected_accounts", [self.member])
+
+        self.assertContains(response, "Reactivated 1 account(s).")
+        self.member.refresh_from_db()
+        self.assertTrue(self.member.is_active)
+        self.assertEqual(self.member.account_status, User.AccountStatusChoices.ACTIVE)
+
+    def test_reactivate_action_leaves_suspended_accounts_alone(self) -> None:
+        self.member.account_status = User.AccountStatusChoices.SUSPENDED
+        self.member.save(update_fields=["account_status"])
+
+        self.run_action("reactivate_selected_accounts", [self.member])
+
+        self.member.refresh_from_db()
+        self.assertEqual(
+            self.member.account_status, User.AccountStatusChoices.SUSPENDED
         )

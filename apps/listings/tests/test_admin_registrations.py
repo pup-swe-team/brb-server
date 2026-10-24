@@ -41,6 +41,47 @@ class ListingsAdminRegistrationTests(BaseListingTestCase):
         registered = {m for m, _ in admin.site._registry.items() if m in expected}
         self.assertEqual(registered, expected)
 
+    def test_admin_can_deactivate_a_listing(self) -> None:
+        response = self.client.post(
+            reverse("admin:listings_listing_changelist"),
+            {
+                "action": "deactivate_selected",
+                "_selected_action": [self.listing.pk],
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.listing.refresh_from_db()
+        self.assertEqual(self.listing.status.name, "deactivated")
+
+    def test_admin_can_reactivate_a_listing(self) -> None:
+        self.listing.status = ListingStatus.objects.create(name="deactivated")
+        self.listing.save(update_fields=["status"])
+
+        response = self.client.post(
+            reverse("admin:listings_listing_changelist"),
+            {
+                "action": "reactivate_selected",
+                "_selected_action": [self.listing.pk],
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.listing.refresh_from_db()
+        self.assertEqual(self.listing.status.name, "active")
+
+    def test_deactivate_action_leaves_deleted_listings_alone(self) -> None:
+        self.listing.status = ListingStatus.objects.create(name="deleted")
+        self.listing.save(update_fields=["status"])
+
+        self.client.post(
+            reverse("admin:listings_listing_changelist"),
+            {
+                "action": "deactivate_selected",
+                "_selected_action": [self.listing.pk],
+            },
+        )
+        self.listing.refresh_from_db()
+        self.assertEqual(self.listing.status.name, "deleted")
+
     def test_user_model_registered(self):
         from django.contrib import admin
 
