@@ -5,6 +5,21 @@ behind a change, see [`DECISIONS.md`](DECISIONS.md). For scope and ticket
 checkboxes, see [`BRB_BACKEND_SPRINTS.md`](BRB_BACKEND_SPRINTS.md).
 
 
+## 2026-10-23 - Administrators can deactivate accounts and listings from /admin/
+
+### Added
+
+- `/admin/users/user/` gains bulk **Deactivate selected accounts** and
+  **Reactivate selected accounts** actions. Deactivation reuses CP-1004's
+  service (`account_status=deactivated`, `is_active=False`, live tokens
+  blacklisted) and skips accounts with open orders or unreturned-item cases,
+  plus administrators and the acting user. Reactivation only restores
+  `deactivated` accounts, so suspended and banned accounts stay put.
+- `/admin/listings/listing/` gains bulk **Deactivate selected listings** and
+  **Reactivate selected listings** actions, using the same status transitions
+  as CP-402's endpoints. Deleted listings are never resurrected by the
+  reactivate action.
+
 ## 2026-10-23 - Three QA fixes: deactivation, pickup actions, ID format
 
 ### Fixed

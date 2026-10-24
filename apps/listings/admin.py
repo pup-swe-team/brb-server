@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.utils import timezone
 
+from .constants import LISTING_STATUS_DEACTIVATED, LISTING_STATUS_DELETED
 from .models import (
     AvailabilityWindow,
     BlockedDateRange,
@@ -10,6 +11,7 @@ from .models import (
     ListingStatus,
     PickupLocation,
 )
+from .services import deactivate_listing, reactivate_listing
 
 
 class ListingAdmin(admin.ModelAdmin):
@@ -25,6 +27,44 @@ class ListingAdmin(admin.ModelAdmin):
     list_filter = ("status", "category", "condition", "created_at", "updated_at")
     search_fields = ("title", "description", "lender__full_name", "lender__email")
     date_hierarchy = "created_at"
+    actions = ("deactivate_selected", "reactivate_selected")
+
+    @admin.action(description="Deactivate selected listings (hidden from search)")
+    def deactivate_selected(self, request, queryset) -> None:
+        """CP-402's status change, applied in bulk from /admin/."""
+        deactivated = 0
+        skipped = 0
+        for listing in queryset.select_related("status"):
+            if listing.status.name in (
+                LISTING_STATUS_DEACTIVATED,
+                LISTING_STATUS_DELETED,
+            ):
+                skipped += 1
+                continue
+            deactivate_listing(listing=listing)
+            deactivated += 1
+        self.message_user(
+            request,
+            f"Deactivated {deactivated} listing(s)."
+            + (f" Skipped {skipped} already inactive." if skipped else ""),
+        )
+
+    @admin.action(description="Reactivate selected listings")
+    def reactivate_selected(self, request, queryset) -> None:
+        """Undo a deactivation; deleted listings stay deleted (CP-402)."""
+        reactivated = 0
+        skipped = 0
+        for listing in queryset.select_related("status"):
+            if listing.status.name != LISTING_STATUS_DEACTIVATED:
+                skipped += 1
+                continue
+            reactivate_listing(listing=listing)
+            reactivated += 1
+        self.message_user(
+            request,
+            f"Reactivated {reactivated} listing(s)."
+            + (f" Skipped {skipped} not deactivated." if skipped else ""),
+        )
 
 
 class ListingStatusAdmin(admin.ModelAdmin):
