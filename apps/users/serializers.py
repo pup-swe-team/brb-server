@@ -95,7 +95,7 @@ class UserResponseSerializer(serializers.ModelSerializer):
             return None
         try:
             url = photo.url
-        except Exception:
+        except (AttributeError, ValueError, OSError):
             return None
         if request is not None:
             return request.build_absolute_uri(url)
