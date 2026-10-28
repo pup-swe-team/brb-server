@@ -16,6 +16,7 @@ class SystemConfigAdmin(admin.ModelAdmin):
     - ``login_lockout_minutes``         (CP-103, default 15)
     - ``email_verification_expiry_days`` (CP-102, default 7)
     - ``borrowing_limit``               (CP-501, default 3)
+    - ``borrow_request_expiry_hours``   (CP-502, default 48)
 
     Values are stored as text and parsed by ``apps.core.selectors``; a
     non-numeric or missing value falls back to the default rather than raising,

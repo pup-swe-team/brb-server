@@ -54,6 +54,12 @@ in the same commit.
 | Method | Path | Auth |
 |---|---|---|
 | POST | `/api/v1/jobs/deactivate-unverified/` | cron secret |
+| POST | `/api/v1/jobs/expire-borrow-requests/` | cron secret |
+
+Call `expire-borrow-requests/` hourly with `Authorization: Bearer <CRON_SECRET_TOKEN>`
+using cron-job.org or an equivalent scheduler. The endpoint is idempotent and
+returns the number and IDs of orders expired in that run. The deployment must
+configure the external schedule; this repository does not provision it.
 
 ## Identity documents — `/api/v1/identity/`
 
@@ -107,6 +113,26 @@ notification for the lender with the order ID as its reference.
 The Admin-configurable `SystemConfig` key `borrowing_limit` caps each borrower's
 combined Requested, Confirmed, and Active orders. Missing, non-numeric, or
 non-positive values use the default limit of **3**.
+
+## Lender responses — `/api/v1/orders/<id>/` (CP-502)
+
+| Method | Path | Auth |
+|---|---|---|
+| POST | `/api/v1/orders/<id>/accept/` | listing lender |
+| POST | `/api/v1/orders/<id>/decline/` | listing lender |
+
+Only `Requested` orders can be answered. Acceptance sets `Confirmed` and blocks
+its inclusive dates. If another Confirmed or Active order, or a blocked date
+range, now overlaps, acceptance automatically sets `Declined` instead. A decline
+also sets `Declined` and releases dates linked to that order. Both responses
+return the order's ID, listing ID, borrower ID, dates, and resulting status.
+The borrower receives an in-app `acceptance` or `decline` notification.
+
+The `SystemConfig` key `borrow_request_expiry_hours` controls the response
+deadline from order creation; missing, invalid, or non-positive values default
+to **48**. A lender response at or after the deadline marks the order `Expired`,
+releases its dates, notifies the borrower, and returns `409` with the expired
+order. The scheduled job performs the same transition for unanswered orders.
 
 ## Pickup locations — `/api/v1/pickup-locations/` (CP-1105)
 

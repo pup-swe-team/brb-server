@@ -1,13 +1,15 @@
-"""Borrow request validation and creation (CP-501)."""
+"""Borrow request creation and lender response services (CP-501, CP-502)."""
 
-from datetime import date
+from datetime import date, timedelta
 
 from django.db import transaction
 from django.shortcuts import get_object_or_404
-from rest_framework.exceptions import ValidationError
+from django.utils import timezone
+from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
 
 from apps.core.selectors import get_int_config
 from apps.listings.models import AvailabilityWindow, BlockedDateRange, Listing
+from apps.listings.services import block_dates_for_order, release_dates_for_order
 from apps.notifications.models import Notification, NotificationType
 from apps.users.models import User
 
@@ -17,6 +19,40 @@ BORROWING_LIMIT_KEY = "borrowing_limit"
 DEFAULT_BORROWING_LIMIT = 3
 LIMIT_COUNTED_STATUSES = ("requested", "confirmed", "active")
 BOOKED_STATUSES = ("confirmed", "active")
+REQUEST_EXPIRY_HOURS_KEY = "borrow_request_expiry_hours"
+DEFAULT_REQUEST_EXPIRY_HOURS = 48
+
+
+class OrderStateConflict(APIException):
+    status_code = 409
+    default_detail = "This borrow request is no longer awaiting a response."
+    default_code = "order_state_conflict"
+
+
+def request_expiry_hours() -> int:
+    hours = get_int_config(REQUEST_EXPIRY_HOURS_KEY, DEFAULT_REQUEST_EXPIRY_HOURS)
+    return hours if hours > 0 else DEFAULT_REQUEST_EXPIRY_HOURS
+
+
+def _notify_borrower(order: Order, event: str) -> None:
+    notification_type, _ = NotificationType.objects.get_or_create(name=event)
+    Notification.objects.create(
+        user_id=order.borrower_id,
+        type=notification_type,
+        reference_id=str(order.pk),
+    )
+
+
+def _set_order_status(order: Order, status_name: str) -> None:
+    status_row, _ = OrderStatus.objects.get_or_create(name=status_name)
+    order.status = status_row
+    order.save(update_fields=["status", "updated_at"])
+
+
+def _expire_order(order: Order) -> None:
+    _set_order_status(order, "expired")
+    release_dates_for_order(order)
+    _notify_borrower(order, "expiry")
 
 
 @transaction.atomic
@@ -77,3 +113,76 @@ def request_borrow(
         reference_id=str(order.pk),
     )
     return order
+
+
+@transaction.atomic
+def respond_to_borrow_request(
+    *, lender: User, order_id: int, action: str
+) -> tuple[Order, str]:
+    """Return the updated order and outcome: accepted, declined, or expired."""
+    if action not in ("accept", "decline"):
+        raise ValueError(f"Unsupported borrow request action: {action}")
+
+    # Lock the listing before the order, matching CP-501's listing lock. This
+    # serializes competing acceptances for overlapping requested orders.
+    existing = get_object_or_404(Order.objects.only("id", "listing_id"), pk=order_id)
+    listing = Listing.objects.select_for_update().get(pk=existing.listing_id)
+    order = get_object_or_404(
+        Order.objects.select_for_update().select_related("status"), pk=order_id
+    )
+    if listing.lender_id != lender.pk:
+        raise PermissionDenied("Only the listing's lender can respond to this request.")
+    if order.status.name != "requested":
+        raise OrderStateConflict()
+
+    if order.created_at <= timezone.now() - timedelta(hours=request_expiry_hours()):
+        _expire_order(order)
+        return order, "expired"
+
+    if action == "decline":
+        _set_order_status(order, "declined")
+        release_dates_for_order(order)
+        _notify_borrower(order, "decline")
+        return order, "declined"
+
+    overlap = {"start_date__lte": order.end_date, "end_date__gte": order.start_date}
+    conflicting_order = Order.objects.filter(
+        listing=listing, status__name__in=BOOKED_STATUSES, **overlap
+    ).exclude(pk=order.pk)
+    conflicting_block = BlockedDateRange.objects.filter(
+        listing=listing, **overlap
+    ).exclude(order_id=order.pk)
+    if conflicting_order.exists() or conflicting_block.exists():
+        _set_order_status(order, "declined")
+        release_dates_for_order(order)
+        _notify_borrower(order, "decline")
+        return order, "declined"
+
+    _set_order_status(order, "confirmed")
+    block_dates_for_order(order)
+    _notify_borrower(order, "acceptance")
+    return order, "accepted"
+
+
+def expire_unanswered_requests(*, now=None) -> list[int]:
+    """Expire overdue Requested orders; recheck each under a row lock."""
+    now = now or timezone.now()
+    cutoff = now - timedelta(hours=request_expiry_hours())
+    candidate_ids = list(
+        Order.objects.filter(status__name="requested", created_at__lte=cutoff)
+        .order_by("pk")
+        .values_list("pk", flat=True)
+    )
+    expired_ids = []
+    for order_id in candidate_ids:
+        with transaction.atomic():
+            order = (
+                Order.objects.select_for_update()
+                .select_related("status")
+                .get(pk=order_id)
+            )
+            if order.status.name != "requested" or order.created_at > cutoff:
+                continue
+            _expire_order(order)
+            expired_ids.append(order.pk)
+    return expired_ids
