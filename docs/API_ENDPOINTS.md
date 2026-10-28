@@ -90,6 +90,24 @@ in the same commit.
 > `listing-detail-legacy`) pointing at the same detail view. Use
 > `/api/v1/listings/<id>/` in clients; the bare alias is scheduled for cleanup.
 
+## Borrow requests — `/api/v1/orders/` (CP-501)
+
+| Method | Path | Auth |
+|---|---|---|
+| POST | `/api/v1/orders/` | authenticated, identity-verified borrower |
+
+Send JSON `{"listing_id": 1, "start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD"}`.
+Dates are inclusive, start today or later, and must fit inside one listing
+availability window. A confirmed or active order, or a blocked date range,
+prevents overlapping requests. The response is `201` with `id`, `listing_id`,
+`borrower_id`, `start_date`, `end_date`, and `status: "requested"`; validation
+failures return `400`. A successful request creates a `new_request` in-app
+notification for the lender with the order ID as its reference.
+
+The Admin-configurable `SystemConfig` key `borrowing_limit` caps each borrower's
+combined Requested, Confirmed, and Active orders. Missing, non-numeric, or
+non-positive values use the default limit of **3**.
+
 ## Pickup locations — `/api/v1/pickup-locations/` (CP-1105)
 
 Unpaginated list. Soft delete: `DELETE` sets `deleted_at`; deleted rows stay
