@@ -36,3 +36,26 @@ class BorrowRequestResultSerializer(serializers.ModelSerializer):
             "end_date",
             "status",
         ]
+
+
+class CancelOrderSerializer(serializers.Serializer):
+    reason = serializers.CharField(trim_whitespace=True, allow_blank=False)
+
+
+class OrderDetailSerializer(BorrowRequestResultSerializer):
+    lender_id = serializers.IntegerField(source="listing.lender_id", read_only=True)
+
+    class Meta:
+        model = Order
+        fields = [
+            "id",
+            "listing_id",
+            "borrower_id",
+            "lender_id",
+            "start_date",
+            "end_date",
+            "status",
+            "cancel_reason",
+            "created_at",
+            "updated_at",
+        ]

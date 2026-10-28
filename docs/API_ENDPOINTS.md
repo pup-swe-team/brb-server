@@ -134,6 +134,21 @@ to **48**. A lender response at or after the deadline marks the order `Expired`,
 releases its dates, notifies the borrower, and returns `409` with the expired
 order. The scheduled job performs the same transition for unanswered orders.
 
+## Order cancellation and detail — `/api/v1/orders/<id>/` (CP-503)
+
+| Method | Path | Auth |
+|---|---|---|
+| GET | `/api/v1/orders/<id>/` | order borrower or listing lender |
+| POST | `/api/v1/orders/<id>/cancel/` | order borrower or listing lender |
+
+Cancel with JSON `{"reason": "..."}`. The reason must contain non-whitespace
+text. Only `Requested` or `Confirmed` orders can be cancelled; later states
+return `409`. Cancellation sets `Cancelled`, stores the trimmed reason, releases
+blocked dates linked to that order, and creates a `cancellation` in-app
+notification for the other party. The response and party-only detail include
+the order ID, listing and party IDs, dates, status, `cancel_reason`, and
+timestamps. Existing orders have an empty cancellation reason.
+
 ## Pickup locations — `/api/v1/pickup-locations/` (CP-1105)
 
 Unpaginated list. Soft delete: `DELETE` sets `deleted_at`; deleted rows stay

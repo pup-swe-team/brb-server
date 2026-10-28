@@ -186,3 +186,40 @@ def expire_unanswered_requests(*, now=None) -> list[int]:
             _expire_order(order)
             expired_ids.append(order.pk)
     return expired_ids
+
+
+@transaction.atomic
+def cancel_order(*, actor: User, order_id: int, reason: str) -> Order:
+    """Cancel a Requested or Confirmed order and notify its other party."""
+    cleaned_reason = reason.strip()
+    if not cleaned_reason:
+        raise ValidationError({"reason": "A cancellation reason is required."})
+
+    # Match the lock order used by lender acceptance, so a competing response
+    # cannot confirm an order after cancellation has released its dates.
+    existing = get_object_or_404(Order.objects.only("id", "listing_id"), pk=order_id)
+    listing = Listing.objects.select_for_update().get(pk=existing.listing_id)
+    order = get_object_or_404(
+        Order.objects.select_for_update().select_related("status"), pk=order_id
+    )
+    if actor.pk not in (order.borrower_id, listing.lender_id):
+        raise PermissionDenied("Only the borrower or lender can cancel this order.")
+    if order.status.name not in ("requested", "confirmed"):
+        raise OrderStateConflict("Only Requested or Confirmed orders can be cancelled.")
+
+    cancelled_status, _ = OrderStatus.objects.get_or_create(name="cancelled")
+    order.status = cancelled_status
+    order.cancel_reason = cleaned_reason
+    order.save(update_fields=["status", "cancel_reason", "updated_at"])
+    release_dates_for_order(order)
+
+    recipient_id = (
+        listing.lender_id if actor.pk == order.borrower_id else order.borrower_id
+    )
+    notification_type, _ = NotificationType.objects.get_or_create(name="cancellation")
+    Notification.objects.create(
+        user_id=recipient_id,
+        type=notification_type,
+        reference_id=str(order.pk),
+    )
+    return order
