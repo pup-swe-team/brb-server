@@ -43,6 +43,7 @@ class Order(models.Model):
         on_delete=models.PROTECT,
         related_name="orders",
     )
+    cancel_reason = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

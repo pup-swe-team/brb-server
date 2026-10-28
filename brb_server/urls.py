@@ -12,12 +12,14 @@ Class-based views
     2. Add a URL to urlpatterns:  path('', Home.as_view(), name='home')
 Including another URLconf
     1. Import the include() function: from django.urls import include, path
+from apps.users.dashboards import BorrowerDashboardView, LenderDashboardView
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 
 from django.conf import settings
 from django.contrib import admin
 from django.urls import include, path
+from apps.users.dashboards import BorrowerDashboardView, LenderDashboardView
 from django.views.static import serve as serve_media
 
 from apps.core.views import HealthView
@@ -32,6 +34,7 @@ urlpatterns = [
     path("api/v1/identity/", include("apps.users.identity_urls")),
     path("api/v1/lenders/", include("apps.users.lender_urls")),
     path("api/v1/", include("apps.listings.urls")),
+    path("api/v1/", include("apps.orders.urls")),
     # Uploads (listing photos, profile images). Render has no nginx and
     # DEBUG=False, so nothing else serves MEDIA_ROOT — see DECISIONS.md D-26.
     path(
@@ -39,5 +42,25 @@ urlpatterns = [
         serve_media,
         {"document_root": settings.MEDIA_ROOT},
         name="media-serve",
+    ),
+    path(
+        "api/v1/dashboard/borrower/",
+        BorrowerDashboardView.as_view(),
+        name="api-dashboard-borrower",
+    ),
+    path(
+        "api/v1/dashboard/lender/",
+        LenderDashboardView.as_view(),
+        name="api-dashboard-lender",
+    ),
+    path(
+        "api/v1/auth/borrower-dashboard/",
+        BorrowerDashboardView.as_view(),
+        name="api-auth-borrower-dashboard",
+    ),
+    path(
+        "api/v1/auth/lender-dashboard/",
+        LenderDashboardView.as_view(),
+        name="api-auth-lender-dashboard",
     ),
 ]

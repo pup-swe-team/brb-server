@@ -17,6 +17,7 @@ from .views import (
     RegisterView,
     ResendVerificationView,
 )
+from .dashboards import BorrowerDashboardView, LenderDashboardView
 
 urlpatterns = [
     path("register/", RegisterView.as_view(), name="auth-register"),
@@ -71,4 +72,19 @@ urlpatterns = [
         DeactivateAccountView.as_view(),
         name="auth-deactivate",
     ),
+    # CP-201/203/204 -- dashboards
+    path(
+        "dashboard/borrower/",
+        BorrowerDashboardView.as_view(),
+        name="auth-dashboard-borrower",
+    ),
+    path(
+        "dashboard/lender/", LenderDashboardView.as_view(), name="auth-dashboard-lender"
+    ),
+    path(
+        "borrower/dashboard/",
+        BorrowerDashboardView.as_view(),
+        name="borrower-dashboard",
+    ),
+    path("lender/dashboard/", LenderDashboardView.as_view(), name="lender-dashboard"),
 ]
