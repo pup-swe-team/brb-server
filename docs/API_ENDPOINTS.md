@@ -1,9 +1,7 @@
 # BRB Server — API endpoints
 
 Flat reference of every HTTP route the server exposes. Generated from the
-URLconf on **2026-10-20** (branch `feature/sprint-2_CP-104-1001-1002-1004`,
-after merging CP-301/302/304/403/1105) — if a route changes, update this file
-in the same commit.
+URLconf — if a route changes, update this file in the same commit.
 
 - **Base URL (dev):** `http://localhost:8000` — **(Render):** the service URL
   from the `brb-server` dashboard (`https://…onrender.com`).
@@ -189,6 +187,6 @@ for history but vanish from the list and return 404 on detail.
 
 ## Not implemented yet (planned domains)
 
-Orders/borrowing, chat, reviews (write), codes, reports, notifications have
-**no endpoints yet** — their tables exist but are empty. Do not point a client
-at paths under these names until the owning tickets land.
+Chat, reviews (write), reports, notifications have **no endpoints yet** —
+their tables exist but are empty. Do not point a client at paths under these
+names until the owning tickets land.

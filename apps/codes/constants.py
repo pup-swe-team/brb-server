@@ -1,0 +1,21 @@
+"""Constants and lookup-table values for the codes domain (CP-504, CP-505, FR8, NFR 4.4)."""
+
+AUTH_CODE_LENGTH = 6
+
+CODE_TYPE_HANDOVER = "handover"
+CODE_TYPE_RETURN = "return"
+
+VALID_AUTH_CODE_TYPES = (
+    CODE_TYPE_HANDOVER,
+    CODE_TYPE_RETURN,
+)
+
+CODE_STATUS_ACTIVE = "active"
+CODE_STATUS_USED = "used"
+CODE_STATUS_EXPIRED = "expired"
+
+VALID_AUTH_CODE_STATUSES = (
+    CODE_STATUS_ACTIVE,
+    CODE_STATUS_USED,
+    CODE_STATUS_EXPIRED,
+)
