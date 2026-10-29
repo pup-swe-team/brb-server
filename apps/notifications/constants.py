@@ -1,21 +1,35 @@
 """Constants and lookup-table values for the notifications app (FR11)."""
 
+NOTIFICATION_TYPE_NEW_REQUEST = "new_request"
+NOTIFICATION_TYPE_ACCEPTANCE = "acceptance"
+NOTIFICATION_TYPE_DECLINE = "decline"
+NOTIFICATION_TYPE_EXPIRY = "expiry"
+NOTIFICATION_TYPE_CANCELLATION = "cancellation"
+NOTIFICATION_TYPE_CODE_GENERATION = "code_generation"
+NOTIFICATION_TYPE_CONFIRMED_HANDOVER = "confirmed_handover"
+NOTIFICATION_TYPE_CONFIRMED_RETURN = "confirmed_return"
+NOTIFICATION_TYPE_UPCOMING_DUE_DATE = "upcoming_due_date"
+NOTIFICATION_TYPE_OVERDUE_STATUS = "overdue_status"
+NOTIFICATION_TYPE_UNRETURNED_STATUS = "unreturned_status"
+NOTIFICATION_TYPE_NEW_MESSAGE = "new_message"
+NOTIFICATION_TYPE_NEW_REVIEW = "new_review"
 NOTIFICATION_TYPE_VERIFICATION_RESULT = "verification_result"
+NOTIFICATION_TYPE_REPORT_UPDATES = "report_updates"
 
 DEFAULT_NOTIFICATION_TYPES = (
-    "new_request",
-    "acceptance",
-    "decline",
-    "expiry",
-    "cancellation",
-    "code_generation",
-    "confirmed_handover",
-    "confirmed_return",
-    "upcoming_due_date",
-    "overdue_status",
-    "unreturned_status",
-    "new_message",
-    "new_review",
+    NOTIFICATION_TYPE_NEW_REQUEST,
+    NOTIFICATION_TYPE_ACCEPTANCE,
+    NOTIFICATION_TYPE_DECLINE,
+    NOTIFICATION_TYPE_EXPIRY,
+    NOTIFICATION_TYPE_CANCELLATION,
+    NOTIFICATION_TYPE_CODE_GENERATION,
+    NOTIFICATION_TYPE_CONFIRMED_HANDOVER,
+    NOTIFICATION_TYPE_CONFIRMED_RETURN,
+    NOTIFICATION_TYPE_UPCOMING_DUE_DATE,
+    NOTIFICATION_TYPE_OVERDUE_STATUS,
+    NOTIFICATION_TYPE_UNRETURNED_STATUS,
+    NOTIFICATION_TYPE_NEW_MESSAGE,
+    NOTIFICATION_TYPE_NEW_REVIEW,
     NOTIFICATION_TYPE_VERIFICATION_RESULT,
-    "report_updates",
+    NOTIFICATION_TYPE_REPORT_UPDATES,
 )
