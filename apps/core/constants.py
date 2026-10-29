@@ -23,3 +23,19 @@ DEFAULT_EMAIL_VERIFICATION_EXPIRY_DAYS = 7
 # CP-104 -- minutes a password-reset link stays valid.
 PASSWORD_RESET_EXPIRY_MINUTES = "password_reset_expiry_minutes"
 DEFAULT_PASSWORD_RESET_EXPIRY_MINUTES = 60
+
+# CP-504 / CP-505 -- hours a handover or return authentication code stays valid.
+AUTH_CODE_EXPIRY_HOURS = "auth_code_expiry_hours"
+DEFAULT_AUTH_CODE_EXPIRY_HOURS = 3
+
+# CP-504 / CP-505 -- consecutive failed code entries before verification locks.
+AUTH_CODE_LOCKOUT_THRESHOLD = "auth_code_lockout_threshold"
+DEFAULT_AUTH_CODE_LOCKOUT_THRESHOLD = 5
+
+# CP-504 / CP-505 -- minutes code verification stays locked after repeated failures.
+AUTH_CODE_LOCKOUT_MINUTES = "auth_code_lockout_minutes"
+DEFAULT_AUTH_CODE_LOCKOUT_MINUTES = 15
+
+# CP-506 -- days an order may stay Overdue before escalating to Unreturned.
+UNRETURNED_ESCALATION_DAYS = "unreturned_escalation_days"
+DEFAULT_UNRETURNED_ESCALATION_DAYS = 7

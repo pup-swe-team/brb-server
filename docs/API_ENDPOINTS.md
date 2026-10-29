@@ -1,9 +1,7 @@
 # BRB Server — API endpoints
 
 Flat reference of every HTTP route the server exposes. Generated from the
-URLconf on **2026-10-20** (branch `feature/sprint-2_CP-104-1001-1002-1004`,
-after merging CP-301/302/304/403/1105) — if a route changes, update this file
-in the same commit.
+URLconf — if a route changes, update this file in the same commit.
 
 - **Base URL (dev):** `http://localhost:8000` — **(Render):** the service URL
   from the `brb-server` dashboard (`https://…onrender.com`).
@@ -54,6 +52,12 @@ in the same commit.
 | Method | Path | Auth |
 |---|---|---|
 | POST | `/api/v1/jobs/deactivate-unverified/` | cron secret |
+| POST | `/api/v1/jobs/check-overdue/` | cron secret |
+
+`POST /api/v1/jobs/check-overdue/` (CP-506, CP-504/505):
+- Expires stale `active` `AuthCode` rows past their `expires_at` timestamp.
+- Marks `Active` orders with `end_date < today` as `Overdue` and notifies both Borrower and Lender (`overdue_status`).
+- Marks `Overdue` orders $\ge 7$ days past due (Admin-configurable via `SystemConfig` key `unreturned_escalation_days`) as `Unreturned`, auto-suspends the Borrower (`account_status="suspended"`), opens an Admin `UnreturnedCase` (`status="open"`), and notifies both parties (`unreturned_status`).
 
 ## Identity documents — `/api/v1/identity/`
 
@@ -89,6 +93,29 @@ in the same commit.
 > There is also a legacy alias `GET/PUT/PATCH/DELETE /api/v1/<id>` (name
 > `listing-detail-legacy`) pointing at the same detail view. Use
 > `/api/v1/listings/<id>/` in clients; the bare alias is scheduled for cleanup.
+
+## Handover & Return Authentication Codes — `/api/v1/orders/<order_id>/` (CP-504, CP-505)
+
+| Method | Path | Auth |
+|---|---|---|
+| POST | `/api/v1/orders/<order_id>/handover-code/generate/` | listing lender (order must be `confirmed`) |
+| POST | `/api/v1/orders/<order_id>/handover-code/verify/` | order borrower (body: `{"code": "123456"}`) |
+| POST | `/api/v1/orders/<order_id>/return-code/generate/` | order borrower (order must be `active` or `overdue`) |
+| POST | `/api/v1/orders/<order_id>/return-code/verify/` | listing lender (body: `{"code": "123456", "flagged": false, "dispute_description": "..."}`; supports multipart `evidence` upload) |
+
+- **Handover Code (`CP-504`):** Lender generates a single-use 6-digit OTP on a `Confirmed` order (superseding any previous active handover code). Borrower enters the code to set the order to `Active`, start tracking, and notify the Lender (`confirmed_handover`).
+- **Return Code (`CP-505`):** Borrower generates a single-use 6-digit OTP when initiating return on an `Active` or `Overdue` order. Lender enters the code to mark the order `Returned`, release blocked calendar dates, notify the Borrower (`confirmed_return`), and automatically transition the order to `Completed` (if `flagged=false`) or `Disputed` (if `flagged=true`, opening a `Dispute` and saving any uploaded `DisputeEvidence`).
+- **Shared Code Security Rules:** Codes expire after **3 hours** (`SystemConfig` key `auth_code_expiry_hours`). Incorrect, expired, or already-used codes return `400 Bad Request` and record an `AuthCodeAttempt(was_successful=False)`. After **5** consecutive failed attempts (`auth_code_lockout_threshold`), verification is locked (`429 Too Many Requests`) for **15 minutes** (`auth_code_lockout_minutes`).
+
+## Unreturned Cases & Admin Order Overrides — `/api/v1/` (CP-506)
+
+| Method | Path | Auth |
+|---|---|---|
+| GET | `/api/v1/unreturned-cases/` | admin (`?status=open\|escalated\|returned\|unresolved`) |
+| GET | `/api/v1/unreturned-cases/<id>/` | admin (full dossier: identity, contact, order, chat, codes, evidence; logs `AdminAccessLog`) |
+| POST | `/api/v1/unreturned-cases/<id>/escalate/` | admin (JSON or multipart `{"resolution_notes": "...", "evidence": <file>}`) |
+| POST | `/api/v1/unreturned-cases/<id>/close/` | admin (JSON `{"status": "returned" \| "unresolved", "resolution_notes": "..."}`) |
+| POST | `/api/v1/orders/<id>/override-status/` | admin (JSON `{"new_status": "<order_status>", "reason": "..."}`) |
 
 ## Pickup locations — `/api/v1/pickup-locations/` (CP-1105)
 
@@ -130,6 +157,6 @@ for history but vanish from the list and return 404 on detail.
 
 ## Not implemented yet (planned domains)
 
-Orders/borrowing, chat, reviews (write), codes, reports, notifications have
-**no endpoints yet** — their tables exist but are empty. Do not point a client
-at paths under these names until the owning tickets land.
+Chat, reviews (write), reports, notifications have **no endpoints yet** —
+their tables exist but are empty. Do not point a client at paths under these
+names until the owning tickets land.
