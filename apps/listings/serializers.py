@@ -1,8 +1,10 @@
 import json
-from datetime import date
+import re
+from datetime import date, timedelta
 from typing import Any
 
 from django.core.files.uploadedfile import UploadedFile
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -64,8 +66,11 @@ def _extract_and_validate_photos(serializer: serializers.BaseSerializer) -> list
     allowed = ", ".join(
         t.split("/")[-1].upper() for t in ALLOWED_LISTING_PHOTO_CONTENT_TYPES
     )
+    valid_photos: list[Any] = []
     for photo in photos:
         if not isinstance(photo, UploadedFile):
+            if isinstance(photo, str):
+                continue
             raise serializers.ValidationError(
                 {"photos": "Photos must be uploaded as image files."}
             )
@@ -81,7 +86,8 @@ def _extract_and_validate_photos(serializer: serializers.BaseSerializer) -> list
             raise serializers.ValidationError(
                 {"photos": f"Image must be one of: {allowed}."}
             )
-    return photos
+        valid_photos.append(photo)
+    return valid_photos
 
 
 class ListingCategorySerializer(serializers.ModelSerializer):
@@ -269,6 +275,8 @@ class ListingSearchResultSerializer(serializers.ModelSerializer):
     status = ListingStatusSerializer(read_only=True)
     lender = serializers.SerializerMethodField()
     photos = ListingPhotoSerializer(many=True, read_only=True)
+    availability_windows = AvailabilityWindowSerializer(many=True, read_only=True)
+    active_orders = serializers.SerializerMethodField()
 
     def get_lender(self, obj: Listing) -> dict:
         return {
@@ -276,6 +284,11 @@ class ListingSearchResultSerializer(serializers.ModelSerializer):
             "full_name": obj.lender.full_name,
             "photo": obj.lender.photo.url if obj.lender.photo else None,
         }
+
+    def get_active_orders(self, obj: Listing) -> int:
+        return obj.orders.filter(
+            status__name__in=["requested", "confirmed", "active", "overdue", "unreturned", "disputed"]
+        ).count()
 
     class Meta:
         model = Listing
@@ -291,6 +304,8 @@ class ListingSearchResultSerializer(serializers.ModelSerializer):
             "pickup_location",
             "status",
             "photos",
+            "availability_windows",
+            "active_orders",
             "created_at",
             "updated_at",
         ]
@@ -300,7 +315,7 @@ class ListingCreateSerializer(serializers.ModelSerializer):
     """Serializer for publishing a resource listing (FR6, FR7, CP-401)."""
 
     title = serializers.CharField(max_length=200, required=True)
-    description = serializers.CharField(required=True)
+    description = serializers.CharField(required=False, allow_blank=True, default="")
     category = serializers.PrimaryKeyRelatedField(
         queryset=ListingCategory.objects.all(),
         required=True,
@@ -361,6 +376,14 @@ class ListingCreateSerializer(serializers.ModelSerializer):
                         data["category"] = parsed["id"]
                 except (json.JSONDecodeError, ValueError):
                     pass
+            elif isinstance(raw_cat, str) and not raw_cat.strip().isdigit():
+                clean_name = raw_cat.strip()
+                cat_obj = ListingCategory.objects.filter(name__iexact=clean_name).first()
+                if not cat_obj:
+                    cat_obj = ListingCategory.objects.filter(name__icontains=clean_name).first()
+                if not cat_obj:
+                    cat_obj, _ = ListingCategory.objects.get_or_create(name=clean_name)
+                data["category"] = cat_obj.id
 
         # Pickup location normalization
         if "pickup_location_id" in data and "pickup_location" not in data:
@@ -376,6 +399,25 @@ class ListingCreateSerializer(serializers.ModelSerializer):
                         data["pickup_location"] = parsed["id"]
                 except (json.JSONDecodeError, ValueError):
                     pass
+            elif isinstance(raw_loc, str) and not raw_loc.strip().isdigit():
+                clean_name = raw_loc.strip()
+                loc_obj = PickupLocation.objects.filter(name__iexact=clean_name, deleted_at__isnull=True).first()
+                if not loc_obj:
+                    loc_obj = PickupLocation.objects.filter(name__icontains=clean_name, deleted_at__isnull=True).first()
+                if not loc_obj:
+                    low = clean_name.lower()
+                    if 'cea' in low or 'engineering' in low or 'architecture' in low:
+                        loc_obj = PickupLocation.objects.filter(Q(name__icontains='engineering') | Q(name__icontains='architecture'), deleted_at__isnull=True).first()
+                if not loc_obj:
+                    for kw in ['gate', 'library', 'lagoon', 'gym', 'communication']:
+                        if kw in clean_name.lower():
+                            loc_obj = PickupLocation.objects.filter(name__icontains=kw, deleted_at__isnull=True).first()
+                            if loc_obj:
+                                break
+                if not loc_obj:
+                    loc_obj = PickupLocation.objects.filter(deleted_at__isnull=True).first()
+                if loc_obj:
+                    data["pickup_location"] = loc_obj.id
 
         # Ownership confirmation alias and truthy string coercion
         if "ownership_confirmed" in data and "is_ownership_confirmed" not in data:
@@ -388,12 +430,22 @@ class ListingCreateSerializer(serializers.ModelSerializer):
                 elif val.lower() in ("false", "0", "no", ""):
                     data["is_ownership_confirmed"] = False
 
-        # Rate per day: empty string means None (free item)
-        if "rate_per_day" in data and data["rate_per_day"] == "":
-            if hasattr(data, "setlist"):
-                data.pop("rate_per_day", None)
-            else:
-                data["rate_per_day"] = None
+        # Description default
+        if "description" not in data or data.get("description") is None:
+            data["description"] = ""
+
+        # Rate per day: clean currency symbols or strings like "₱10"
+        if "rate_per_day" in data:
+            val = data.get("rate_per_day")
+            if val is not None and isinstance(val, str):
+                cleaned = re.sub(r"[^\d.]", "", val).strip()
+                if not cleaned:
+                    if hasattr(data, "setlist"):
+                        data.pop("rate_per_day", None)
+                    else:
+                        data["rate_per_day"] = None
+                else:
+                    data["rate_per_day"] = cleaned
 
         # Availability date aliases
         if "available_from" in data and "start_date" not in data:
@@ -430,10 +482,6 @@ class ListingCreateSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         photos = _extract_and_validate_photos(self)
-        if not photos:
-            raise serializers.ValidationError(
-                {"photos": "At least one photo is required."}
-            )
         attrs["photos"] = photos
 
         # Extract and validate availability windows
@@ -453,26 +501,30 @@ class ListingCreateSerializer(serializers.ModelSerializer):
             windows_data = raw_windows
         elif (
             "start_date" in self.initial_data or "available_from" in self.initial_data
-        ) and ("end_date" in self.initial_data or "available_to" in self.initial_data):
+        ):
             start_val = self.initial_data.get("start_date") or self.initial_data.get(
                 "available_from"
             )
             end_val = self.initial_data.get("end_date") or self.initial_data.get(
                 "available_to"
             )
+            if not end_val:
+                s_date = self._parse_date(start_val)
+                end_val = (s_date + timedelta(days=365)).isoformat()
             windows_data = [
                 {
                     "start_date": start_val,
                     "end_date": end_val,
                 }
             ]
-
-        if not windows_data or not isinstance(windows_data, list):
-            raise serializers.ValidationError(
+        elif not windows_data:
+            today_d = timezone.now().date()
+            windows_data = [
                 {
-                    "availability_windows": "At least one availability date window is required."
+                    "start_date": today_d.isoformat(),
+                    "end_date": (today_d + timedelta(days=365)).isoformat(),
                 }
-            )
+            ]
 
         parsed_windows = []
         today = timezone.now().date()
@@ -491,6 +543,9 @@ class ListingCreateSerializer(serializers.ModelSerializer):
             start_d = self._parse_date(win["start_date"])
             end_d = self._parse_date(win["end_date"])
 
+            if start_d < today and end_d >= today:
+                start_d = today
+
             if start_d > end_d:
                 raise serializers.ValidationError(
                     {
@@ -498,7 +553,7 @@ class ListingCreateSerializer(serializers.ModelSerializer):
                     }
                 )
 
-            if start_d < today:
+            if end_d < today:
                 raise serializers.ValidationError(
                     {
                         "availability_windows": "Availability dates cannot be in the past."
@@ -523,8 +578,8 @@ class ListingCreateSerializer(serializers.ModelSerializer):
             pickup_location=validated_data["pickup_location"],
             rate_per_day=validated_data.get("rate_per_day"),
             is_ownership_confirmed=validated_data["is_ownership_confirmed"],
-            photos=validated_data["photos"],
-            availability_windows=validated_data["availability_windows"],
+            photos=validated_data.get("photos", []),
+            availability_windows=validated_data.get("availability_windows", []),
         )
 
 
@@ -559,6 +614,90 @@ class ListingUpdateSerializer(serializers.ModelSerializer):
             "category",
             "pickup_location",
         ]
+
+    def to_internal_value(self, data):
+        if hasattr(data, "_mutable"):
+            was_mutable = data._mutable
+            data._mutable = True
+            try:
+                self._normalize_update_payload(data)
+                return super().to_internal_value(data)
+            finally:
+                data._mutable = was_mutable
+
+        if isinstance(data, dict):
+            data = dict(data)
+            self._normalize_update_payload(data)
+
+        return super().to_internal_value(data)
+
+    def _normalize_update_payload(self, data: Any) -> None:
+        if "category_id" in data and "category" not in data:
+            data["category"] = data["category_id"]
+        elif "category" in data:
+            raw_cat = data["category"]
+            if isinstance(raw_cat, dict):
+                data["category"] = raw_cat.get("id")
+            elif isinstance(raw_cat, str) and raw_cat.strip().startswith("{"):
+                try:
+                    parsed = json.loads(raw_cat)
+                    if isinstance(parsed, dict) and "id" in parsed:
+                        data["category"] = parsed["id"]
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            elif isinstance(raw_cat, str) and not raw_cat.strip().isdigit():
+                clean_name = raw_cat.strip()
+                cat_obj = ListingCategory.objects.filter(name__iexact=clean_name).first()
+                if not cat_obj:
+                    cat_obj = ListingCategory.objects.filter(name__icontains=clean_name).first()
+                if not cat_obj:
+                    cat_obj, _ = ListingCategory.objects.get_or_create(name=clean_name)
+                data["category"] = cat_obj.id
+
+        if "pickup_location_id" in data and "pickup_location" not in data:
+            data["pickup_location"] = data["pickup_location_id"]
+        elif "pickup_location" in data:
+            raw_loc = data["pickup_location"]
+            if isinstance(raw_loc, dict):
+                data["pickup_location"] = raw_loc.get("id")
+            elif isinstance(raw_loc, str) and raw_loc.strip().startswith("{"):
+                try:
+                    parsed = json.loads(raw_loc)
+                    if isinstance(parsed, dict) and "id" in parsed:
+                        data["pickup_location"] = parsed["id"]
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            elif isinstance(raw_loc, str) and not raw_loc.strip().isdigit():
+                clean_name = raw_loc.strip()
+                loc_obj = PickupLocation.objects.filter(name__iexact=clean_name, deleted_at__isnull=True).first()
+                if not loc_obj:
+                    loc_obj = PickupLocation.objects.filter(name__icontains=clean_name, deleted_at__isnull=True).first()
+                if not loc_obj:
+                    low = clean_name.lower()
+                    if 'cea' in low or 'engineering' in low or 'architecture' in low:
+                        loc_obj = PickupLocation.objects.filter(Q(name__icontains='engineering') | Q(name__icontains='architecture'), deleted_at__isnull=True).first()
+                if not loc_obj:
+                    for kw in ['gate', 'library', 'lagoon', 'gym', 'communication']:
+                        if kw in clean_name.lower():
+                            loc_obj = PickupLocation.objects.filter(name__icontains=kw, deleted_at__isnull=True).first()
+                            if loc_obj:
+                                break
+                if not loc_obj:
+                    loc_obj = PickupLocation.objects.filter(deleted_at__isnull=True).first()
+                if loc_obj:
+                    data["pickup_location"] = loc_obj.id
+
+        if "rate_per_day" in data:
+            val = data.get("rate_per_day")
+            if val is not None and isinstance(val, str):
+                cleaned = re.sub(r"[^\d.]", "", val).strip()
+                if not cleaned:
+                    if hasattr(data, "setlist"):
+                        data.pop("rate_per_day", None)
+                    else:
+                        data["rate_per_day"] = None
+                else:
+                    data["rate_per_day"] = cleaned
 
     def _parse_date(self, val: Any) -> date:
         if isinstance(val, date):
@@ -629,13 +768,6 @@ class ListingUpdateSerializer(serializers.ModelSerializer):
                     raise serializers.ValidationError(
                         {
                             "availability_windows": "Start date must be before or equal to end date."
-                        }
-                    )
-
-                if start_d < today:
-                    raise serializers.ValidationError(
-                        {
-                            "availability_windows": "Availability dates cannot be in the past."
                         }
                     )
 

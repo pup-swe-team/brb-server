@@ -1,10 +1,14 @@
+import base64
+import binascii
 import math
+import uuid
 from datetime import timedelta
 from typing import Any
 
 from django.conf import settings
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.files.base import ContentFile
 from django.db.models import F
 from django.utils import timezone
 from django.utils.http import urlsafe_base64_decode
@@ -71,6 +75,7 @@ class UserResponseSerializer(serializers.ModelSerializer):
     """Serializer for exposing user data in API responses (FR1, FR2)."""
 
     photo_url = serializers.SerializerMethodField()
+    home_address = serializers.CharField(source="street_address", read_only=True)
 
     class Meta:
         model = User
@@ -85,6 +90,9 @@ class UserResponseSerializer(serializers.ModelSerializer):
             "email_verified_at",
             "created_at",
             "photo_url",
+            "bio",
+            "street_address",
+            "home_address",
         )
         read_only_fields = fields
 
@@ -746,6 +754,43 @@ class PasswordResetValidateSerializer(serializers.Serializer):
     token = serializers.CharField()
 
 
+class ProfilePhotoField(serializers.ImageField):
+    """
+    ImageField that gracefully handles:
+    1. Standard uploaded file from multipart/form-data.
+    2. Base64 data URI (data:image/jpeg;base64,...).
+    3. Existing photo URL string or serialization artifacts (e.g. '[object Object]'),
+       which are safely ignored to preserve the existing photo.
+    """
+
+    def to_internal_value(self, data):
+        if isinstance(data, str):
+            if "data:" in data and ";base64," in data:
+                try:
+                    header, base64_data = data.split(";base64,")
+                    ext = header.split("/")[-1].split(";")[0].split("+")[0]
+                    if ext == "jpeg":
+                        ext = "jpg"
+                    file_name = f"profile_{uuid.uuid4().hex[:8]}.{ext}"
+                    decoded_file = base64.b64decode(base64_data)
+                    data = ContentFile(decoded_file, name=file_name)
+                except (ValueError, binascii.Error):
+                    raise serializers.ValidationError("Invalid image data.")
+            elif (
+                not data
+                or data == "[object Object]"
+                or data.startswith("http")
+                or "/media/" in data
+            ):
+                return None
+            else:
+                raise serializers.ValidationError(
+                    "The submitted data was not a valid image file."
+                )
+
+        return super().to_internal_value(data)
+
+
 class ProfileUpdateSerializer(serializers.ModelSerializer):
     """
     Persist profile field updates (CP-1001).
@@ -756,7 +801,7 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
     endpoint that proves the current password first.
     """
 
-    photo = serializers.ImageField(required=False, allow_null=True)
+    photo = ProfilePhotoField(required=False, allow_null=True)
 
     class Meta:
         model = User
@@ -785,6 +830,33 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
                 "Enter a valid Philippine mobile number (e.g., 09123456789 or +639123456789)."
             )
         return cleaned_number
+
+    def to_internal_value(self, data):
+        if (hasattr(data, "_mutable") and not data._mutable) or (
+            not hasattr(data, "_mutable") and isinstance(data, dict)
+        ):
+            data = data.copy()
+
+        if "home_address" in data and "street_address" not in data:
+            data["street_address"] = data["home_address"]
+
+        return super().to_internal_value(data)
+
+    def update(self, instance, validated_data):
+        raw_photo = self.initial_data.get("photo")
+        if (
+            "photo" in validated_data
+            and validated_data["photo"] is None
+            and isinstance(raw_photo, str)
+            and (
+                raw_photo.startswith("http")
+                or "/media/" in raw_photo
+                or raw_photo == "[object Object]"
+                or raw_photo == ""
+            )
+        ):
+            validated_data.pop("photo")
+        return super().update(instance, validated_data)
 
 
 class PasswordChangeSerializer(serializers.Serializer):
@@ -996,6 +1068,7 @@ class LenderProfileSerializer(serializers.ModelSerializer):
     average_rating = serializers.FloatField(read_only=True)
     review_count = serializers.IntegerField(read_only=True)
     active_listings = serializers.SerializerMethodField()
+    date_joined = serializers.DateTimeField(read_only=True)
 
     def get_active_listings(self, obj: User) -> list[dict]:
         from apps.listings.serializers import ListingSearchResultSerializer
@@ -1023,5 +1096,6 @@ class LenderProfileSerializer(serializers.ModelSerializer):
             "average_rating",
             "review_count",
             "active_listings",
+            "date_joined",
         )
         read_only_fields = fields

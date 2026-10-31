@@ -1,5 +1,6 @@
 from django.urls import path
 
+from .dashboards import BorrowerDashboardView, LenderDashboardView
 from .views import (
     ApplyLenderView,
     DeactivateAccountView,
@@ -17,7 +18,6 @@ from .views import (
     RegisterView,
     ResendVerificationView,
 )
-from .dashboards import BorrowerDashboardView, LenderDashboardView
 
 urlpatterns = [
     path("register/", RegisterView.as_view(), name="auth-register"),
@@ -65,6 +65,16 @@ urlpatterns = [
         "email-change/confirm/",
         EmailChangeConfirmView.as_view(),
         name="auth-email-change-confirm",
+    ),
+    path(
+        "change-email/",
+        EmailChangeView.as_view(),
+        name="auth-change-email",
+    ),
+    path(
+        "change-email/confirm/",
+        EmailChangeConfirmView.as_view(),
+        name="auth-change-email-confirm",
     ),
     # CP-1004 -- self-service account closure.
     path(

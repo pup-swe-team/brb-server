@@ -6,6 +6,7 @@ from .views import (
     ListingDeactivateView,
     ListingDetailView,
     ListingReactivateView,
+    MyListingsView,
     PickupLocationDetailView,
     PickupLocationListCreateView,
 )
@@ -13,6 +14,7 @@ from .views import (
 urlpatterns = [
     # GET = search listings (CP-301); POST = publish a listing (CP-401).
     path("listings/", ListingCollectionView.as_view(), name="listing-create"),
+    path("listings/mine/", MyListingsView.as_view(), name="listing-mine"),
     path(
         "listings/categories/",
         ListingCategoryListView.as_view(),

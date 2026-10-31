@@ -46,6 +46,17 @@ class ListingCollectionView(generics.ListCreateAPIView):
     def get_queryset(self):
         if self.request.method != "GET":
             return Listing.objects.all()
+        if (
+            self.request.query_params.get("mine") == "true"
+            or self.request.query_params.get("lender") == "me"
+        ):
+            return (
+                Listing.objects.filter(lender=self.request.user)
+                .exclude(status__name="deleted")
+                .select_related("category", "pickup_location", "status")
+                .prefetch_related("photos", "orders", "orders__status", "availability_windows")
+                .order_by("-created_at")
+            )
         query_serializer = ListingSearchQuerySerializer(data=self.request.query_params)
         query_serializer.is_valid(raise_exception=True)
         return search_listings(**query_serializer.validated_data)
@@ -57,6 +68,27 @@ class ListingCollectionView(generics.ListCreateAPIView):
         response_data = ListingSerializer(listing, context={"request": request}).data
         headers = self.get_success_headers(response_data)
         return Response(response_data, status=status.HTTP_201_CREATED, headers=headers)
+
+
+class MyListingsView(generics.ListAPIView):
+    """
+    Listings owned by the authenticated lender (CP-402, CP-403).
+    Returns both active and deactivated listings so the lender can manage them.
+    Excludes soft-deleted listings.
+    """
+
+    serializer_class = ListingSearchResultSerializer
+    permission_classes = (IsAuthenticated,)
+    pagination_class = None
+
+    def get_queryset(self):
+        return (
+            Listing.objects.filter(lender=self.request.user)
+            .exclude(status__name="deleted")
+            .select_related("category", "pickup_location", "status")
+            .prefetch_related("photos", "orders", "orders__status", "availability_windows")
+            .order_by("-created_at")
+        )
 
 
 class ListingCategoryListView(generics.ListAPIView):
