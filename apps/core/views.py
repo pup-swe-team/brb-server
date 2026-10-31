@@ -4,7 +4,11 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.orders.services import expire_unanswered_requests, request_expiry_hours
+from apps.orders.services import (
+    expire_unanswered_requests,
+    process_overdue_and_unreturned_orders,
+    request_expiry_hours,
+)
 from apps.users.services import (
     deactivate_unverified_users,
     email_verification_expiry_days,
@@ -83,6 +87,34 @@ class ExpireBorrowRequestsView(CronSecretMixin):
                 "expired_count": len(expired_ids),
                 "expired_order_ids": expired_ids,
                 "executed_at": timezone.now().isoformat(),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class CheckOverdueOrdersView(CronSecretMixin):
+    """
+    Scheduled sweep for overdue and unreturned orders + expired auth codes (CP-506, CP-504/505).
+
+    POST /api/v1/jobs/check-overdue/ -- called by cron-job.org on a schedule with
+    `CRON_SECRET_TOKEN` in the `Authorization` header (DECISIONS.md D-01).
+    """
+
+    authentication_classes = ()
+    permission_classes = ()
+
+    def post(self, request: Request) -> Response:
+        error_response = self.verify_cron_secret(request)
+        if error_response is not None:
+            return error_response
+
+        now = timezone.now()
+        summary = process_overdue_and_unreturned_orders(now=now)
+        return Response(
+            {
+                "job": "check-overdue",
+                **summary,
+                "executed_at": now.isoformat(),
             },
             status=status.HTTP_200_OK,
         )

@@ -37,6 +37,22 @@ DEFAULT_LENDING_LIMIT = 10
 REQUEST_EXPIRY_HOURS = "request_expiry_hours"
 DEFAULT_REQUEST_EXPIRY_HOURS = 24
 
+# CP-504 / CP-505 -- hours a handover or return authentication code stays valid.
+AUTH_CODE_EXPIRY_HOURS = "auth_code_expiry_hours"
+DEFAULT_AUTH_CODE_EXPIRY_HOURS = 3
+
+# CP-504 / CP-505 -- consecutive failed code entries before verification locks.
+AUTH_CODE_LOCKOUT_THRESHOLD = "auth_code_lockout_threshold"
+DEFAULT_AUTH_CODE_LOCKOUT_THRESHOLD = 5
+
+# CP-504 / CP-505 -- minutes code verification stays locked after repeated failures.
+AUTH_CODE_LOCKOUT_MINUTES = "auth_code_lockout_minutes"
+DEFAULT_AUTH_CODE_LOCKOUT_MINUTES = 15
+
+# CP-506 -- days an order may stay Overdue before escalating to Unreturned.
+UNRETURNED_ESCALATION_DAYS = "unreturned_escalation_days"
+DEFAULT_UNRETURNED_ESCALATION_DAYS = 7
+
 # CP-605 -- number of days after order completion within which a review may be submitted.
 REVIEW_WINDOW_DAYS = "review_window_days"
 DEFAULT_REVIEW_WINDOW_DAYS = 7
