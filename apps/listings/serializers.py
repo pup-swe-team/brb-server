@@ -207,10 +207,7 @@ class ListingSerializer(serializers.ModelSerializer):
         read_only=True,
     )
     reviews = serializers.SerializerMethodField()
-    blocked_dates = BlockedDateRangeSerializer(
-        many=True,
-        read_only=True,
-    )
+    blocked_dates = serializers.SerializerMethodField()
 
     def get_reviews(self, obj: Listing) -> list[dict[str, Any]]:
         reviews_qs = get_listing_reviews(obj)
@@ -219,6 +216,37 @@ class ListingSerializer(serializers.ModelSerializer):
             many=True,
             context=self.context,
         ).data
+
+    def get_blocked_dates(self, obj: Listing) -> list[dict[str, Any]]:
+        ranges = []
+        covered_intervals = set()
+        for b in obj.blocked_dates.all():
+            ranges.append({
+                "id": b.id,
+                "start_date": b.start_date.isoformat() if hasattr(b.start_date, "isoformat") else str(b.start_date),
+                "end_date": b.end_date.isoformat() if hasattr(b.end_date, "isoformat") else str(b.end_date),
+                "reason": b.reason,
+                "created_at": b.created_at.isoformat() if hasattr(b.created_at, "isoformat") else str(b.created_at),
+            })
+            covered_intervals.add((str(b.start_date), str(b.end_date)))
+
+        from apps.orders.models import Order
+        active_orders = Order.objects.filter(
+            listing=obj,
+            status__name__in=("confirmed", "active", "overdue"),
+        ).order_by("start_date")
+        for o in active_orders:
+            interval = (str(o.start_date), str(o.end_date))
+            if interval not in covered_intervals:
+                ranges.append({
+                    "id": None,
+                    "start_date": o.start_date.isoformat() if hasattr(o.start_date, "isoformat") else str(o.start_date),
+                    "end_date": o.end_date.isoformat() if hasattr(o.end_date, "isoformat") else str(o.end_date),
+                    "reason": f"Reserved (Order #{o.pk})",
+                    "created_at": o.created_at.isoformat() if hasattr(o.created_at, "isoformat") else str(o.created_at),
+                })
+                covered_intervals.add(interval)
+        return ranges
 
     class Meta:
         model = Listing

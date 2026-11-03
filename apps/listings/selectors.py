@@ -119,19 +119,37 @@ def search_listings(
             start_date__lte=available_to,
             end_date__gte=available_from,
         ).values_list("listing_id", flat=True)
-        qs = qs.exclude(id__in=blocked_listing_ids)
+        from apps.orders.models import Order
+        booked_listing_ids = Order.objects.filter(
+            status__name__in=("confirmed", "active", "overdue"),
+            start_date__lte=available_to,
+            end_date__gte=available_from,
+        ).values_list("listing_id", flat=True)
+        qs = qs.exclude(id__in=blocked_listing_ids).exclude(id__in=booked_listing_ids)
     elif available_from:
         blocked_listing_ids = BlockedDateRange.objects.filter(
             start_date__lte=available_from,
             end_date__gte=available_from,
         ).values_list("listing_id", flat=True)
-        qs = qs.exclude(id__in=blocked_listing_ids)
+        from apps.orders.models import Order
+        booked_listing_ids = Order.objects.filter(
+            status__name__in=("confirmed", "active", "overdue"),
+            start_date__lte=available_from,
+            end_date__gte=available_from,
+        ).values_list("listing_id", flat=True)
+        qs = qs.exclude(id__in=blocked_listing_ids).exclude(id__in=booked_listing_ids)
     elif available_to:
         blocked_listing_ids = BlockedDateRange.objects.filter(
             start_date__lte=available_to,
             end_date__gte=available_to,
         ).values_list("listing_id", flat=True)
-        qs = qs.exclude(id__in=blocked_listing_ids)
+        from apps.orders.models import Order
+        booked_listing_ids = Order.objects.filter(
+            status__name__in=("confirmed", "active", "overdue"),
+            start_date__lte=available_to,
+            end_date__gte=available_to,
+        ).values_list("listing_id", flat=True)
+        qs = qs.exclude(id__in=blocked_listing_ids).exclude(id__in=booked_listing_ids)
 
     allowed_sorts = {
         "created_at": "created_at",

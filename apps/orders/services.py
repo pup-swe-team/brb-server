@@ -170,13 +170,18 @@ def request_borrow(
         raise PermissionDenied("Identity verification required to borrow items.")
 
     listing = get_object_or_404(
-        Listing.objects.select_related("status", "lender"), pk=listing_id
+        Listing.objects.select_for_update().select_related("status", "lender"),
+        pk=listing_id,
     )
     if listing.lender_id == borrower.pk:
-        raise ValidationError({"listing_id": "You cannot borrow your own listing."})
+        raise ValidationError(
+            {"listing_id": "You cannot borrow your own listing."},
+            code="own_listing",
+        )
     if listing.status.name != "active":
         raise ValidationError(
-            {"listing_id": "This listing is not currently available for borrowing."}
+            {"listing_id": "This listing is not currently available for borrowing."},
+            code="listing_unavailable",
         )
 
     raw_limit = get_int_config(BORROWING_LIMIT_KEY, DEFAULT_BORROWING_LIMIT)
@@ -189,19 +194,22 @@ def request_borrow(
                     f"borrowing limit reached ({current_held}/{borrowing_limit}). "
                     "Return existing items before requesting new ones."
                 )
-            }
+            },
+            code="borrowing_limit_reached",
         )
 
     if not _is_range_available(listing=listing, start=start_date, end=end_date):
         raise ValidationError(
             {
                 "start_date": "Requested dates fall outside the listing's availability windows."
-            }
+            },
+            code="dates_unavailable",
         )
 
     if _has_overlapping_orders(listing=listing, start=start_date, end=end_date):
         raise ValidationError(
-            {"start_date": "The requested dates conflict with an existing reservation."}
+            {"start_date": "The requested dates conflict with an existing reservation."},
+            code="date_conflict",
         )
 
     requested_status, _ = OrderStatus.objects.get_or_create(name="requested")
@@ -375,11 +383,26 @@ def sync_order_time_derived_status(
 ) -> Order:
     """
     Check-on-access safety net (DECISIONS.md D-01):
-    Recomputes Overdue / Unreturned status for a single order if time thresholds have passed.
+    Recomputes Expired / Overdue / Unreturned status for a single order if time thresholds have passed.
     """
     now = now or timezone.now()
     today = timezone.localdate(now)
     escalation_days = unreturned_escalation_days()
+
+    if order.status.name == "requested":
+        deadline = order.created_at + timedelta(hours=request_expiry_hours())
+        if now >= deadline:
+            with transaction.atomic():
+                order = (
+                    Order.objects.select_for_update()
+                    .select_related("listing", "status")
+                    .get(pk=order.pk)
+                )
+                if order.status.name == "requested":
+                    deadline = order.created_at + timedelta(hours=request_expiry_hours())
+                    if now >= deadline:
+                        _expire_order(order)
+            return order
 
     if order.status.name == ORDER_STATUS_ACTIVE and order.end_date < today:
         with transaction.atomic():

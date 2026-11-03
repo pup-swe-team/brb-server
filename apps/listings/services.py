@@ -243,7 +243,20 @@ def is_listing_available_for_range(
     if exclude_order_id is not None:
         qs = qs.exclude(order_id=exclude_order_id)
 
-    return not qs.exists()
+    if qs.exists():
+        return False
+
+    from apps.orders.models import Order
+    order_qs = Order.objects.filter(
+        listing=listing,
+        status__name__in=("confirmed", "active", "overdue"),
+        start_date__lte=end_date,
+        end_date__gte=start_date,
+    )
+    if exclude_order_id is not None:
+        order_qs = order_qs.exclude(pk=exclude_order_id)
+
+    return not order_qs.exists()
 
 
 def get_blocked_dates_for_listing(listing: Listing) -> QuerySet[BlockedDateRange]:

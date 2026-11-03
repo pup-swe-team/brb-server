@@ -32,9 +32,12 @@ from .services import (
     cancel_order,
     close_unreturned_case,
     escalate_unreturned_case,
+    expire_unanswered_requests,
     override_order_status,
+    process_overdue_and_unreturned_orders,
     request_borrow,
     respond_to_borrow_request,
+    sync_order_time_derived_status,
 )
 
 
@@ -43,6 +46,8 @@ class BorrowRequestView(APIView):
 
     def get(self, request):
         role = (request.query_params.get("role") or "").strip().lower()
+        expire_unanswered_requests()
+        process_overdue_and_unreturned_orders()
         queryset = Order.objects.select_related(
             "listing",
             "listing__pickup_location",
@@ -112,6 +117,7 @@ class OrderDetailView(APIView):
         )
         if request.user.pk not in (order.borrower_id, order.listing.lender_id):
             raise PermissionDenied("Only the borrower or lender can view this order.")
+        order = sync_order_time_derived_status(order)
         return Response(OrderDetailSerializer(order).data)
 
 

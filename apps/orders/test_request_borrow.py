@@ -227,3 +227,46 @@ class BorrowRequestTests(APITestCase):
                 self.client.post(self.url, self.payload(), format="json")
         self.assertEqual(Order.objects.count(), 0)
         self.assertEqual(Notification.objects.count(), 0)
+
+    def test_be_bug_3002_structured_error_on_conflict_and_limit(self):
+        # 1. Date conflict returns structured code and detail
+        order = self.make_order("confirmed")
+        response = self.client.post(
+            self.url,
+            self.payload(start_date=self.end.isoformat()),
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data.get("code"), "date_conflict")
+        self.assertIn("detail", response.data)
+        order.delete()
+
+        # 2. Borrowing limit returns structured code and detail
+        for name in ("requested", "confirmed", "active"):
+            self.make_order(name, self.today, self.today + timedelta(days=1))
+        response = self.client.post(self.url, self.payload(), format="json")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data.get("code"), "borrowing_limit_reached")
+        self.assertIn("detail", response.data)
+
+    def test_be_bug_3001_check_on_access_transitions(self):
+        # 1. 48h old requested order auto-expires on detail access
+        old_req = self.make_order("requested", self.start, self.end)
+        old_req.created_at = timezone.now() - timedelta(hours=50)
+        old_req.save(update_fields=["created_at"])
+
+        detail_url = reverse("order-detail", kwargs={"pk": old_req.pk})
+        res = self.client.get(detail_url)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["status"], "expired")
+
+        # 2. Past end-date active order transitions to overdue on list access
+        active_order = self.make_order(
+            "active",
+            self.today - timedelta(days=5),
+            self.today - timedelta(days=1),
+        )
+        list_res = self.client.get(self.url)
+        self.assertEqual(list_res.status_code, 200)
+        active_order.refresh_from_db()
+        self.assertEqual(active_order.status.name, "overdue")
