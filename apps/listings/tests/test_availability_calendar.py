@@ -219,7 +219,9 @@ class AvailabilityCalendarLogicTests(APITestCase):
         self.assertEqual(response.data["blocked_dates"][0]["start_date"], "2026-11-01")
         self.assertEqual(response.data["blocked_dates"][0]["end_date"], "2026-11-05")
 
-    def test_be_bug_3003_confirmed_order_exposed_in_blocked_dates_without_manual_block(self) -> None:
+    def test_be_bug_3003_confirmed_order_exposed_in_blocked_dates_without_manual_block(
+        self,
+    ) -> None:
         # Create an order directly in confirmed status without calling block_dates_for_order
         Order.objects.create(
             listing=self.listing,

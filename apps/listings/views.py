@@ -54,7 +54,9 @@ class ListingCollectionView(generics.ListCreateAPIView):
                 Listing.objects.filter(lender=self.request.user)
                 .exclude(status__name="deleted")
                 .select_related("category", "pickup_location", "status")
-                .prefetch_related("photos", "orders", "orders__status", "availability_windows")
+                .prefetch_related(
+                    "photos", "orders", "orders__status", "availability_windows"
+                )
                 .order_by("-created_at")
             )
         query_serializer = ListingSearchQuerySerializer(data=self.request.query_params)
@@ -86,7 +88,9 @@ class MyListingsView(generics.ListAPIView):
             Listing.objects.filter(lender=self.request.user)
             .exclude(status__name="deleted")
             .select_related("category", "pickup_location", "status")
-            .prefetch_related("photos", "orders", "orders__status", "availability_windows")
+            .prefetch_related(
+                "photos", "orders", "orders__status", "availability_windows"
+            )
             .order_by("-created_at")
         )
 

@@ -208,7 +208,9 @@ def request_borrow(
 
     if _has_overlapping_orders(listing=listing, start=start_date, end=end_date):
         raise ValidationError(
-            {"start_date": "The requested dates conflict with an existing reservation."},
+            {
+                "start_date": "The requested dates conflict with an existing reservation."
+            },
             code="date_conflict",
         )
 
@@ -399,7 +401,9 @@ def sync_order_time_derived_status(
                     .get(pk=order.pk)
                 )
                 if order.status.name == "requested":
-                    deadline = order.created_at + timedelta(hours=request_expiry_hours())
+                    deadline = order.created_at + timedelta(
+                        hours=request_expiry_hours()
+                    )
                     if now >= deadline:
                         _expire_order(order)
             return order

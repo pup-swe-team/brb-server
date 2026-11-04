@@ -18,6 +18,7 @@ from .serializers import (
 from .services import (
     generate_handover_code,
     generate_return_code,
+    get_order_code_info,
     verify_handover_code,
     verify_return_code,
 )
@@ -37,13 +38,31 @@ def _extract_uploaded_evidence_files(request: Request) -> list:
 class GenerateHandoverCodeView(APIView):
     """
     POST /api/v1/orders/<int:order_id>/handover-code/generate/
-    Lender generates a single-use 6-digit OTP for a Confirmed order ready for handover (CP-504).
+    GET  /api/v1/orders/<int:order_id>/handover-code/generate/
+    Lender generates or inspects a single-use 6-digit OTP for a Confirmed order ready for handover (CP-504).
     """
 
     permission_classes = (IsAuthenticated,)
 
+    def get(self, request: Request, order_id: int) -> Response:
+        info = get_order_code_info(
+            order_id=order_id, actor=request.user, code_type_name="handover"
+        )
+        return Response(info, status=status.HTTP_200_OK)
+
     def post(self, request: Request, order_id: int) -> Response:
-        auth_code = generate_handover_code(order_id=order_id, actor=request.user)
+        reuse_existing = request.query_params.get("reuse_existing") in (
+            "true",
+            "1",
+        ) or bool(
+            getattr(request, "data", None)
+            and request.data.get("reuse_existing") in ("true", "1", True)
+        )
+        auth_code = generate_handover_code(
+            order_id=order_id,
+            actor=request.user,
+            force_new=not reuse_existing,
+        )
         return Response(
             AuthCodeResponseSerializer(auth_code).data,
             status=status.HTTP_201_CREATED,
@@ -53,10 +72,17 @@ class GenerateHandoverCodeView(APIView):
 class VerifyHandoverCodeView(APIView):
     """
     POST /api/v1/orders/<int:order_id>/handover-code/verify/
-    Borrower validates the Lender's handover code to transition the order to Active (CP-504).
+    GET  /api/v1/orders/<int:order_id>/handover-code/verify/
+    Borrower validates or inspects lockout status for the handover code (CP-504).
     """
 
     permission_classes = (IsAuthenticated,)
+
+    def get(self, request: Request, order_id: int) -> Response:
+        info = get_order_code_info(
+            order_id=order_id, actor=request.user, code_type_name="handover"
+        )
+        return Response(info, status=status.HTTP_200_OK)
 
     def post(self, request: Request, order_id: int) -> Response:
         serializer = HandoverCodeVerifyInputSerializer(data=request.data)
@@ -77,13 +103,31 @@ class VerifyHandoverCodeView(APIView):
 class GenerateReturnCodeView(APIView):
     """
     POST /api/v1/orders/<int:order_id>/return-code/generate/
-    Borrower generates a single-use 6-digit OTP on return initiation (CP-505).
+    GET  /api/v1/orders/<int:order_id>/return-code/generate/
+    Borrower generates or inspects a single-use 6-digit OTP on return initiation (CP-505).
     """
 
     permission_classes = (IsAuthenticated,)
 
+    def get(self, request: Request, order_id: int) -> Response:
+        info = get_order_code_info(
+            order_id=order_id, actor=request.user, code_type_name="return"
+        )
+        return Response(info, status=status.HTTP_200_OK)
+
     def post(self, request: Request, order_id: int) -> Response:
-        auth_code = generate_return_code(order_id=order_id, actor=request.user)
+        reuse_existing = request.query_params.get("reuse_existing") in (
+            "true",
+            "1",
+        ) or bool(
+            getattr(request, "data", None)
+            and request.data.get("reuse_existing") in ("true", "1", True)
+        )
+        auth_code = generate_return_code(
+            order_id=order_id,
+            actor=request.user,
+            force_new=not reuse_existing,
+        )
         return Response(
             AuthCodeResponseSerializer(auth_code).data,
             status=status.HTTP_201_CREATED,
@@ -93,11 +137,17 @@ class GenerateReturnCodeView(APIView):
 class VerifyReturnCodeView(APIView):
     """
     POST /api/v1/orders/<int:order_id>/return-code/verify/
-    Lender validates the Borrower's return code to mark the order Returned and
-    automatically set Completed (unflagged) or Disputed (flagged) (CP-505).
+    GET  /api/v1/orders/<int:order_id>/return-code/verify/
+    Lender validates the Borrower's return code or inspects lockout status (CP-505).
     """
 
     permission_classes = (IsAuthenticated,)
+
+    def get(self, request: Request, order_id: int) -> Response:
+        info = get_order_code_info(
+            order_id=order_id, actor=request.user, code_type_name="return"
+        )
+        return Response(info, status=status.HTTP_200_OK)
 
     def post(self, request: Request, order_id: int) -> Response:
         serializer = ReturnCodeVerifyInputSerializer(data=request.data)

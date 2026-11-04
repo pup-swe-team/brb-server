@@ -120,6 +120,7 @@ def search_listings(
             end_date__gte=available_from,
         ).values_list("listing_id", flat=True)
         from apps.orders.models import Order
+
         booked_listing_ids = Order.objects.filter(
             status__name__in=("confirmed", "active", "overdue"),
             start_date__lte=available_to,
@@ -132,6 +133,7 @@ def search_listings(
             end_date__gte=available_from,
         ).values_list("listing_id", flat=True)
         from apps.orders.models import Order
+
         booked_listing_ids = Order.objects.filter(
             status__name__in=("confirmed", "active", "overdue"),
             start_date__lte=available_from,
@@ -144,6 +146,7 @@ def search_listings(
             end_date__gte=available_to,
         ).values_list("listing_id", flat=True)
         from apps.orders.models import Order
+
         booked_listing_ids = Order.objects.filter(
             status__name__in=("confirmed", "active", "overdue"),
             start_date__lte=available_to,

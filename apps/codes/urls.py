@@ -11,6 +11,11 @@ from .views import (
 
 urlpatterns = [
     path(
+        "orders/<int:order_id>/handover-code/",
+        GenerateHandoverCodeView.as_view(),
+        name="order-handover-code-status",
+    ),
+    path(
         "orders/<int:order_id>/handover-code/generate/",
         GenerateHandoverCodeView.as_view(),
         name="order-handover-code-generate",
@@ -19,6 +24,11 @@ urlpatterns = [
         "orders/<int:order_id>/handover-code/verify/",
         VerifyHandoverCodeView.as_view(),
         name="order-handover-code-verify",
+    ),
+    path(
+        "orders/<int:order_id>/return-code/",
+        GenerateReturnCodeView.as_view(),
+        name="order-return-code-status",
     ),
     path(
         "orders/<int:order_id>/return-code/generate/",

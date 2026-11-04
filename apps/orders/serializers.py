@@ -6,7 +6,13 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from .constants import ALL_ORDER_STATUSES, CLOSING_UNRETURNED_CASE_STATUSES
-from .models import Order, OrderStatusOverride, UnreturnedCase
+from .models import (
+    Dispute,
+    DisputeEvidence,
+    Order,
+    OrderStatusOverride,
+    UnreturnedCase,
+)
 
 
 class BorrowRequestSerializer(serializers.Serializer):
@@ -56,6 +62,11 @@ class OrderDetailSerializer(BorrowRequestResultSerializer):
     lender_name = serializers.CharField(
         source="listing.lender.full_name", read_only=True
     )
+    is_locked_out = serializers.SerializerMethodField()
+    locked_until = serializers.SerializerMethodField()
+    remaining_lockout_seconds = serializers.SerializerMethodField()
+    handover_code_expires_at = serializers.SerializerMethodField()
+    return_code_expires_at = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
@@ -73,9 +84,76 @@ class OrderDetailSerializer(BorrowRequestResultSerializer):
             "cancel_reason",
             "pickup_location",
             "price_per_day",
+            "is_locked_out",
+            "locked_until",
+            "remaining_lockout_seconds",
+            "handover_code_expires_at",
+            "return_code_expires_at",
             "created_at",
             "updated_at",
         ]
+
+    def _get_lockout_info(self, obj) -> dict:
+        request = self.context.get("request")
+        if not request or not request.user or not request.user.is_authenticated:
+            return {}
+        if not hasattr(obj, "_cached_lockout_info"):
+            from apps.codes.services import get_code_lockout_until
+
+            now = timezone.now()
+            code_type = "handover" if obj.status.name == "confirmed" else "return"
+            locked_until = get_code_lockout_until(
+                order=obj, code_type_name=code_type, actor=request.user, now=now
+            )
+            obj._cached_lockout_info = {
+                "is_locked_out": locked_until is not None,
+                "locked_until": locked_until.isoformat() if locked_until else None,
+                "remaining_lockout_seconds": max(
+                    0, int((locked_until - now).total_seconds())
+                )
+                if locked_until
+                else 0,
+            }
+        return obj._cached_lockout_info
+
+    def get_is_locked_out(self, obj) -> bool:
+        return self._get_lockout_info(obj).get("is_locked_out", False)
+
+    def get_locked_until(self, obj) -> str | None:
+        return self._get_lockout_info(obj).get("locked_until")
+
+    def get_remaining_lockout_seconds(self, obj) -> int:
+        return self._get_lockout_info(obj).get("remaining_lockout_seconds", 0)
+
+    def get_handover_code_expires_at(self, obj) -> str | None:
+        from apps.codes.models import AuthCode
+
+        code = (
+            AuthCode.objects.filter(
+                order=obj,
+                code_type__name="handover",
+                auth_status__name="active",
+                expires_at__gt=timezone.now(),
+            )
+            .order_by("-generated_at")
+            .first()
+        )
+        return code.expires_at.isoformat() if code else None
+
+    def get_return_code_expires_at(self, obj) -> str | None:
+        from apps.codes.models import AuthCode
+
+        code = (
+            AuthCode.objects.filter(
+                order=obj,
+                code_type__name="return",
+                auth_status__name="active",
+                expires_at__gt=timezone.now(),
+            )
+            .order_by("-generated_at")
+            .first()
+        )
+        return code.expires_at.isoformat() if code else None
 
     def get_pickup_location(self, obj) -> str:
         if obj.listing and obj.listing.pickup_location:
@@ -274,4 +352,59 @@ class OrderStatusOverrideResultSerializer(serializers.ModelSerializer):
             "status",
             "updated_at",
             "override",
+        ]
+
+
+class DisputeEvidenceSerializer(serializers.ModelSerializer):
+    file_url = serializers.SerializerMethodField()
+    file_type = serializers.CharField(source="file_type.name", read_only=True)
+    submitted_by_name = serializers.CharField(
+        source="submitted_by.full_name", read_only=True
+    )
+
+    class Meta:
+        model = DisputeEvidence
+        fields = [
+            "id",
+            "file_url",
+            "file_type",
+            "submitted_by_id",
+            "submitted_by_name",
+            "uploaded_at",
+        ]
+
+    def get_file_url(self, obj) -> str:
+        request = self.context.get("request")
+        if obj.file_reference:
+            url = obj.file_reference.url
+            if request:
+                return request.build_absolute_uri(url)
+            return url
+        return ""
+
+
+class DisputeDetailSerializer(serializers.ModelSerializer):
+    order_id = serializers.IntegerField(read_only=True)
+    raised_by_name = serializers.CharField(source="raised_by.full_name", read_only=True)
+    resolved_by_name = serializers.CharField(
+        source="resolved_by.full_name", read_only=True, allow_null=True
+    )
+    evidences = DisputeEvidenceSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Dispute
+        fields = [
+            "id",
+            "order_id",
+            "raised_by_id",
+            "raised_by_name",
+            "description",
+            "borrower_response",
+            "status",
+            "resolved_by_id",
+            "resolved_by_name",
+            "resolution_notes",
+            "evidences",
+            "created_at",
+            "updated_at",
         ]

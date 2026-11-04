@@ -6,6 +6,7 @@ import logging
 import math
 import secrets
 from datetime import datetime, timedelta
+from typing import Any
 
 from django.db import transaction
 from django.shortcuts import get_object_or_404
@@ -236,12 +237,27 @@ def _generate_order_auth_code(
     actor: User,
     notify_user_id: int,
     now: datetime | None = None,
+    force_new: bool = True,
 ) -> AuthCode:
-    """Shared atomic helper to supersede prior active codes, mint a 6-digit OTP, and log/notify."""
+    """Shared atomic helper to mint a 6-digit OTP, optionally superseding prior active codes."""
     now = now or timezone.now()
     code_type, _ = AuthCodeType.objects.get_or_create(name=code_type_name)
     active_status, _ = AuthCodeStatus.objects.get_or_create(name=CODE_STATUS_ACTIVE)
     expired_status, _ = AuthCodeStatus.objects.get_or_create(name=CODE_STATUS_EXPIRED)
+
+    if not force_new:
+        existing = (
+            AuthCode.objects.filter(
+                order=order,
+                code_type=code_type,
+                auth_status=active_status,
+                expires_at__gt=now,
+            )
+            .order_by("-generated_at")
+            .first()
+        )
+        if existing is not None:
+            return existing
 
     # Supersede any existing active code of the same type for this order
     AuthCode.objects.filter(
@@ -424,6 +440,7 @@ def generate_handover_code(
     order_id: int,
     actor: User,
     now: datetime | None = None,
+    force_new: bool = True,
 ) -> AuthCode:
     """
     Generate a one-time 6-digit handover code for a Confirmed order (CP-504).
@@ -448,6 +465,7 @@ def generate_handover_code(
         actor=actor,
         notify_user_id=order.borrower_id,
         now=now,
+        force_new=force_new,
     )
 
 
@@ -522,6 +540,7 @@ def generate_return_code(
     order_id: int,
     actor: User,
     now: datetime | None = None,
+    force_new: bool = True,
 ) -> AuthCode:
     """
     Generate a one-time 6-digit return code on return initiation (CP-505).
@@ -544,6 +563,7 @@ def generate_return_code(
         actor=actor,
         notify_user_id=order.listing.lender_id,
         now=now,
+        force_new=force_new,
     )
 
 
@@ -628,3 +648,94 @@ def verify_return_code(
 
     consumed_code.refresh_from_db()
     return locked_order, consumed_code, dispute
+
+
+def get_order_code_info(
+    *,
+    order_id: int,
+    actor: User,
+    code_type_name: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """
+    Retrieve current auth code and lockout status for an order without generating a new code (CP-504, CP-505).
+    """
+    now = now or timezone.now()
+    order = get_object_or_404(
+        Order.objects.select_related("listing", "status"),
+        pk=order_id,
+    )
+    if actor.pk not in (order.borrower_id, order.listing.lender_id):
+        raise PermissionDenied(
+            "Only the borrower or lender can access code information."
+        )
+
+    code_type, _ = AuthCodeType.objects.get_or_create(name=code_type_name)
+    active_status, _ = AuthCodeStatus.objects.get_or_create(name=CODE_STATUS_ACTIVE)
+
+    active_code = (
+        AuthCode.objects.filter(
+            order=order,
+            code_type=code_type,
+            auth_status=active_status,
+            expires_at__gt=now,
+        )
+        .order_by("-generated_at")
+        .first()
+    )
+
+    locked_until = get_code_lockout_until(
+        order=order,
+        code_type_name=code_type_name,
+        actor=actor,
+        now=now,
+    )
+
+    is_generator = (
+        (actor.pk == order.listing.lender_id)
+        if code_type_name == CODE_TYPE_HANDOVER
+        else (actor.pk == order.borrower_id)
+    )
+
+    remaining_seconds = 0
+    if active_code and active_code.expires_at > now:
+        remaining_seconds = int((active_code.expires_at - now).total_seconds())
+
+    remaining_lockout_seconds = 0
+    if locked_until and locked_until > now:
+        remaining_lockout_seconds = int((locked_until - now).total_seconds())
+
+    # Count recent failed attempts in current streak
+    attempts = list(
+        AuthCodeAttempt.objects.filter(
+            code__order=order,
+            code__code_type__name=code_type_name,
+            attempted_by=actor,
+        )
+        .order_by("-attempted_at")
+        .values_list("was_successful", flat=True)[:10]
+    )
+    failed_attempts = 0
+    for was_succ in attempts:
+        if was_succ:
+            break
+        failed_attempts += 1
+
+    return {
+        "order_id": order.pk,
+        "code_type": code_type_name,
+        "has_active_code": active_code is not None,
+        "code_value": active_code.code_value
+        if (active_code and is_generator)
+        else None,
+        "expires_at": active_code.expires_at.isoformat().replace("+00:00", "Z")
+        if active_code
+        else None,
+        "remaining_seconds": remaining_seconds,
+        "is_locked_out": locked_until is not None,
+        "locked_until": locked_until.isoformat().replace("+00:00", "Z")
+        if locked_until
+        else None,
+        "remaining_lockout_seconds": remaining_lockout_seconds,
+        "failed_attempts": failed_attempts,
+    }

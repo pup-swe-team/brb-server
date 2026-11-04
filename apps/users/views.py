@@ -471,6 +471,7 @@ class DeactivateAccountView(APIView):
             # should stay JSON numbers the client can render directly.
             return Response(
                 {
+                    "code": "has_unsettled_orders",
                     "detail": (
                         "Your account cannot be deactivated while you have "
                         "open orders or unresolved unreturned-item cases. "

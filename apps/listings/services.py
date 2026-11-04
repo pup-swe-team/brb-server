@@ -247,6 +247,7 @@ def is_listing_available_for_range(
         return False
 
     from apps.orders.models import Order
+
     order_qs = Order.objects.filter(
         listing=listing,
         status__name__in=("confirmed", "active", "overdue"),

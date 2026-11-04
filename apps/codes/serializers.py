@@ -102,18 +102,33 @@ class HandoverVerificationResponseSerializer(serializers.ModelSerializer):
     """Response payload returned when a handover or return code transitions an Order."""
 
     listing_id = serializers.IntegerField(read_only=True)
+    listing_title = serializers.CharField(source="listing.title", read_only=True)
     borrower_id = serializers.IntegerField(read_only=True)
+    borrower_name = serializers.CharField(source="borrower.full_name", read_only=True)
     lender_id = serializers.IntegerField(source="listing.lender_id", read_only=True)
+    lender_name = serializers.CharField(
+        source="listing.lender.full_name", read_only=True
+    )
+    pickup_location = serializers.SerializerMethodField()
     status = serializers.CharField(source="status.name", read_only=True)
     auth_code = AuthCodeResponseSerializer(read_only=True)
+
+    def get_pickup_location(self, obj) -> str:
+        if obj.listing and obj.listing.pickup_location:
+            return obj.listing.pickup_location.name
+        return ""
 
     class Meta:
         model = Order
         fields = [
             "id",
             "listing_id",
+            "listing_title",
             "borrower_id",
+            "borrower_name",
             "lender_id",
+            "lender_name",
+            "pickup_location",
             "start_date",
             "end_date",
             "status",

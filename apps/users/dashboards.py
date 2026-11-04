@@ -2,11 +2,11 @@ from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.orders.models import Order
-from apps.listings.models import Listing
-from apps.users.serializers import UserResponseSerializer
 from apps.core.constants import BORROWING_LIMIT, DEFAULT_BORROWING_LIMIT
 from apps.core.selectors import get_int_config
+from apps.listings.models import Listing
+from apps.orders.models import Order
+from apps.users.serializers import UserResponseSerializer
 
 
 class BorrowerDashboardView(APIView):
@@ -14,9 +14,18 @@ class BorrowerDashboardView(APIView):
 
     def get(self, request):
         user = request.user
+        from apps.orders.services import (
+            expire_unanswered_requests,
+            process_overdue_and_unreturned_orders,
+        )
+
+        expire_unanswered_requests()
+        process_overdue_and_unreturned_orders()
         orders = (
             Order.objects.filter(borrower=user)
-            .select_related("listing", "listing__lender", "status")
+            .select_related(
+                "listing", "listing__lender", "listing__pickup_location", "status"
+            )
             .order_by("-created_at")
         )
         grouped = {
@@ -34,7 +43,10 @@ class BorrowerDashboardView(APIView):
             "past": [],
         }
         for order in orders:
-            status_name = getattr(getattr(order, "status"), "name", "")
+            status_name = getattr(order.status, "name", "")
+            lender_obj = (
+                getattr(order.listing, "lender", None) if order.listing else None
+            )
             data = {
                 "id": order.id,
                 "listing_id": order.listing_id,
@@ -43,6 +55,23 @@ class BorrowerDashboardView(APIView):
                 "start_date": order.start_date,
                 "end_date": order.end_date,
                 "created_at": order.created_at,
+                "lender_id": lender_obj.id if lender_obj else None,
+                "lender_name": getattr(lender_obj, "full_name", "")
+                if lender_obj
+                else "",
+                "counterpart": getattr(lender_obj, "full_name", "Lender")
+                if lender_obj
+                else "Lender",
+                "pickup_location": (
+                    order.listing.pickup_location.name
+                    if order.listing and order.listing.pickup_location
+                    else ""
+                ),
+                "price_per_day": (
+                    float(order.listing.rate_per_day)
+                    if order.listing and order.listing.rate_per_day is not None
+                    else 0.0
+                ),
             }
             if status_name in grouped:
                 grouped[status_name].append(data)
@@ -76,6 +105,13 @@ class LenderDashboardView(APIView):
 
     def get(self, request):
         user = request.user
+        from apps.orders.services import (
+            expire_unanswered_requests,
+            process_overdue_and_unreturned_orders,
+        )
+
+        expire_unanswered_requests()
+        process_overdue_and_unreturned_orders()
         listings = (
             Listing.objects.filter(lender=user)
             .select_related("category", "pickup_location", "status")
@@ -105,7 +141,7 @@ class LenderDashboardView(APIView):
         ongoing = []
         past = []
         for order in orders_on_listings:
-            status_name = getattr(getattr(order, "status"), "name", "")
+            status_name = getattr(order.status, "name", "")
             data = {
                 "id": order.id,
                 "listing_id": order.listing_id,

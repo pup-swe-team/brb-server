@@ -4,9 +4,14 @@ from django.urls import path
 
 from .views import (
     AcceptBorrowRequestView,
+    AdminDisputeDetailView,
+    AdminDisputeEscalateView,
+    AdminDisputeListView,
+    AdminDisputeResolveView,
     BorrowRequestView,
     CancelOrderView,
     CloseUnreturnedCaseView,
+    DamageReportView,
     DeclineBorrowRequestView,
     EscalateUnreturnedCaseView,
     OrderDetailView,
@@ -53,5 +58,35 @@ urlpatterns = [
         "unreturned-cases/<int:pk>/close/",
         CloseUnreturnedCaseView.as_view(),
         name="unreturned-case-close",
+    ),
+    path(
+        "orders/<int:order_id>/damage-report/",
+        DamageReportView.as_view(),
+        name="order-damage-report",
+    ),
+    path(
+        "orders/<int:order_id>/dispute/",
+        DamageReportView.as_view(),
+        name="order-dispute",
+    ),
+    path(
+        "disputes/",
+        AdminDisputeListView.as_view(),
+        name="admin-dispute-list",
+    ),
+    path(
+        "disputes/<int:pk>/",
+        AdminDisputeDetailView.as_view(),
+        name="admin-dispute-detail",
+    ),
+    path(
+        "disputes/<int:pk>/resolve/",
+        AdminDisputeResolveView.as_view(),
+        name="admin-dispute-resolve",
+    ),
+    path(
+        "disputes/<int:pk>/escalate/",
+        AdminDisputeEscalateView.as_view(),
+        name="admin-dispute-escalate",
     ),
 ]

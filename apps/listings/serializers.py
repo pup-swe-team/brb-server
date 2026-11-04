@@ -221,16 +221,25 @@ class ListingSerializer(serializers.ModelSerializer):
         ranges = []
         covered_intervals = set()
         for b in obj.blocked_dates.all():
-            ranges.append({
-                "id": b.id,
-                "start_date": b.start_date.isoformat() if hasattr(b.start_date, "isoformat") else str(b.start_date),
-                "end_date": b.end_date.isoformat() if hasattr(b.end_date, "isoformat") else str(b.end_date),
-                "reason": b.reason,
-                "created_at": b.created_at.isoformat() if hasattr(b.created_at, "isoformat") else str(b.created_at),
-            })
+            ranges.append(
+                {
+                    "id": b.id,
+                    "start_date": b.start_date.isoformat()
+                    if hasattr(b.start_date, "isoformat")
+                    else str(b.start_date),
+                    "end_date": b.end_date.isoformat()
+                    if hasattr(b.end_date, "isoformat")
+                    else str(b.end_date),
+                    "reason": b.reason,
+                    "created_at": b.created_at.isoformat()
+                    if hasattr(b.created_at, "isoformat")
+                    else str(b.created_at),
+                }
+            )
             covered_intervals.add((str(b.start_date), str(b.end_date)))
 
         from apps.orders.models import Order
+
         active_orders = Order.objects.filter(
             listing=obj,
             status__name__in=("confirmed", "active", "overdue"),
@@ -238,13 +247,21 @@ class ListingSerializer(serializers.ModelSerializer):
         for o in active_orders:
             interval = (str(o.start_date), str(o.end_date))
             if interval not in covered_intervals:
-                ranges.append({
-                    "id": None,
-                    "start_date": o.start_date.isoformat() if hasattr(o.start_date, "isoformat") else str(o.start_date),
-                    "end_date": o.end_date.isoformat() if hasattr(o.end_date, "isoformat") else str(o.end_date),
-                    "reason": f"Reserved (Order #{o.pk})",
-                    "created_at": o.created_at.isoformat() if hasattr(o.created_at, "isoformat") else str(o.created_at),
-                })
+                ranges.append(
+                    {
+                        "id": None,
+                        "start_date": o.start_date.isoformat()
+                        if hasattr(o.start_date, "isoformat")
+                        else str(o.start_date),
+                        "end_date": o.end_date.isoformat()
+                        if hasattr(o.end_date, "isoformat")
+                        else str(o.end_date),
+                        "reason": f"Reserved (Order #{o.pk})",
+                        "created_at": o.created_at.isoformat()
+                        if hasattr(o.created_at, "isoformat")
+                        else str(o.created_at),
+                    }
+                )
                 covered_intervals.add(interval)
         return ranges
 
@@ -315,7 +332,14 @@ class ListingSearchResultSerializer(serializers.ModelSerializer):
 
     def get_active_orders(self, obj: Listing) -> int:
         return obj.orders.filter(
-            status__name__in=["requested", "confirmed", "active", "overdue", "unreturned", "disputed"]
+            status__name__in=[
+                "requested",
+                "confirmed",
+                "active",
+                "overdue",
+                "unreturned",
+                "disputed",
+            ]
         ).count()
 
     class Meta:
@@ -406,9 +430,13 @@ class ListingCreateSerializer(serializers.ModelSerializer):
                     pass
             elif isinstance(raw_cat, str) and not raw_cat.strip().isdigit():
                 clean_name = raw_cat.strip()
-                cat_obj = ListingCategory.objects.filter(name__iexact=clean_name).first()
+                cat_obj = ListingCategory.objects.filter(
+                    name__iexact=clean_name
+                ).first()
                 if not cat_obj:
-                    cat_obj = ListingCategory.objects.filter(name__icontains=clean_name).first()
+                    cat_obj = ListingCategory.objects.filter(
+                        name__icontains=clean_name
+                    ).first()
                 if not cat_obj:
                     cat_obj, _ = ListingCategory.objects.get_or_create(name=clean_name)
                 data["category"] = cat_obj.id
@@ -429,21 +457,33 @@ class ListingCreateSerializer(serializers.ModelSerializer):
                     pass
             elif isinstance(raw_loc, str) and not raw_loc.strip().isdigit():
                 clean_name = raw_loc.strip()
-                loc_obj = PickupLocation.objects.filter(name__iexact=clean_name, deleted_at__isnull=True).first()
+                loc_obj = PickupLocation.objects.filter(
+                    name__iexact=clean_name, deleted_at__isnull=True
+                ).first()
                 if not loc_obj:
-                    loc_obj = PickupLocation.objects.filter(name__icontains=clean_name, deleted_at__isnull=True).first()
+                    loc_obj = PickupLocation.objects.filter(
+                        name__icontains=clean_name, deleted_at__isnull=True
+                    ).first()
                 if not loc_obj:
                     low = clean_name.lower()
-                    if 'cea' in low or 'engineering' in low or 'architecture' in low:
-                        loc_obj = PickupLocation.objects.filter(Q(name__icontains='engineering') | Q(name__icontains='architecture'), deleted_at__isnull=True).first()
+                    if "cea" in low or "engineering" in low or "architecture" in low:
+                        loc_obj = PickupLocation.objects.filter(
+                            Q(name__icontains="engineering")
+                            | Q(name__icontains="architecture"),
+                            deleted_at__isnull=True,
+                        ).first()
                 if not loc_obj:
-                    for kw in ['gate', 'library', 'lagoon', 'gym', 'communication']:
+                    for kw in ["gate", "library", "lagoon", "gym", "communication"]:
                         if kw in clean_name.lower():
-                            loc_obj = PickupLocation.objects.filter(name__icontains=kw, deleted_at__isnull=True).first()
+                            loc_obj = PickupLocation.objects.filter(
+                                name__icontains=kw, deleted_at__isnull=True
+                            ).first()
                             if loc_obj:
                                 break
                 if not loc_obj:
-                    loc_obj = PickupLocation.objects.filter(deleted_at__isnull=True).first()
+                    loc_obj = PickupLocation.objects.filter(
+                        deleted_at__isnull=True
+                    ).first()
                 if loc_obj:
                     data["pickup_location"] = loc_obj.id
 
@@ -527,9 +567,7 @@ class ListingCreateSerializer(serializers.ModelSerializer):
                 )
         elif isinstance(raw_windows, list):
             windows_data = raw_windows
-        elif (
-            "start_date" in self.initial_data or "available_from" in self.initial_data
-        ):
+        elif "start_date" in self.initial_data or "available_from" in self.initial_data:
             start_val = self.initial_data.get("start_date") or self.initial_data.get(
                 "available_from"
             )
@@ -675,9 +713,13 @@ class ListingUpdateSerializer(serializers.ModelSerializer):
                     pass
             elif isinstance(raw_cat, str) and not raw_cat.strip().isdigit():
                 clean_name = raw_cat.strip()
-                cat_obj = ListingCategory.objects.filter(name__iexact=clean_name).first()
+                cat_obj = ListingCategory.objects.filter(
+                    name__iexact=clean_name
+                ).first()
                 if not cat_obj:
-                    cat_obj = ListingCategory.objects.filter(name__icontains=clean_name).first()
+                    cat_obj = ListingCategory.objects.filter(
+                        name__icontains=clean_name
+                    ).first()
                 if not cat_obj:
                     cat_obj, _ = ListingCategory.objects.get_or_create(name=clean_name)
                 data["category"] = cat_obj.id
@@ -697,21 +739,33 @@ class ListingUpdateSerializer(serializers.ModelSerializer):
                     pass
             elif isinstance(raw_loc, str) and not raw_loc.strip().isdigit():
                 clean_name = raw_loc.strip()
-                loc_obj = PickupLocation.objects.filter(name__iexact=clean_name, deleted_at__isnull=True).first()
+                loc_obj = PickupLocation.objects.filter(
+                    name__iexact=clean_name, deleted_at__isnull=True
+                ).first()
                 if not loc_obj:
-                    loc_obj = PickupLocation.objects.filter(name__icontains=clean_name, deleted_at__isnull=True).first()
+                    loc_obj = PickupLocation.objects.filter(
+                        name__icontains=clean_name, deleted_at__isnull=True
+                    ).first()
                 if not loc_obj:
                     low = clean_name.lower()
-                    if 'cea' in low or 'engineering' in low or 'architecture' in low:
-                        loc_obj = PickupLocation.objects.filter(Q(name__icontains='engineering') | Q(name__icontains='architecture'), deleted_at__isnull=True).first()
+                    if "cea" in low or "engineering" in low or "architecture" in low:
+                        loc_obj = PickupLocation.objects.filter(
+                            Q(name__icontains="engineering")
+                            | Q(name__icontains="architecture"),
+                            deleted_at__isnull=True,
+                        ).first()
                 if not loc_obj:
-                    for kw in ['gate', 'library', 'lagoon', 'gym', 'communication']:
+                    for kw in ["gate", "library", "lagoon", "gym", "communication"]:
                         if kw in clean_name.lower():
-                            loc_obj = PickupLocation.objects.filter(name__icontains=kw, deleted_at__isnull=True).first()
+                            loc_obj = PickupLocation.objects.filter(
+                                name__icontains=kw, deleted_at__isnull=True
+                            ).first()
                             if loc_obj:
                                 break
                 if not loc_obj:
-                    loc_obj = PickupLocation.objects.filter(deleted_at__isnull=True).first()
+                    loc_obj = PickupLocation.objects.filter(
+                        deleted_at__isnull=True
+                    ).first()
                 if loc_obj:
                     data["pickup_location"] = loc_obj.id
 
@@ -776,7 +830,6 @@ class ListingUpdateSerializer(serializers.ModelSerializer):
             ]
 
         if windows_data:
-            today = timezone.now().date()
             parsed_windows = []
             for win in windows_data:
                 if (
