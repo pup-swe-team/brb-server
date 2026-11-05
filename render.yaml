@@ -16,9 +16,10 @@ services:
     # WhiteNoise with WHITENOISE_USE_FINDERS=True, so collectstatic is optional.
     buildCommand: >-
       pip install uv &&
-      uv sync --frozen --no-dev &&
-      uv run python manage.py migrate --noinput
+      uv sync --frozen --no-dev
     startCommand: >-
+      uv run python manage.py migrate --noinput &&
+      uv run python manage.py seed_demo_data --demo &&
       uv run gunicorn brb_server.wsgi:application
       --bind 0.0.0.0:$PORT --workers 1 --timeout 120
     healthCheckPath: /healthz/
