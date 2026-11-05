@@ -3549,6 +3549,21 @@ class AccountDeactivationTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
+    def test_users_me_deactivate_alias_url_blocks_when_open_orders_exist(self) -> None:
+        """CP-1004 / FE-BUG-3006: /api/v1/users/me/deactivate/ answers with blocker details."""
+        lender = make_user("lender.alias@iskolarngbayan.pup.edu.ph")
+        listing = self.make_listing(lender)
+        self.make_order(self.user, listing, "active")
+
+        alias_url = reverse("api-users-me-deactivate")
+        response = self.client.post(
+            alias_url, {"password": "StrongPassword123!"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "has_unsettled_orders")
+        self.assertEqual(response.data["open_orders"], 1)
+        self.assertIn("open orders", response.data["detail"])
+
 
 class LenderSearchTests(APITestCase):
     """
