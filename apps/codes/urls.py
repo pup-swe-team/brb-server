@@ -40,4 +40,24 @@ urlpatterns = [
         VerifyReturnCodeView.as_view(),
         name="order-return-code-verify",
     ),
+    path(
+        "codes/generate-handover/",
+        GenerateHandoverCodeView.as_view(),
+        name="codes-generate-handover",
+    ),
+    path(
+        "codes/verify-handover/",
+        VerifyHandoverCodeView.as_view(),
+        name="codes-verify-handover",
+    ),
+    path(
+        "codes/generate-return/",
+        GenerateReturnCodeView.as_view(),
+        name="codes-generate-return",
+    ),
+    path(
+        "codes/verify-return/",
+        VerifyReturnCodeView.as_view(),
+        name="codes-verify-return",
+    ),
 ]

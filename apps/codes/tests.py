@@ -357,6 +357,24 @@ class HandoverCodeTests(APITestCase):
         self.order.refresh_from_db()
         self.assertEqual(self.order.status.name, ORDER_STATUS_ACTIVE)
 
+    def test_alias_codes_endpoints_generate_and_verify_handover(self) -> None:
+        """CP-504: /api/v1/codes/generate-handover/ and verify-handover/ with order_id in body."""
+        self.client.force_authenticate(user=self.lender)
+        gen_url = reverse("codes-generate-handover")
+        res = self.client.post(gen_url, {"order_id": self.order.pk}, format="json")
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertIn("code_value", res.data)
+        code_val = res.data["code_value"]
+
+        self.client.force_authenticate(user=self.borrower)
+        ver_url = reverse("codes-verify-handover")
+        ver_res = self.client.post(
+            ver_url, {"order_id": self.order.pk, "code": code_val}, format="json"
+        )
+        self.assertEqual(ver_res.status_code, status.HTTP_200_OK)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status.name, ORDER_STATUS_ACTIVE)
+
 
 class ReturnCodeTests(APITestCase):
     """Tests covering all CP-505 checklist criteria (Return OTP generation & validation)."""
