@@ -63,10 +63,12 @@ INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
+    "cloudinary_storage",
     # Must sit ABOVE django.contrib.staticfiles so whitenoise's `runserver`
     # command wins; keeps local dev serving static the same way prod does.
     "whitenoise.runserver_nostatic",
     "django.contrib.staticfiles",
+    "cloudinary",
     "django.contrib.humanize",
     # local apps
     "apps.core",
@@ -277,9 +279,25 @@ CORS_ALLOWED_ORIGINS = [
 # `static()` helper would no-op. Those files are cosmetic and regenerable by the
 # user, so losing them on redeploy is acceptable -- unlike a government ID,
 # which is not.
+# Cross-platform cloud media storage (Cloudinary)
+CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME", "").strip()
+CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY", "").strip()
+CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET", "").strip()
+
+CLOUDINARY_STORAGE = {
+    "CLOUD_NAME": CLOUDINARY_CLOUD_NAME,
+    "API_KEY": CLOUDINARY_API_KEY,
+    "API_SECRET": CLOUDINARY_API_SECRET,
+}
+
+if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
+    DEFAULT_FILE_STORAGE_BACKEND = "cloudinary_storage.storage.MediaCloudinaryStorage"
+else:
+    DEFAULT_FILE_STORAGE_BACKEND = "django.core.files.storage.FileSystemStorage"
+
 STORAGES = {
     "default": {
-        "BACKEND": "django.core.files.storage.FileSystemStorage",
+        "BACKEND": DEFAULT_FILE_STORAGE_BACKEND,
     },
     "staticfiles": {
         "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
