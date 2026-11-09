@@ -48,6 +48,13 @@ def create_listing(
     if status is None:
         status, _ = ListingStatus.objects.get_or_create(name=LISTING_STATUS_ACTIVE)
 
+    lender = User.objects.select_for_update().get(pk=lender.pk)
+    if (
+        lender.account_status != User.AccountStatusChoices.ACTIVE
+        or lender.lender_status != User.LenderStatusChoices.ACTIVE
+    ):
+        raise ValidationError("Active Lender status is required to create a listing.")
+
     listing = Listing.objects.create(
         lender=lender,
         title=title,
@@ -95,6 +102,14 @@ def reactivate_listing(*, listing: Listing) -> Listing:
     """Restore a deactivated listing back to 'active' status (CP-402)."""
     if listing.status.name == LISTING_STATUS_DELETED:
         raise ValidationError("Cannot reactivate a deleted listing.")
+    lender = User.objects.select_for_update().get(pk=listing.lender_id)
+    if (
+        lender.account_status != User.AccountStatusChoices.ACTIVE
+        or lender.lender_status != User.LenderStatusChoices.ACTIVE
+    ):
+        raise ValidationError(
+            "Active Lender status is required to reactivate a listing."
+        )
 
     active_status, _ = ListingStatus.objects.get_or_create(name=LISTING_STATUS_ACTIVE)
     listing.status = active_status

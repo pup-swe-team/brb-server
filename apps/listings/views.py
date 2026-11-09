@@ -1,3 +1,4 @@
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import generics, status
@@ -6,6 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.users.models import User
 from apps.users.permissions import IsIdentityVerified
 
 from .models import Listing, ListingCategory, PickupLocation
@@ -121,6 +123,19 @@ class ListingDetailView(generics.RetrieveUpdateDestroyAPIView):
         "availability_windows",
         "blocked_dates",
     )
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.request.method in ("GET", "HEAD"):
+            return qs.filter(
+                Q(lender=self.request.user)
+                | Q(
+                    status__name="active",
+                    lender__lender_status=User.LenderStatusChoices.ACTIVE,
+                    lender__account_status=User.AccountStatusChoices.ACTIVE,
+                )
+            )
+        return qs
 
     def get_serializer_class(self):
         if self.request.method in ("PUT", "PATCH"):

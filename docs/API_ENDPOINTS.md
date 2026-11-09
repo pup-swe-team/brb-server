@@ -46,6 +46,7 @@ URLconf — if a route changes, update this file in the same commit.
 | POST | `/api/v1/auth/email-change/` | user (throttled 3/hour) |
 | POST | `/api/v1/auth/email-change/confirm/` | public (link sent to the new address) |
 | POST | `/api/v1/auth/deactivate/` | user (body `{"password"}`; wrong password -> 401 `invalid_credentials`; blocked by open orders/cases) |
+| POST | `/api/v1/auth/revoke-lender/` | active lender (CP-205; 409 with Confirmed/Active orders) |
 
 ## Cron — `/api/v1/jobs/`
 
@@ -173,6 +174,24 @@ for history but vanish from the list and return 404 on detail.
 | Method | Path | Auth |
 |---|---|---|
 | GET | `/media/<path>` | public (listing photos, profile images) |
+
+## Lender revocation — CP-205/206
+
+| Method | Path | Auth |
+|---|---|---|
+| POST | `/api/v1/auth/revoke-lender/` | active lender |
+| POST | `/api/v1/users/<id>/revoke-lender/` | admin (`is_staff`) |
+
+The Admin request requires `reason`: `repeated_late_returns`,
+`repeated_reports_complaints`, `policy_violation`, or `other`; `detail` is
+optional. Either route returns `409` while the Lender has a Confirmed or Active
+order. A successful revocation returns the updated `user`, `declined_orders`,
+and `deactivated_listings`. Requested orders become Declined with
+`decline_reason: "Lender status revoked."`, and Borrowers get a decline
+notification. Deactivated listings disappear from search and from other users'
+detail requests; the owner can still view them. Admin revocations place a
+reapplication hold, cleared through the Django Admin user action. Self-revoked
+users can reapply through `/api/v1/auth/apply-lender/` after identity verification.
 
 ## Admin portal (HTML, session login) — `/portal/`
 

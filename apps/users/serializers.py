@@ -41,6 +41,7 @@ from .models import (
     IdentityDocument,
     IdentityDocumentStatus,
     IdentityDocumentType,
+    LenderRevocation,
     User,
 )
 from .services import (
@@ -58,6 +59,11 @@ def login_lockout_threshold() -> int:
 def login_lockout_minutes() -> int:
     """How long a CP-103 lockout lasts, Admin-configurable."""
     return get_int_config(LOGIN_LOCKOUT_MINUTES, DEFAULT_LOGIN_LOCKOUT_MINUTES)
+
+
+class AdminLenderRevocationSerializer(serializers.Serializer):
+    reason = serializers.ChoiceField(choices=LenderRevocation.Reason.choices)
+    detail = serializers.CharField(required=False, allow_blank=True, default="")
 
 
 def pup_webmail_domains() -> tuple[str, str]:

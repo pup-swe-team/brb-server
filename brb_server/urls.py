@@ -12,7 +12,7 @@ from django.views.static import serve as serve_media
 
 from apps.core.views import HealthView
 from apps.users.dashboards import BorrowerDashboardView, LenderDashboardView
-from apps.users.views import DeactivateAccountView
+from apps.users.views import AdminRevokeLenderView, DeactivateAccountView
 
 urlpatterns = [
     # Render health check — keep at root so it answers before any DB/CDN work.
@@ -58,6 +58,11 @@ urlpatterns = [
         "api/v1/users/me/deactivate/",
         DeactivateAccountView.as_view(),
         name="api-users-me-deactivate",
+    ),
+    path(
+        "api/v1/users/<int:pk>/revoke-lender/",
+        AdminRevokeLenderView.as_view(),
+        name="api-admin-revoke-lender",
     ),
     path(
         "api/v1/users/me/borrower-dashboard/",

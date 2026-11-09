@@ -17,6 +17,7 @@ from .views import (
     RefreshView,
     RegisterView,
     ResendVerificationView,
+    SelfRevokeLenderView,
 )
 
 urlpatterns = [
@@ -31,6 +32,7 @@ urlpatterns = [
     path("me/", MeView.as_view(), name="auth-me"),
     # CP-1003 -- apply for the Lender role.
     path("apply-lender/", ApplyLenderView.as_view(), name="auth-apply-lender"),
+    path("revoke-lender/", SelfRevokeLenderView.as_view(), name="auth-revoke-lender"),
     path("token/refresh/", RefreshView.as_view(), name="auth-token-refresh"),
     path("logout/", LogoutView.as_view(), name="auth-logout"),
     # CP-104 -- password recovery.

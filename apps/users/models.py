@@ -159,6 +159,7 @@ class User(AbstractUser):
         choices=LenderStatusChoices.choices,
         default=LenderStatusChoices.NONE,
     )
+    lender_reapplication_hold = models.BooleanField(default=False)
     street_address = models.CharField(max_length=255, blank=True, default="")
     municipality = models.ForeignKey(
         Municipality,
@@ -273,6 +274,37 @@ class IdentityDocumentStatus(models.Model):
 
     def __str__(self) -> str:
         return self.name
+
+
+class LenderRevocation(models.Model):
+    class Source(models.TextChoices):
+        SELF = "self", "Self"
+        ADMIN = "admin", "Admin"
+
+    class Reason(models.TextChoices):
+        LATE_RETURNS = "repeated_late_returns", "Repeated late returns"
+        REPORTS = "repeated_reports_complaints", "Repeated reports or complaints"
+        POLICY = "policy_violation", "Policy violation"
+        OTHER = "other", "Other"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="lender_revocations",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="performed_lender_revocations",
+    )
+    source = models.CharField(max_length=10, choices=Source.choices)
+    reason = models.CharField(max_length=40, choices=Reason.choices, blank=True)
+    detail = models.TextField(blank=True)
+    revoked_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "lender_revocations"
+        ordering = ["-revoked_at", "-pk"]
 
 
 class IdentityDocument(models.Model):

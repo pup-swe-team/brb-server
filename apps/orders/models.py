@@ -44,6 +44,7 @@ class Order(models.Model):
         related_name="orders",
     )
     cancel_reason = models.TextField(blank=True, default="")
+    decline_reason = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

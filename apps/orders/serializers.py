@@ -82,6 +82,7 @@ class OrderDetailSerializer(BorrowRequestResultSerializer):
             "end_date",
             "status",
             "cancel_reason",
+            "decline_reason",
             "pickup_location",
             "price_per_day",
             "is_locked_out",
