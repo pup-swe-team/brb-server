@@ -13,9 +13,16 @@ from .models import (
     IdentityDocument,
     IdentityDocumentStatus,
     IdentityDocumentType,
+    LenderRevocation,
     User,
 )
-from .services import deactivate_account, deactivation_blockers
+from .services import (
+    LenderRevocationConflict,
+    clear_lender_reapplication_hold,
+    deactivate_account,
+    deactivation_blockers,
+    revoke_lender_role,
+)
 
 
 @admin.register(User)
@@ -25,8 +32,9 @@ class UserAdmin(admin.ModelAdmin):
 
     The password hash is excluded from the form -- credential changes go
     through the app's own endpoints (CP-104/1001), not the admin. Account
-    and lender statuses are editable here so support can resolve incidents
-    without raw SQL; D-03 authority remains `is_staff`/`is_superuser`.
+    status is editable here; Lender status changes use dedicated actions so
+    their order and listing effects cannot be skipped. D-03 authority remains
+    `is_staff`/`is_superuser`.
     """
 
     list_display = (
@@ -51,9 +59,67 @@ class UserAdmin(admin.ModelAdmin):
         "email_verification_sent_at",
         "password_reset_sent_at",
         "email_change_sent_at",
+        "lender_status",
+        "lender_reapplication_hold",
     )
     date_hierarchy = "created_at"
-    actions = ("deactivate_selected_accounts", "reactivate_selected_accounts")
+    actions = (
+        "deactivate_selected_accounts",
+        "reactivate_selected_accounts",
+        "revoke_selected_lenders",
+        "clear_selected_lender_holds",
+    )
+
+    @admin.action(description="Revoke selected Lenders (CP-206)")
+    def revoke_selected_lenders(self, request, queryset):
+        if request.POST.get("_revoke_confirmed"):
+            form = AdminLenderRevocationForm(request.POST)
+            if form.is_valid():
+                revoked = blocked = skipped = 0
+                for user in queryset.order_by("pk"):
+                    if user.lender_status != User.LenderStatusChoices.ACTIVE:
+                        skipped += 1
+                        continue
+                    try:
+                        revoke_lender_role(
+                            user=user,
+                            actor=request.user,
+                            source=LenderRevocation.Source.ADMIN,
+                            reason=form.cleaned_data["reason"],
+                            detail=form.cleaned_data["detail"],
+                        )
+                        revoked += 1
+                    except LenderRevocationConflict:
+                        blocked += 1
+                self.message_user(
+                    request,
+                    f"Revoked {revoked} Lender(s); {blocked} blocked by Confirmed/Active orders; {skipped} skipped.",
+                )
+                return HttpResponseRedirect(request.get_full_path())
+        else:
+            form = AdminLenderRevocationForm()
+
+        return TemplateResponse(
+            request,
+            "admin/users/revoke_lenders.html",
+            {
+                **self.admin_site.each_context(request),
+                "title": "Revoke selected Lenders",
+                "opts": self.model._meta,
+                "form": form,
+                "users": queryset.order_by("email"),
+                "queryset": queryset,
+                "action_checkbox_name": helpers.ACTION_CHECKBOX_NAME,
+            },
+        )
+
+    @admin.action(description="Clear selected Lender reapplication holds")
+    def clear_selected_lender_holds(self, request, queryset):
+        cleared = sum(
+            clear_lender_reapplication_hold(user=user, actor=request.user)
+            for user in queryset.order_by("pk")
+        )
+        self.message_user(request, f"Cleared {cleared} Lender application hold(s).")
 
     @admin.action(description="Deactivate selected accounts (CP-1004)")
     def deactivate_selected_accounts(self, request, queryset) -> None:
@@ -97,6 +163,27 @@ class UserAdmin(admin.ModelAdmin):
             updated_at=timezone.now(),
         )
         self.message_user(request, f"Reactivated {reactivated} account(s).")
+
+
+class AdminLenderRevocationForm(forms.Form):
+    reason = forms.ChoiceField(choices=LenderRevocation.Reason.choices)
+    detail = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 3}))
+
+
+@admin.register(LenderRevocation)
+class LenderRevocationAdmin(admin.ModelAdmin):
+    list_display = ("user", "actor", "source", "reason", "revoked_at")
+    readonly_fields = ("user", "actor", "source", "reason", "detail", "revoked_at")
+    search_fields = ("user__email", "actor__email")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 class RejectIdentityDocumentForm(forms.Form):

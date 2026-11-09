@@ -16,9 +16,10 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from apps.audit.services import log_admin_document_access
 
 from .encryption import decrypt_document_data, detect_document_content_type
-from .models import IdentityDocument, User
+from .models import IdentityDocument, LenderRevocation, User
 from .selectors import get_lender_profile, search_lenders
 from .serializers import (
+    AdminLenderRevocationSerializer,
     DeactivateAccountSerializer,
     EmailChangeConfirmSerializer,
     EmailChangeSerializer,
@@ -53,6 +54,7 @@ from .services import (
     request_password_reset,
     resend_email_verification,
     review_identity_document,
+    revoke_lender_role,
     send_email_change,
     send_email_verification,
     verify_user_email,
@@ -240,7 +242,7 @@ class ApplyLenderView(APIView):
 
     def post(self, request: Request) -> Response:
         try:
-            apply_for_lender_role(request.user)
+            user = apply_for_lender_role(request.user)
         except LenderApplicationError as exc:
             return Response(
                 {"detail": exc.message},
@@ -250,8 +252,43 @@ class ApplyLenderView(APIView):
         return Response(
             {
                 "message": "Your lender application was approved. You can now list items.",
-                "user": UserResponseSerializer(request.user).data,
+                "user": UserResponseSerializer(user).data,
             },
+            status=status.HTTP_200_OK,
+        )
+
+
+class SelfRevokeLenderView(APIView):
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request: Request) -> Response:
+        result = revoke_lender_role(
+            user=request.user, actor=request.user, source=LenderRevocation.Source.SELF
+        )
+        request.user.refresh_from_db()
+        return Response(
+            {"user": UserResponseSerializer(request.user).data, **result},
+            status=status.HTTP_200_OK,
+        )
+
+
+class AdminRevokeLenderView(APIView):
+    authentication_classes = (JWTAuthentication, SessionAuthentication)
+    permission_classes = (permissions.IsAdminUser,)
+
+    def post(self, request: Request, pk: int) -> Response:
+        user = get_object_or_404(User, pk=pk)
+        serializer = AdminLenderRevocationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        result = revoke_lender_role(
+            user=user,
+            actor=request.user,
+            source=LenderRevocation.Source.ADMIN,
+            **serializer.validated_data,
+        )
+        user.refresh_from_db()
+        return Response(
+            {"user": UserResponseSerializer(user).data, **result},
             status=status.HTTP_200_OK,
         )
 

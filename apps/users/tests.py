@@ -4183,11 +4183,12 @@ class ApplyLenderTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("already a lender", str(response.data["detail"]))
 
-    def test_a_revoked_lender_cannot_re_apply(self) -> None:
-        """Revocation is a trust decision; re-applying would undo it."""
+    def test_a_revoked_lender_with_admin_hold_cannot_re_apply(self) -> None:
+        """An Admin revocation requires explicit reinstatement."""
         self.approve_identity(self.user)
         self.user.lender_status = User.LenderStatusChoices.REVOKED
-        self.user.save(update_fields=["lender_status"])
+        self.user.lender_reapplication_hold = True
+        self.user.save(update_fields=["lender_status", "lender_reapplication_hold"])
 
         response = self.client.post(self.url)
 

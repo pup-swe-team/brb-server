@@ -11,8 +11,10 @@ from django.urls import include, path
 from django.views.static import serve as serve_media
 
 from apps.core.views import HealthView
+from apps.listings.views import AdminRemoveListingView
+from apps.reviews.views import AdminRemoveReviewView
 from apps.users.dashboards import BorrowerDashboardView, LenderDashboardView
-from apps.users.views import DeactivateAccountView
+from apps.users.views import AdminRevokeLenderView, DeactivateAccountView
 
 urlpatterns = [
     # Render health check — keep at root so it answers before any DB/CDN work.
@@ -23,6 +25,16 @@ urlpatterns = [
     path("api/v1/jobs/", include("apps.core.urls")),
     path("api/v1/identity/", include("apps.users.identity_urls")),
     path("api/v1/lenders/", include("apps.users.lender_urls")),
+    path(
+        "api/v1/admin/listings/<int:pk>/",
+        AdminRemoveListingView.as_view(),
+        name="api-admin-remove-listing",
+    ),
+    path(
+        "api/v1/admin/reviews/<int:pk>/",
+        AdminRemoveReviewView.as_view(),
+        name="api-admin-remove-review",
+    ),
     path("api/v1/", include("apps.codes.urls")),
     path("api/v1/", include("apps.orders.urls")),
     path("api/v1/", include("apps.listings.urls")),
@@ -58,6 +70,11 @@ urlpatterns = [
         "api/v1/users/me/deactivate/",
         DeactivateAccountView.as_view(),
         name="api-users-me-deactivate",
+    ),
+    path(
+        "api/v1/users/<int:pk>/revoke-lender/",
+        AdminRevokeLenderView.as_view(),
+        name="api-admin-revoke-lender",
     ),
     path(
         "api/v1/users/me/borrower-dashboard/",

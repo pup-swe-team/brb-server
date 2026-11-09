@@ -8,6 +8,7 @@ from django.db.models import Q
 from django.utils import timezone
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
+from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
 
 from apps.core.constants import (
     DEFAULT_EMAIL_VERIFICATION_EXPIRY_DAYS,
@@ -16,15 +17,19 @@ from apps.core.constants import (
     PASSWORD_RESET_EXPIRY_MINUTES,
 )
 from apps.core.selectors import get_int_config
-from apps.notifications.constants import NOTIFICATION_TYPE_VERIFICATION_RESULT
+from apps.listings.models import Listing, ListingStatus
+from apps.notifications.constants import (
+    NOTIFICATION_TYPE_DECLINE,
+    NOTIFICATION_TYPE_VERIFICATION_RESULT,
+)
 from apps.notifications.models import Notification, NotificationType
-from apps.orders.models import Order, UnreturnedCase
+from apps.orders.models import Order, OrderStatus, UnreturnedCase
 
 from .constants import (
     IDENTITY_DOCUMENT_STATUS_APPROVED,
     IDENTITY_DOCUMENT_STATUS_REJECTED,
 )
-from .models import IdentityDocument, IdentityDocumentStatus, User
+from .models import IdentityDocument, IdentityDocumentStatus, LenderRevocation, User
 from .tokens import (
     EmailChangeTokenGenerator,
     EmailVerificationTokenGenerator,
@@ -465,6 +470,109 @@ class LenderApplicationError(Exception):
         self.message = message
 
 
+class LenderRevocationConflict(APIException):
+    status_code = 409
+    default_detail = (
+        "Complete confirmed or active orders before revoking Lender status."
+    )
+    default_code = "lender_revocation_blocked"
+
+
+@transaction.atomic
+def revoke_lender_role(
+    *, user: User, actor: User, source: str, reason: str = "", detail: str = ""
+) -> dict[str, int]:
+    """Revoke a Lender and settle their pending requests as one transaction."""
+    if source not in LenderRevocation.Source.values:
+        raise ValidationError({"source": "Invalid revocation source."})
+    if source == LenderRevocation.Source.ADMIN:
+        if not actor.is_staff:
+            raise PermissionDenied("Administrator access required.")
+        if reason not in LenderRevocation.Reason.values:
+            raise ValidationError({"reason": "Select a valid revocation reason."})
+    elif actor.pk != user.pk:
+        raise PermissionDenied("You can only revoke your own Lender status.")
+
+    locked_user = User.objects.select_for_update().get(pk=user.pk)
+    if locked_user.lender_status != User.LenderStatusChoices.ACTIVE:
+        raise ValidationError({"detail": "This user is not an active Lender."})
+
+    listings = list(
+        Listing.objects.select_for_update().filter(lender=locked_user).order_by("pk")
+    )
+    listing_ids = [listing.pk for listing in listings]
+    orders = list(
+        Order.objects.select_for_update()
+        .filter(
+            listing_id__in=listing_ids,
+            status__name__in=("requested", "confirmed", "active"),
+        )
+        .select_related("status")
+        .order_by("pk")
+    )
+    if any(order.status.name in ("confirmed", "active") for order in orders):
+        raise LenderRevocationConflict()
+
+    now = timezone.now()
+    declined_status, _ = OrderStatus.objects.get_or_create(name="declined")
+    requested_ids = [order.pk for order in orders if order.status.name == "requested"]
+    if requested_ids:
+        Order.objects.filter(pk__in=requested_ids).update(
+            status=declined_status,
+            decline_reason="Lender status revoked.",
+            updated_at=now,
+        )
+        decline_type, _ = NotificationType.objects.get_or_create(
+            name=NOTIFICATION_TYPE_DECLINE
+        )
+        Notification.objects.bulk_create(
+            [
+                Notification(
+                    user_id=order.borrower_id,
+                    type=decline_type,
+                    reference_id=str(order.pk),
+                )
+                for order in orders
+                if order.status.name == "requested"
+            ]
+        )
+
+    deactivated_status, _ = ListingStatus.objects.get_or_create(name="deactivated")
+    deactivated_count = Listing.objects.filter(
+        pk__in=listing_ids, status__name__in=("active",)
+    ).update(status=deactivated_status, updated_at=now)
+    locked_user.lender_status = User.LenderStatusChoices.REVOKED
+    locked_user.lender_reapplication_hold = source == LenderRevocation.Source.ADMIN
+    locked_user.save(
+        update_fields=["lender_status", "lender_reapplication_hold", "updated_at"]
+    )
+    LenderRevocation.objects.create(
+        user=locked_user,
+        actor=actor,
+        source=source,
+        reason=reason if source == LenderRevocation.Source.ADMIN else "",
+        detail=detail.strip() if source == LenderRevocation.Source.ADMIN else "",
+    )
+    return {
+        "declined_orders": len(requested_ids),
+        "deactivated_listings": deactivated_count,
+    }
+
+
+@transaction.atomic
+def clear_lender_reapplication_hold(*, user: User, actor: User) -> bool:
+    if not actor.is_staff:
+        raise PermissionDenied("Administrator access required.")
+    locked_user = User.objects.select_for_update().get(pk=user.pk)
+    if locked_user.lender_status != User.LenderStatusChoices.REVOKED:
+        return False
+    if not locked_user.lender_reapplication_hold:
+        return False
+    locked_user.lender_reapplication_hold = False
+    locked_user.save(update_fields=["lender_reapplication_hold", "updated_at"])
+    return True
+
+
 def apply_for_lender_role(user: User) -> User:
     """
     Grant the Lender role to a verified borrower (CP-1003).
@@ -482,30 +590,26 @@ def apply_for_lender_role(user: User) -> User:
     * the identity must have been Admin-approved, because lending means
       handing something over to a stranger and CP-105 makes verification the
       gate for exactly that;
-    * the account must not already be a lender, and a revoked lender may not
-      quietly re-apply -- revocation is a trust decision, and re-applying
-      without an Admin's say-so would undo it.
+    * the account must not already be a lender; an Admin-revoked user must
+      have their application hold cleared before reapplying.
     """
-    if user.account_status != User.AccountStatusChoices.ACTIVE:
-        raise LenderApplicationError(
-            "Your account is not active, so you cannot become a lender right now."
-        )
-
-    if not user.has_verified_identity():
-        raise LenderApplicationError(
-            "Identity verification is required before you can become a lender. "
-            "Submit an identity document and wait for review to complete."
-        )
-
-    if user.lender_status == User.LenderStatusChoices.ACTIVE:
-        raise LenderApplicationError("You are already a lender.")
-
-    if user.lender_status == User.LenderStatusChoices.REVOKED:
-        raise LenderApplicationError(
-            "Your lender status was revoked. Please contact an administrator."
-        )
-
     with transaction.atomic():
+        user = User.objects.select_for_update().get(pk=user.pk)
+        if user.account_status != User.AccountStatusChoices.ACTIVE:
+            raise LenderApplicationError(
+                "Your account is not active, so you cannot become a lender right now."
+            )
+        if not user.has_verified_identity():
+            raise LenderApplicationError(
+                "Identity verification is required before you can become a lender. "
+                "Submit an identity document and wait for review to complete."
+            )
+        if user.lender_status == User.LenderStatusChoices.ACTIVE:
+            raise LenderApplicationError("You are already a lender.")
+        if user.lender_reapplication_hold:
+            raise LenderApplicationError(
+                "An administrator must clear your Lender application hold before you can reapply."
+            )
         user.lender_status = User.LenderStatusChoices.ACTIVE
         user.save(update_fields=["lender_status", "updated_at"])
 
