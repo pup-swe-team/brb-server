@@ -290,7 +290,10 @@ CLOUDINARY_STORAGE = {
     "API_SECRET": CLOUDINARY_API_SECRET,
 }
 
-if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
+if "test" in sys.argv:
+    # Use isolated local FileSystemStorage during unit tests (keeps tests offline and clean)
+    DEFAULT_FILE_STORAGE_BACKEND = "django.core.files.storage.FileSystemStorage"
+elif CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
     DEFAULT_FILE_STORAGE_BACKEND = "cloudinary_storage.storage.MediaCloudinaryStorage"
 else:
     DEFAULT_FILE_STORAGE_BACKEND = "django.core.files.storage.FileSystemStorage"

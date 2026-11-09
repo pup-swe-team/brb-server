@@ -1,5 +1,7 @@
 from django.urls import path
 
+from apps.notifications.views import NotificationPreferencesView
+
 from .dashboards import BorrowerDashboardView, LenderDashboardView
 from .views import (
     ApplyLenderView,
@@ -83,6 +85,12 @@ urlpatterns = [
         "deactivate/",
         DeactivateAccountView.as_view(),
         name="auth-deactivate",
+    ),
+    # CP-801/802 -- notification preferences
+    path(
+        "notification-preferences/",
+        NotificationPreferencesView.as_view(),
+        name="auth-notification-preferences",
     ),
     # CP-201/203/204 -- dashboards
     path(

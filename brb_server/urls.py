@@ -38,6 +38,7 @@ urlpatterns = [
     path("api/v1/", include("apps.codes.urls")),
     path("api/v1/", include("apps.orders.urls")),
     path("api/v1/", include("apps.listings.urls")),
+    path("api/v1/notifications/", include("apps.notifications.urls")),
     # Uploads (listing photos, profile images). Render has no nginx and
     # DEBUG=False, so nothing else serves MEDIA_ROOT — see DECISIONS.md D-26.
     path(

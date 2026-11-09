@@ -451,6 +451,11 @@ def process_overdue_and_unreturned_orders(*, now: datetime | None = None) -> dic
 
     expired_code_ids = expire_stale_auth_codes(now=now)
 
+    # 0. Upcoming due date notifications (active orders ending tomorrow)
+    from apps.notifications.services import process_upcoming_due_date_notifications
+
+    upcoming_due_date_notifs = process_upcoming_due_date_notifications(now=now)
+
     # 1. Active -> Overdue
     active_candidate_ids = list(
         Order.objects.filter(
@@ -506,6 +511,7 @@ def process_overdue_and_unreturned_orders(*, now: datetime | None = None) -> dic
     return {
         "expired_code_count": len(expired_code_ids),
         "expired_code_ids": expired_code_ids,
+        "upcoming_due_date_count": len(upcoming_due_date_notifs),
         "overdue_count": len(overdue_order_ids),
         "overdue_order_ids": overdue_order_ids,
         "unreturned_escalation_days": escalation_days,

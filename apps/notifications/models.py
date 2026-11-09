@@ -50,3 +50,25 @@ class Notification(models.Model):
     def __str__(self) -> str:
         read_status = "Read" if self.is_read else "Unread"
         return f"{self.type.name} to {self.user.email} ({read_status})"
+
+
+class NotificationPreference(models.Model):
+    """
+    User notification preferences across event categories and delivery channels (FR11, CP-801, CP-802).
+    """
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="notification_preferences",
+    )
+    preferences = models.JSONField(default=dict, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "notification_preferences"
+        verbose_name = "Notification Preference"
+        verbose_name_plural = "Notification Preferences"
+
+    def __str__(self) -> str:
+        return f"Notification preferences for {self.user.email}"
