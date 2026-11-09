@@ -73,3 +73,43 @@ def get_lender_profile(user_id: int) -> User | None:
     )
 
     return lender
+
+
+def search_admin_users(
+    *,
+    q: str | None = None,
+    account_status: str | None = None,
+    affiliation: str | None = None,
+    lender_status: str | None = None,
+) -> QuerySet[User]:
+    """
+    Search and filter users for administrative and moderation views (CP-1101, CP-1109).
+
+    Supports filtering by:
+    - `q`: keyword search matching email, full_name, contact_number, or identity document ID number
+    - `account_status`: 'active', 'suspended', 'pending_review', 'banned', 'deactivated'
+    - `affiliation`: 'Student', 'Faculty', 'Staff'
+    - `lender_status`: 'none', 'active', 'revoked'
+    """
+    qs = User.objects.all().select_related("municipality", "province")
+
+    if q:
+        cleaned_q = q.strip()
+        if cleaned_q:
+            qs = qs.filter(
+                Q(email__icontains=cleaned_q)
+                | Q(full_name__icontains=cleaned_q)
+                | Q(contact_number__icontains=cleaned_q)
+                | Q(identity_documents__id_number__icontains=cleaned_q)
+            ).distinct()
+
+    if account_status and account_status != "all":
+        qs = qs.filter(account_status=account_status)
+
+    if affiliation and affiliation != "all":
+        qs = qs.filter(affiliation=affiliation)
+
+    if lender_status and lender_status != "all":
+        qs = qs.filter(lender_status=lender_status)
+
+    return qs.order_by("-created_at")

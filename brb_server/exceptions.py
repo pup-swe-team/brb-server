@@ -23,18 +23,26 @@ def api_exception_handler(exc, context):
                     first_key = next(iter(codes), None)
                     if first_key and codes[first_key]:
                         val = codes[first_key]
-                        response.data["code"] = val[0] if isinstance(val, list) else str(val)
+                        response.data["code"] = (
+                            val[0] if isinstance(val, list) else str(val)
+                        )
                 elif hasattr(exc, "default_code") and exc.default_code:
                     response.data["code"] = exc.default_code
 
             # Ensure structured top-level detail string is present for clients
             if "detail" not in response.data:
-                if "non_field_errors" in response.data and response.data["non_field_errors"]:
+                if response.data.get("non_field_errors"):
                     nfe = response.data["non_field_errors"]
-                    response.data["detail"] = nfe[0] if isinstance(nfe, list) else str(nfe)
+                    response.data["detail"] = (
+                        nfe[0] if isinstance(nfe, list) else str(nfe)
+                    )
                 else:
                     first_val = next(iter(response.data.values()), None)
-                    if first_val and isinstance(first_val, (list, tuple)) and len(first_val) > 0:
+                    if (
+                        first_val
+                        and isinstance(first_val, (list, tuple))
+                        and len(first_val) > 0
+                    ):
                         response.data["detail"] = str(first_val[0])
                     elif isinstance(first_val, str):
                         response.data["detail"] = first_val

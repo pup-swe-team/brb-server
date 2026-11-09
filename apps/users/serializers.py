@@ -1105,3 +1105,55 @@ class LenderProfileSerializer(serializers.ModelSerializer):
             "date_joined",
         )
         read_only_fields = fields
+
+
+class AdminUserActionSerializer(serializers.Serializer):
+    """Payload for administrative user status actions (suspend, ban, reinstate)."""
+
+    reason = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class AdminUserListSerializer(serializers.ModelSerializer):
+    """Detailed user serializer for admin moderation endpoints (CP-1101)."""
+
+    photo_url = serializers.SerializerMethodField()
+    has_verified_identity = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = (
+            "id",
+            "email",
+            "full_name",
+            "contact_number",
+            "affiliation",
+            "account_status",
+            "lender_status",
+            "lender_reapplication_hold",
+            "is_staff",
+            "is_superuser",
+            "is_active",
+            "email_verified_at",
+            "created_at",
+            "date_joined",
+            "photo_url",
+            "bio",
+            "has_verified_identity",
+        )
+        read_only_fields = fields
+
+    def get_photo_url(self, obj: User) -> str | None:
+        request = self.context.get("request")
+        photo = getattr(obj, "photo", None)
+        if not photo:
+            return None
+        try:
+            url = photo.url
+        except (AttributeError, ValueError, OSError):
+            return None
+        if request is not None:
+            return request.build_absolute_uri(url)
+        return url
+
+    def get_has_verified_identity(self, obj: User) -> bool:
+        return obj.has_verified_identity()

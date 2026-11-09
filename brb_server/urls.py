@@ -14,7 +14,14 @@ from apps.core.views import HealthView
 from apps.listings.views import AdminRemoveListingView
 from apps.reviews.views import AdminRemoveReviewView
 from apps.users.dashboards import BorrowerDashboardView, LenderDashboardView
-from apps.users.views import AdminRevokeLenderView, DeactivateAccountView
+from apps.users.views import (
+    AdminBanUserView,
+    AdminReinstateUserView,
+    AdminRevokeLenderView,
+    AdminSuspendUserView,
+    AdminUserListView,
+    DeactivateAccountView,
+)
 
 urlpatterns = [
     # Render health check — keep at root so it answers before any DB/CDN work.
@@ -86,5 +93,45 @@ urlpatterns = [
         "api/v1/users/me/lender-dashboard/",
         LenderDashboardView.as_view(),
         name="api-users-me-lender-dashboard",
+    ),
+    path(
+        "api/v1/admin/users/",
+        AdminUserListView.as_view(),
+        name="api-admin-user-list",
+    ),
+    path(
+        "api/v1/admin/users/<int:pk>/suspend/",
+        AdminSuspendUserView.as_view(),
+        name="api-admin-user-suspend",
+    ),
+    path(
+        "api/v1/admin/users/<int:pk>/reinstate/",
+        AdminReinstateUserView.as_view(),
+        name="api-admin-user-reinstate",
+    ),
+    path(
+        "api/v1/admin/users/<int:pk>/ban/",
+        AdminBanUserView.as_view(),
+        name="api-admin-user-ban",
+    ),
+    path(
+        "api/v1/users/",
+        AdminUserListView.as_view(),
+        name="api-users-list",
+    ),
+    path(
+        "api/v1/users/<int:pk>/suspend/",
+        AdminSuspendUserView.as_view(),
+        name="api-users-suspend",
+    ),
+    path(
+        "api/v1/users/<int:pk>/reinstate/",
+        AdminReinstateUserView.as_view(),
+        name="api-users-reinstate",
+    ),
+    path(
+        "api/v1/users/<int:pk>/ban/",
+        AdminBanUserView.as_view(),
+        name="api-users-ban",
     ),
 ]

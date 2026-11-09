@@ -1,0 +1,216 @@
+{% extends "admin_portal/shell.html" %}
+{% load portal_extras %}
+{% block title %}Users &amp; Roles Moderation &middot; CoPUPAdmin{% endblock %}
+{% block content %}
+<nav class="crumbs" aria-label="Breadcrumb">
+  <span>Moderation</span> / <a href="{% url 'portal-users' %}">Users &amp; Roles</a>
+</nav>
+
+<div class="page-heading" style="display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 12px;">
+  <div>
+    <h1>Users &amp; Roles Moderation</h1>
+    <p style="margin: 4px 0 0 0; color: var(--muted); font-size: 13px;">
+      Manage account access, inspect PUP affiliations, and execute account suspensions or bans (CP-1101, CP-1109).
+    </p>
+  </div>
+</div>
+
+<!-- Stats row -->
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px;">
+  <div class="card" style="padding: 12px 16px;">
+    <div style="font-size: 12px; color: var(--muted); text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px;">Total Users</div>
+    <div style="font-size: 24px; font-weight: 700; color: var(--navy); margin-top: 4px;">{{ total_users }}</div>
+  </div>
+  <div class="card" style="padding: 12px 16px;">
+    <div style="font-size: 12px; color: var(--muted); text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px;">Active Accounts</div>
+    <div style="font-size: 24px; font-weight: 700; color: #15803d; margin-top: 4px;">{{ active_users_count }}</div>
+  </div>
+  <div class="card" style="padding: 12px 16px;">
+    <div style="font-size: 12px; color: var(--muted); text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px;">Suspended</div>
+    <div style="font-size: 24px; font-weight: 700; color: #b45309; margin-top: 4px;">{{ suspended_users_count }}</div>
+  </div>
+  <div class="card" style="padding: 12px 16px;">
+    <div style="font-size: 12px; color: var(--muted); text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px;">Banned</div>
+    <div style="font-size: 24px; font-weight: 700; color: var(--red); margin-top: 4px;">{{ banned_users_count }}</div>
+  </div>
+  <div class="card" style="padding: 12px 16px;">
+    <div style="font-size: 12px; color: var(--muted); text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px;">Active Lenders</div>
+    <div style="font-size: 24px; font-weight: 700; color: #7e22ce; margin-top: 4px;">{{ active_lenders_count }}</div>
+  </div>
+</div>
+
+<!-- Search & filter toolbar -->
+<form method="get" class="card" style="padding: 14px 18px; margin-bottom: 16px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;">
+  <div style="display: flex; gap: 10px; flex: 1; min-width: 280px; flex-wrap: wrap;">
+    <input type="text" name="q" value="{{ query }}" placeholder="Search name, email, contact, student ID..."
+           style="flex: 2; min-width: 180px; padding: 7px 12px; border: 1px solid var(--border); border-radius: var(--radius); font: inherit; font-size: 13px;">
+    
+    <select name="status" style="flex: 1; min-width: 130px; padding: 7px 12px; border: 1px solid var(--border); border-radius: var(--radius); font: inherit; font-size: 13px; background: var(--card);">
+      <option value="all" {% if filter_status == 'all' %}selected{% endif %}>All account states</option>
+      <option value="active" {% if filter_status == 'active' %}selected{% endif %}>Active</option>
+      <option value="suspended" {% if filter_status == 'suspended' %}selected{% endif %}>Suspended</option>
+      <option value="banned" {% if filter_status == 'banned' %}selected{% endif %}>Banned</option>
+      <option value="deactivated" {% if filter_status == 'deactivated' %}selected{% endif %}>Deactivated</option>
+      <option value="pending_review" {% if filter_status == 'pending_review' %}selected{% endif %}>Pending Review</option>
+    </select>
+
+    <select name="role" style="flex: 1; min-width: 120px; padding: 7px 12px; border: 1px solid var(--border); border-radius: var(--radius); font: inherit; font-size: 13px; background: var(--card);">
+      <option value="all" {% if filter_role == 'all' %}selected{% endif %}>All affiliations</option>
+      <option value="Student" {% if filter_role == 'Student' %}selected{% endif %}>Student</option>
+      <option value="Faculty" {% if filter_role == 'Faculty' %}selected{% endif %}>Faculty</option>
+      <option value="Staff" {% if filter_role == 'Staff' %}selected{% endif %}>Staff</option>
+    </select>
+
+    <select name="lender" style="flex: 1; min-width: 120px; padding: 7px 12px; border: 1px solid var(--border); border-radius: var(--radius); font: inherit; font-size: 13px; background: var(--card);">
+      <option value="all" {% if filter_lender == 'all' %}selected{% endif %}>All lender roles</option>
+      <option value="active" {% if filter_lender == 'active' %}selected{% endif %}>Active Lenders</option>
+      <option value="none" {% if filter_lender == 'none' %}selected{% endif %}>Non-Lenders</option>
+      <option value="revoked" {% if filter_lender == 'revoked' %}selected{% endif %}>Revoked Lenders</option>
+    </select>
+  </div>
+
+  <div style="display: flex; gap: 8px;">
+    <button type="submit" class="btn btn-primary" style="padding: 6px 16px; font-size: 13px;">Filter</button>
+    {% if query or filter_status != 'all' or filter_role != 'all' or filter_lender != 'all' %}
+      <a href="{% url 'portal-users' %}" class="btn btn-outline" style="padding: 6px 14px; font-size: 13px;">Clear</a>
+    {% endif %}
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>User</th>
+          <th>Affiliation</th>
+          <th>Account Status</th>
+          <th>Lender Role</th>
+          <th>Joined</th>
+          <th style="text-align: right;">Moderation Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in page %}
+        <tr>
+          <td data-label="User">
+            <div class="user-cell">
+              <span class="avatar avatar-sm">{{ u.full_name|initials }}</span>
+              <div>
+                <div class="user-name" style="display: flex; align-items: center; gap: 6px;">
+                  <span>{{ u.full_name|default:u.email }}</span>
+                  {% if u.is_staff %}
+                    <span style="font-size: 10px; background: #e0e7ff; color: #4338ca; padding: 1px 6px; border-radius: 4px; font-weight: 600;">STAFF</span>
+                  {% endif %}
+                  {% if u.account_status == 'pending_review' %}
+                    <span class="badge" style="background: #fef3c7; color: #92400e; font-size: 10px; font-weight: 700; border: 1px solid #fde68a;">🚩 FLAGGED</span>
+                  {% endif %}
+                </div>
+                <div style="font-size: 11px; color: var(--muted);">{{ u.email }}</div>
+                {% if u.contact_number %}
+                  <div style="font-size: 11px; color: var(--muted);">{{ u.contact_number }}</div>
+                {% endif %}
+              </div>
+            </div>
+          </td>
+          <td data-label="Affiliation">
+            <span class="badge" style="background: #f1f5f9; color: #334155;">{{ u.affiliation }}</span>
+          </td>
+          <td data-label="Account Status">
+            {% if u.account_status == 'active' %}
+              <span class="badge badge-approved">Active</span>
+            {% elif u.account_status == 'suspended' %}
+              <span class="badge badge-pending">Suspended</span>
+            {% elif u.account_status == 'banned' %}
+              <span class="badge badge-rejected">Banned</span>
+            {% elif u.account_status == 'deactivated' %}
+              <span class="badge" style="background: #e2e8f0; color: #64748b;">Deactivated</span>
+            {% elif u.account_status == 'pending_review' %}
+              <span class="badge" style="background: #fef3c7; color: #92400e; font-weight: 600; border: 1px solid #fde68a;">Flagged (Review)</span>
+            {% else %}
+              <span class="badge">{{ u.account_status|title }}</span>
+            {% endif %}
+          </td>
+          <td data-label="Lender Role">
+            {% if u.lender_status == 'active' %}
+              <span class="badge" style="background: #f3e8ff; color: #7e22ce; font-weight: 600;">Active Lender</span>
+            {% elif u.lender_status == 'revoked' %}
+              <span class="badge badge-rejected">Revoked</span>
+            {% else %}
+              <span style="color: var(--muted); font-size: 12px;">None</span>
+            {% endif %}
+          </td>
+          <td data-label="Joined">
+            <span style="font-size: 12px; color: var(--muted);">{{ u.created_at|date:"M. j, Y" }}</span>
+          </td>
+          <td data-label="Moderation Actions" style="text-align: right;">
+            {% if u.pk == request.user.pk %}
+              <span style="color: var(--muted); font-size: 11px; font-style: italic;">Current user</span>
+            {% elif u.is_superuser %}
+              <span style="color: var(--muted); font-size: 11px; font-style: italic;">Superuser</span>
+            {% else %}
+              <div style="display: inline-flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: wrap;">
+                {% if u.account_status == 'active' %}
+                  <!-- Suspend form -->
+                  <form method="post" action="{% url 'portal-user-suspend' u.id %}" onsubmit="return confirm('Suspend user “{{ u.full_name|default:u.email|escapejs }}”? They will immediately be logged out and unable to sign in.');" style="margin: 0;">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: #b45309; border-color: #fde68a;">Suspend</button>
+                  </form>
+                  <!-- Ban form -->
+                  <form method="post" action="{% url 'portal-user-ban' u.id %}" onsubmit="return confirm('Permanently BAN user “{{ u.full_name|default:u.email|escapejs }}”? This permanently blocks platform access.');" style="margin: 0;">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: var(--red); border-color: #f2c9cd;">Ban</button>
+                  </form>
+                {% elif u.account_status == 'suspended' or u.account_status == 'banned' %}
+                  <!-- Reinstate form -->
+                  <form method="post" action="{% url 'portal-user-reinstate' u.id %}" onsubmit="return confirm('Reinstate user “{{ u.full_name|default:u.email|escapejs }}”? Login access will be restored.');" style="margin: 0;">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: #15803d; border-color: #bbf7d0;">Reinstate</button>
+                  </form>
+                  {% if u.account_status == 'suspended' %}
+                    <form method="post" action="{% url 'portal-user-ban' u.id %}" onsubmit="return confirm('Permanently BAN user “{{ u.full_name|default:u.email|escapejs }}”?');" style="margin: 0;">
+                      {% csrf_token %}
+                      <button type="submit" class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: var(--red); border-color: #f2c9cd;">Ban</button>
+                    </form>
+                  {% endif %}
+                {% endif %}
+
+                <!-- Revoke Lender action if active lender -->
+                {% if u.lender_status == 'active' %}
+                  <form method="post" action="{% url 'portal-user-revoke-lender' u.id %}" onsubmit="return confirm('Revoke Lender role for “{{ u.full_name|default:u.email|escapejs }}”? All active listings will be deactivated.');" style="margin: 0;">
+                    {% csrf_token %}
+                    <input type="hidden" name="reason" value="policy_violation">
+                    <button type="submit" class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: #6b21a8; border-color: #e9d5ff;">Revoke Lender</button>
+                  </form>
+                {% endif %}
+              </div>
+            {% endif %}
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="6" class="table-empty">No users found matching your filter criteria.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if paginator.num_pages > 1 %}
+  <div class="pagination" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 18px; border-top: 1px solid var(--border);">
+    <div style="font-size: 12px; color: var(--muted);">
+      Showing {{ start_index }}&ndash;{{ end_index }} of {{ paginator.count }} users
+    </div>
+    <div style="display: flex; gap: 6px;">
+      {% if page.has_previous %}
+        <a href="?page={{ page.previous_page_number }}{% if query %}&q={{ query }}{% endif %}{% if filter_status != 'all' %}&status={{ filter_status }}{% endif %}{% if filter_role != 'all' %}&role={{ filter_role }}{% endif %}{% if filter_lender != 'all' %}&lender={{ filter_lender }}{% endif %}" class="btn btn-outline" style="padding: 4px 10px; font-size: 12px;">&laquo; Previous</a>
+      {% endif %}
+      <span style="padding: 4px 10px; font-size: 12px; color: var(--muted);">Page {{ page.number }} of {{ paginator.num_pages }}</span>
+      {% if page.has_next %}
+        <a href="?page={{ page.next_page_number }}{% if query %}&q={{ query }}{% endif %}{% if filter_status != 'all' %}&status={{ filter_status }}{% endif %}{% if filter_role != 'all' %}&role={{ filter_role }}{% endif %}{% if filter_lender != 'all' %}&lender={{ filter_lender }}{% endif %}" class="btn btn-outline" style="padding: 4px 10px; font-size: 12px;">Next &raquo;</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

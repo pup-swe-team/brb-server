@@ -4269,3 +4269,110 @@ class UserAdminActionTests(APITestCase):
         self.assertEqual(
             self.member.account_status, User.AccountStatusChoices.SUSPENDED
         )
+
+
+class AdminUserManagementAPITests(APITestCase):
+    """
+    Tests for Admin user search and moderation endpoints (CP-1101, TC-103, TC-104, TC-105).
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.admin = make_user(
+            "admin-api-mod@iskolarngbayan.pup.edu.ph",
+            is_staff=True,
+            full_name="Staff Admin",
+        )
+        self.superadmin = make_user(
+            "superadmin-api@pup.edu.ph",
+            is_staff=True,
+            full_name="Super Admin",
+        )
+        self.superadmin.is_superuser = True
+        self.superadmin.save()
+
+        self.regular_user = make_user(
+            "regular-student@iskolarngbayan.pup.edu.ph",
+            full_name="Regular Student",
+            contact_number="09181234567",
+        )
+        self.regular_user.account_status = User.AccountStatusChoices.ACTIVE
+        self.regular_user.save()
+
+    def test_non_admin_cannot_access_endpoints(self) -> None:
+        self.client.force_authenticate(user=self.regular_user)
+        res_list = self.client.get(reverse("api-admin-user-list"))
+        self.assertEqual(res_list.status_code, 403)
+
+        res_suspend = self.client.post(
+            reverse("api-admin-user-suspend", args=[self.regular_user.pk])
+        )
+        self.assertEqual(res_suspend.status_code, 403)
+
+    def test_admin_user_list_and_search(self) -> None:
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.get(reverse("api-admin-user-list"))
+        self.assertEqual(res.status_code, 200)
+        self.assertGreaterEqual(len(res.data.get("results", res.data)), 3)
+
+        res_filtered = self.client.get(reverse("api-admin-user-list") + "?q=Regular")
+        self.assertEqual(res_filtered.status_code, 200)
+        results = res_filtered.data.get("results", res_filtered.data)
+        self.assertTrue(any(u["id"] == self.regular_user.id for u in results))
+
+    def test_admin_suspend_user_api(self) -> None:
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.post(
+            reverse("api-admin-user-suspend", args=[self.regular_user.pk]),
+            {"reason": "Terms violation"},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data.get("account_status"), "suspended")
+
+        self.regular_user.refresh_from_db()
+        self.assertEqual(
+            self.regular_user.account_status, User.AccountStatusChoices.SUSPENDED
+        )
+
+    def test_admin_reinstate_user_api(self) -> None:
+        self.regular_user.account_status = User.AccountStatusChoices.SUSPENDED
+        self.regular_user.save()
+
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.post(
+            reverse("api-admin-user-reinstate", args=[self.regular_user.pk]),
+            {"reason": "Resolved"},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data.get("account_status"), "active")
+
+        self.regular_user.refresh_from_db()
+        self.assertEqual(
+            self.regular_user.account_status, User.AccountStatusChoices.ACTIVE
+        )
+
+    def test_admin_ban_user_api(self) -> None:
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.post(
+            reverse("api-admin-user-ban", args=[self.regular_user.pk]),
+            {"reason": "Permanent ban"},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data.get("account_status"), "banned")
+
+        self.regular_user.refresh_from_db()
+        self.assertEqual(
+            self.regular_user.account_status, User.AccountStatusChoices.BANNED
+        )
+
+    def test_admin_cannot_suspend_self_or_superuser(self) -> None:
+        self.client.force_authenticate(user=self.admin)
+        res_self = self.client.post(
+            reverse("api-admin-user-suspend", args=[self.admin.pk])
+        )
+        self.assertEqual(res_self.status_code, 400)
+
+        res_super = self.client.post(
+            reverse("api-admin-user-suspend", args=[self.superadmin.pk])
+        )
+        self.assertEqual(res_super.status_code, 400)

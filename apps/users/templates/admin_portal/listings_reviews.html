@@ -1,0 +1,200 @@
+{% extends "admin_portal/shell.html" %}
+{% load portal_extras %}
+{% block title %}Listings &amp; Reviews Moderation &middot; CoPUPAdmin{% endblock %}
+{% block content %}
+<nav class="crumbs" aria-label="Breadcrumb">
+  <span>Moderation</span> / <a href="{% url 'portal-listings-reviews' %}">Listings &amp; Reviews</a>
+</nav>
+
+<div class="page-heading">
+  <h1>Listings &amp; Reviews Moderation</h1>
+</div>
+
+<div class="tabs" role="tablist" aria-label="Moderation tabs">
+  <a class="tab {% if tab == 'listings' %}is-active{% endif %}"
+     role="tab" aria-selected="{% if tab == 'listings' %}true{% else %}false{% endif %}"
+     href="?tab=listings{% if query %}&q={{ query }}{% endif %}">
+    Listings ({{ total_listings }})
+  </a>
+  <a class="tab {% if tab == 'reviews' %}is-active{% endif %}"
+     role="tab" aria-selected="{% if tab == 'reviews' %}true{% else %}false{% endif %}"
+     href="?tab=reviews{% if query %}&q={{ query }}{% endif %}">
+    Reviews ({{ total_reviews }})
+  </a>
+</div>
+
+<!-- Search & filter toolbar -->
+<form method="get" class="card" style="padding: 14px 18px; margin-bottom: 16px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;">
+  <input type="hidden" name="tab" value="{{ tab }}">
+  <div style="display: flex; gap: 10px; flex: 1; min-width: 240px;">
+    <input type="text" name="q" value="{{ query }}" placeholder="Search by title, lender, reviewer, comment..."
+           style="flex: 1; padding: 7px 12px; border: 1px solid var(--border); border-radius: var(--radius); font: inherit; font-size: 13px;">
+    <select name="status" style="padding: 7px 12px; border: 1px solid var(--border); border-radius: var(--radius); font: inherit; font-size: 13px; background: var(--card);">
+      <option value="all" {% if filter_status == 'all' %}selected{% endif %}>All statuses</option>
+      <option value="active" {% if filter_status == 'active' %}selected{% endif %}>Active only</option>
+      <option value="deleted" {% if filter_status == 'deleted' %}selected{% endif %}>Removed only</option>
+      {% if tab == 'listings' %}
+        <option value="deactivated" {% if filter_status == 'deactivated' %}selected{% endif %}>Deactivated only</option>
+      {% endif %}
+    </select>
+  </div>
+  <div style="display: flex; gap: 8px;">
+    <button type="submit" class="btn btn-primary" style="padding: 6px 16px; font-size: 13px;">Filter</button>
+    {% if query or filter_status != 'all' %}
+      <a href="?tab={{ tab }}" class="btn btn-outline" style="padding: 6px 14px; font-size: 13px;">Clear</a>
+    {% endif %}
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-scroll">
+    {% if tab == 'listings' %}
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Listing</th>
+          <th>Lender</th>
+          <th>Rate</th>
+          <th>Created</th>
+          <th>Status</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for listing in page %}
+        <tr>
+          <td data-label="ID">#{{ listing.id }}</td>
+          <td data-label="Listing">
+            <div style="font-weight: 600; color: var(--navy);">{{ listing.title }}</div>
+            <div style="font-size: 12px; color: var(--muted);">{{ listing.category.name|default:"Uncategorized" }}</div>
+          </td>
+          <td data-label="Lender">
+            <div class="user-cell">
+              <span class="avatar avatar-sm">{{ listing.lender.full_name|initials }}</span>
+              <div>
+                <div class="user-name">{{ listing.lender.full_name }}</div>
+                <div style="font-size: 11px; color: var(--muted);">{{ listing.lender.email }}</div>
+              </div>
+            </div>
+          </td>
+          <td data-label="Rate">₱{{ listing.rate_per_day|default:"0.00" }}/day</td>
+          <td data-label="Created">{{ listing.created_at|date:"M. j, Y" }}</td>
+          <td data-label="Status">
+            {% if listing.status.name == 'active' %}
+              <span class="badge badge-approved">Active</span>
+            {% elif listing.status.name == 'deleted' %}
+              <span class="badge badge-rejected">Removed</span>
+            {% elif listing.status.name == 'deactivated' %}
+              <span class="badge badge-pending">Deactivated</span>
+            {% else %}
+              <span class="badge">{{ listing.status.name|title }}</span>
+            {% endif %}
+          </td>
+          <td data-label="Action">
+            {% if listing.status.name != 'deleted' %}
+              <form method="post" action="{% url 'portal-listing-remove' listing.id %}" onsubmit="return confirm('Remove listing “{{ listing.title|escapejs }}”? It will no longer appear in search.');" style="margin: 0;">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-outline" style="padding: 4px 10px; font-size: 12px; color: var(--red); border-color: #f2c9cd;">Remove</button>
+              </form>
+            {% else %}
+              <span style="color: var(--muted); font-size: 12px;">Removed</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="7" class="table-empty">No listings found matching your filter.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Order</th>
+          <th>Reviewer</th>
+          <th>Reviewee</th>
+          <th>Rating</th>
+          <th>Comment</th>
+          <th>Created</th>
+          <th>Status</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for review in page %}
+        <tr>
+          <td data-label="ID">#{{ review.id }}</td>
+          <td data-label="Order">Order #{{ review.order_id }}</td>
+          <td data-label="Reviewer">
+            <div class="user-cell">
+              <span class="avatar avatar-sm">{{ review.reviewer.full_name|initials }}</span>
+              <span class="user-name">{{ review.reviewer.full_name }}</span>
+            </div>
+          </td>
+          <td data-label="Reviewee">
+            <div class="user-cell">
+              <span class="avatar avatar-sm">{{ review.reviewee.full_name|initials }}</span>
+              <span class="user-name">{{ review.reviewee.full_name }}</span>
+            </div>
+          </td>
+          <td data-label="Rating" style="color: #b45309; font-weight: 600;">★ {{ review.rating }}/5</td>
+          <td data-label="Comment" style="max-width: 260px; word-break: break-word;">{{ review.comment|default:"—" }}</td>
+          <td data-label="Created">{{ review.created_at|date:"M. j, Y" }}</td>
+          <td data-label="Status">
+            {% if review.deleted_at %}
+              <span class="badge badge-rejected">Removed</span>
+            {% else %}
+              <span class="badge badge-approved">Active</span>
+            {% endif %}
+          </td>
+          <td data-label="Action">
+            {% if not review.deleted_at %}
+              <form method="post" action="{% url 'portal-review-remove' review.id %}" onsubmit="return confirm('Remove Review #{{ review.id }}? It will be hidden from profiles and listings.');" style="margin: 0;">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-outline" style="padding: 4px 10px; font-size: 12px; color: var(--red); border-color: #f2c9cd;">Remove</button>
+              </form>
+            {% else %}
+              <span style="color: var(--muted); font-size: 12px;">Removed ({{ review.deleted_at|date:"M. j, Y" }})</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="9" class="table-empty">No reviews found matching your filter.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+
+  <div class="table-footer">
+    <span>
+      {% if page.object_list %}
+        Showing {{ start_index }} to {{ end_index }} of {{ paginator.count }} {{ tab }}
+      {% endif %}
+    </span>
+    <div class="pager">
+      {% if page.has_previous %}
+        <a class="pager-btn" href="?tab={{ tab }}&status={{ filter_status }}&q={{ query }}&page={{ page.previous_page_number }}" aria-label="Previous">
+          <svg><use href="#icon-chev-l"/></svg>
+        </a>
+      {% else %}
+        <span class="pager-btn is-disabled" aria-hidden="true"><svg><use href="#icon-chev-l"/></svg></span>
+      {% endif %}
+      <span class="pager-btn is-current">{{ page.number }}</span>
+      {% if page.has_next %}
+        <a class="pager-btn" href="?tab={{ tab }}&status={{ filter_status }}&q={{ query }}&page={{ page.next_page_number }}" aria-label="Next">
+          <svg><use href="#icon-chev-r"/></svg>
+        </a>
+      {% else %}
+        <span class="pager-btn is-disabled" aria-hidden="true"><svg><use href="#icon-chev-r"/></svg></span>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

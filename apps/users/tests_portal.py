@@ -1,3 +1,5 @@
+from apps.reviews.models import Review
+
 """
 Portal tests (BE-BUG-0006): server-rendered CoPUPAdmin verification workflow.
 
@@ -23,6 +25,7 @@ from apps.users.models import (
     IdentityDocument,
     IdentityDocumentStatus,
     IdentityDocumentType,
+    User,
 )
 
 from .tests import PNG_BYTES, make_user
@@ -632,11 +635,13 @@ class PortalSidebarTests(TestCase):
         self.assertContains(response, reverse("portal-verification-queue"))
         self.assertContains(response, reverse("portal-listing-categories"))
         self.assertContains(response, reverse("portal-pickup-locations"))
+        self.assertContains(response, reverse("portal-listings-reviews"))
+        self.assertContains(response, reverse("portal-users"))
 
     def test_locked_sections_carry_their_ticket(self) -> None:
         response = self.client.get(reverse("portal-dashboard"))
 
-        for ticket in ("CP-1109", "CP-1110", "CP-1111", "CP-1112", "CP-1113", "CP-903"):
+        for ticket in ("CP-1111", "CP-1112", "CP-1113", "CP-903"):
             self.assertContains(response, ticket)
 
     def test_locked_sections_are_not_links(self) -> None:
@@ -644,7 +649,6 @@ class PortalSidebarTests(TestCase):
 
         self.assertContains(response, "Users &amp; Roles")
         self.assertContains(response, "Reports &amp; Flags")
-        self.assertContains(response, "Listings &amp; Reviews")
         self.assertContains(response, "Unreturned Cases")
         self.assertContains(response, "Disputes")
         self.assertContains(response, "System Parameters")
@@ -680,3 +684,272 @@ class PortalSidebarTests(TestCase):
         response = self.client.get(reverse("portal-dashboard"))
 
         self.assertNotContains(response, 'class="nav-badge"')
+
+
+class AdminPortalListingsReviewsTests(TestCase):
+    """Automated tests for CP-1110 (Listings & Reviews moderation in Admin Portal)."""
+
+    def setUp(self) -> None:
+        self.admin = make_user(
+            "admin-moderation@iskolarngbayan.pup.edu.ph",
+            is_staff=True,
+            full_name="Staff Admin",
+        )
+        self.lender = make_user(
+            "lender-mod@iskolarngbayan.pup.edu.ph", full_name="Lender Mod"
+        )
+        self.borrower = make_user(
+            "borrower-mod@iskolarngbayan.pup.edu.ph", full_name="Borrower Mod"
+        )
+
+        self.category = ListingCategory.objects.create(
+            name="Books", description="Textbooks"
+        )
+        self.location = PickupLocation.objects.create(name="Main Campus Gate")
+        self.active_status, _ = ListingStatus.objects.get_or_create(name="active")
+        self.deleted_status, _ = ListingStatus.objects.get_or_create(name="deleted")
+
+        self.listing = Listing.objects.create(
+            lender=self.lender,
+            title="Linear Algebra 4th Ed",
+            description="Good condition book",
+            category=self.category,
+            pickup_location=self.location,
+            status=self.active_status,
+            rate_per_day=15.00,
+        )
+
+        from apps.orders.models import Order, OrderStatus
+
+        order_status, _ = OrderStatus.objects.get_or_create(name="completed")
+        from datetime import timedelta
+
+        self.order = Order.objects.create(
+            listing=self.listing,
+            borrower=self.borrower,
+            status=order_status,
+            start_date=timezone.localdate() - timedelta(days=5),
+            end_date=timezone.localdate() - timedelta(days=2),
+        )
+
+        self.review = Review.objects.create(
+            order=self.order,
+            reviewer=self.borrower,
+            rating=4,
+            comment="Great textbook, fast handover!",
+        )
+
+    def test_anonymous_redirected_to_login(self) -> None:
+        res = self.client.get(reverse("portal-listings-reviews"))
+        self.assertEqual(res.status_code, 302)
+        self.assertIn(reverse("portal-login"), res.url)
+
+    def test_listings_tab_loads_successfully(self) -> None:
+        self.client.force_login(self.admin)
+        res = self.client.get(reverse("portal-listings-reviews") + "?tab=listings")
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "Linear Algebra 4th Ed")
+        self.assertContains(res, "Lender Mod")
+        self.assertContains(res, "Active")
+        self.assertContains(res, "Remove")
+
+    def test_reviews_tab_loads_successfully(self) -> None:
+        self.client.force_login(self.admin)
+        res = self.client.get(reverse("portal-listings-reviews") + "?tab=reviews")
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "Great textbook, fast handover!")
+        self.assertContains(res, "Borrower Mod")
+        self.assertContains(res, "★ 4/5")
+        self.assertContains(res, "Remove")
+
+    def test_admin_removes_listing(self) -> None:
+        self.client.force_login(self.admin)
+        res = self.client.post(reverse("portal-listing-remove", args=[self.listing.pk]))
+        self.assertEqual(res.status_code, 302)
+        self.assertIn("tab=listings", res.url)
+
+        self.listing.refresh_from_db()
+        self.assertEqual(self.listing.status.name, "deleted")
+
+    def test_admin_removes_review(self) -> None:
+        self.client.force_login(self.admin)
+        res = self.client.post(reverse("portal-review-remove", args=[self.review.pk]))
+        self.assertEqual(res.status_code, 302)
+        self.assertIn("tab=reviews", res.url)
+
+        self.review.refresh_from_db()
+        self.assertIsNotNone(self.review.deleted_at)
+
+    def test_search_and_filtering(self) -> None:
+        self.client.force_login(self.admin)
+        # Search by query
+        res = self.client.get(
+            reverse("portal-listings-reviews") + "?tab=listings&q=Algebra"
+        )
+        self.assertContains(res, "Linear Algebra 4th Ed")
+
+        res_none = self.client.get(
+            reverse("portal-listings-reviews") + "?tab=listings&q=NonExistentItem"
+        )
+        self.assertContains(res_none, "No listings found")
+
+
+class AdminPortalUsersRolesTests(TestCase):
+    """
+    Tests for Users & Roles Moderation UI (/portal/users/) - CP-1109 / CP-1101 / CP-206.
+    """
+
+    def setUp(self) -> None:
+        self.admin = make_user(
+            "admin-users-roles@iskolarngbayan.pup.edu.ph",
+            is_staff=True,
+            full_name="Admin Moderator",
+        )
+        self.superuser = make_user(
+            "super-users-roles@pup.edu.ph",
+            is_staff=True,
+            full_name="Super Administrator",
+        )
+        self.superuser.is_superuser = True
+        self.superuser.save()
+        self.target_user = make_user(
+            "target-user@iskolarngbayan.pup.edu.ph",
+            full_name="Target Student",
+            contact_number="09171234567",
+        )
+        self.target_user.account_status = User.AccountStatusChoices.ACTIVE
+        self.target_user.lender_status = User.LenderStatusChoices.ACTIVE
+        self.target_user.save()
+
+    def test_anonymous_redirected_to_login(self) -> None:
+        res = self.client.get(reverse("portal-users"))
+        self.assertEqual(res.status_code, 302)
+        self.assertIn(reverse("portal-login"), res.url)
+
+    def test_users_page_loads_successfully(self) -> None:
+        self.client.force_login(self.admin)
+        res = self.client.get(reverse("portal-users"))
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "Users &amp; Roles Moderation")
+        self.assertContains(res, "Target Student")
+        self.assertContains(res, "target-user@iskolarngbayan.pup.edu.ph")
+        self.assertContains(res, "Active Lender")
+        self.assertContains(res, "Suspend")
+        self.assertContains(res, "Ban")
+        self.assertContains(res, "Revoke Lender")
+
+    def test_search_and_filters(self) -> None:
+        self.client.force_login(self.admin)
+        res = self.client.get(reverse("portal-users") + "?q=Target")
+        self.assertContains(res, "Target Student")
+
+        res_none = self.client.get(reverse("portal-users") + "?q=NonExistentUserXYZ")
+        self.assertContains(res_none, "No users found matching your filter criteria")
+
+        res_active = self.client.get(reverse("portal-users") + "?status=active")
+        self.assertContains(res_active, "Target Student")
+
+        res_suspended = self.client.get(reverse("portal-users") + "?status=suspended")
+        self.assertNotContains(res_suspended, "Target Student")
+
+    def test_admin_suspends_user(self) -> None:
+        self.client.force_login(self.admin)
+        res = self.client.post(
+            reverse("portal-user-suspend", args=[self.target_user.pk]),
+            {"reason": "Violating community standards"},
+        )
+        self.assertEqual(res.status_code, 302)
+        self.assertIn(reverse("portal-users"), res.url)
+
+        self.target_user.refresh_from_db()
+        self.assertEqual(
+            self.target_user.account_status, User.AccountStatusChoices.SUSPENDED
+        )
+
+        # Login attempt fails
+        login_res = self.client.post(
+            reverse("auth-login"),
+            {"email": self.target_user.email, "password": "StrongPassword123!"},
+        )
+        self.assertEqual(login_res.status_code, 401)
+        self.assertEqual(login_res.data.get("code"), "suspended")
+
+    def test_admin_reinstates_user(self) -> None:
+        self.target_user.account_status = User.AccountStatusChoices.SUSPENDED
+        self.target_user.save()
+
+        self.client.force_login(self.admin)
+        res = self.client.post(
+            reverse("portal-user-reinstate", args=[self.target_user.pk]),
+            {"reason": "Appeal accepted"},
+        )
+        self.assertEqual(res.status_code, 302)
+
+        self.target_user.refresh_from_db()
+        self.assertEqual(
+            self.target_user.account_status, User.AccountStatusChoices.ACTIVE
+        )
+
+    def test_admin_bans_user(self) -> None:
+        self.client.force_login(self.admin)
+        res = self.client.post(
+            reverse("portal-user-ban", args=[self.target_user.pk]),
+            {"reason": "Fraudulent behavior"},
+        )
+        self.assertEqual(res.status_code, 302)
+
+        self.target_user.refresh_from_db()
+        self.assertEqual(
+            self.target_user.account_status, User.AccountStatusChoices.BANNED
+        )
+
+        # Login blocked
+        login_res = self.client.post(
+            reverse("auth-login"),
+            {"email": self.target_user.email, "password": "StrongPassword123!"},
+        )
+        self.assertEqual(login_res.status_code, 401)
+        self.assertEqual(login_res.data.get("code"), "banned")
+
+    def test_admin_cannot_suspend_or_ban_self(self) -> None:
+        self.client.force_login(self.admin)
+        res = self.client.post(reverse("portal-user-suspend", args=[self.admin.pk]))
+        self.assertEqual(res.status_code, 302)
+        self.admin.refresh_from_db()
+        self.assertEqual(self.admin.account_status, User.AccountStatusChoices.ACTIVE)
+
+        res_ban = self.client.post(reverse("portal-user-ban", args=[self.admin.pk]))
+        self.assertEqual(res_ban.status_code, 302)
+        self.admin.refresh_from_db()
+        self.assertEqual(self.admin.account_status, User.AccountStatusChoices.ACTIVE)
+
+    def test_admin_cannot_suspend_or_ban_superuser(self) -> None:
+        self.client.force_login(self.admin)
+        res = self.client.post(reverse("portal-user-suspend", args=[self.superuser.pk]))
+        self.assertEqual(res.status_code, 302)
+        self.superuser.refresh_from_db()
+        self.assertEqual(
+            self.superuser.account_status, User.AccountStatusChoices.ACTIVE
+        )
+
+    def test_admin_revokes_lender_role(self) -> None:
+        self.client.force_login(self.admin)
+        res = self.client.post(
+            reverse("portal-user-revoke-lender", args=[self.target_user.pk]),
+            {"reason": "repeated_late_returns"},
+        )
+        self.assertEqual(res.status_code, 302)
+        self.target_user.refresh_from_db()
+        self.assertEqual(
+            self.target_user.lender_status, User.LenderStatusChoices.REVOKED
+        )
+
+    def test_flagged_user_indicator_in_admin_ui(self) -> None:
+        self.target_user.account_status = User.AccountStatusChoices.PENDING_REVIEW
+        self.target_user.save()
+
+        self.client.force_login(self.admin)
+        res = self.client.get(reverse("portal-users"))
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "FLAGGED")
+        self.assertContains(res, "Flagged (Review)")

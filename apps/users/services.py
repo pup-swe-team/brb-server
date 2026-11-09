@@ -754,3 +754,138 @@ def review_identity_document(
         )
 
     return document
+
+
+def suspend_user(
+    *,
+    user: User,
+    actor: User,
+    reason: str = "",
+) -> User:
+    """
+    Suspend a user account (CP-1101, TC-103).
+
+    Rules:
+    - Actor must be staff (is_staff=True).
+    - Cannot suspend oneself or a superuser.
+    - Sets account_status to SUSPENDED.
+    - Invalidates all active refresh tokens (blacklist_outstanding_tokens).
+    - Dispatches notification to user.
+    """
+    if not actor.is_staff:
+        raise PermissionDenied("Administrator access required.")
+    if user.pk == actor.pk:
+        raise ValidationError(
+            {"detail": "Administrators cannot suspend their own account."}
+        )
+    if user.is_superuser:
+        raise ValidationError({"detail": "Superuser accounts cannot be suspended."})
+
+    with transaction.atomic():
+        user.account_status = User.AccountStatusChoices.SUSPENDED
+        user.save(update_fields=["account_status", "updated_at"])
+        blacklist_outstanding_tokens(user)
+
+        try:
+            from apps.notifications.constants import NOTIFICATION_TYPE_REPORT_UPDATES
+            from apps.notifications.services import create_notification
+
+            create_notification(
+                user=user,
+                event_name=NOTIFICATION_TYPE_REPORT_UPDATES,
+                reference_id=str(user.pk),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to dispatch user_suspended notification for user %s",
+                user.email,
+            )
+
+    return user
+
+
+def reinstate_user(
+    *,
+    user: User,
+    actor: User,
+    reason: str = "",
+) -> User:
+    """
+    Reinstate a suspended or banned user account (CP-1101, TC-104).
+
+    Rules:
+    - Actor must be staff (is_staff=True).
+    - Sets account_status to ACTIVE.
+    - Dispatches notification to user.
+    """
+    if not actor.is_staff:
+        raise PermissionDenied("Administrator access required.")
+
+    with transaction.atomic():
+        user.account_status = User.AccountStatusChoices.ACTIVE
+        user.save(update_fields=["account_status", "updated_at"])
+
+        try:
+            from apps.notifications.constants import NOTIFICATION_TYPE_REPORT_UPDATES
+            from apps.notifications.services import create_notification
+
+            create_notification(
+                user=user,
+                event_name=NOTIFICATION_TYPE_REPORT_UPDATES,
+                reference_id=str(user.pk),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to dispatch user_reinstated notification for user %s",
+                user.email,
+            )
+
+    return user
+
+
+def ban_user(
+    *,
+    user: User,
+    actor: User,
+    reason: str = "",
+) -> User:
+    """
+    Ban a user account permanently (CP-1101, TC-105).
+
+    Rules:
+    - Actor must be staff (is_staff=True).
+    - Cannot ban oneself or a superuser.
+    - Sets account_status to BANNED.
+    - Invalidates all active refresh tokens (blacklist_outstanding_tokens).
+    - Dispatches notification to user.
+    """
+    if not actor.is_staff:
+        raise PermissionDenied("Administrator access required.")
+    if user.pk == actor.pk:
+        raise ValidationError(
+            {"detail": "Administrators cannot ban their own account."}
+        )
+    if user.is_superuser:
+        raise ValidationError({"detail": "Superuser accounts cannot be banned."})
+
+    with transaction.atomic():
+        user.account_status = User.AccountStatusChoices.BANNED
+        user.save(update_fields=["account_status", "updated_at"])
+        blacklist_outstanding_tokens(user)
+
+        try:
+            from apps.notifications.constants import NOTIFICATION_TYPE_REPORT_UPDATES
+            from apps.notifications.services import create_notification
+
+            create_notification(
+                user=user,
+                event_name=NOTIFICATION_TYPE_REPORT_UPDATES,
+                reference_id=str(user.pk),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to dispatch user_banned notification for user %s",
+                user.email,
+            )
+
+    return user

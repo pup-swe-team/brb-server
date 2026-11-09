@@ -72,6 +72,8 @@ class BorrowerDashboardView(APIView):
                     if order.listing and order.listing.rate_per_day is not None
                     else 0.0
                 ),
+                "cancel_reason": getattr(order, "cancel_reason", "") or "",
+                "decline_reason": getattr(order, "decline_reason", "") or "",
             }
             if status_name in grouped:
                 grouped[status_name].append(data)

@@ -62,4 +62,46 @@ urlpatterns = [
         portal.listing_category_delete,
         name="portal-listing-category-delete",
     ),
+    # Listings & reviews moderation (CP-1110, mirror of CP-1102).
+    path(
+        "listings-reviews/",
+        portal.listings_reviews,
+        name="portal-listings-reviews",
+    ),
+    path(
+        "listings/<int:pk>/remove/",
+        portal.listing_remove,
+        name="portal-listing-remove",
+    ),
+    path(
+        "reviews/<int:pk>/remove/",
+        portal.review_remove,
+        name="portal-review-remove",
+    ),
+    # Users & roles moderation (CP-1109, mirror of CP-1101).
+    path(
+        "users/",
+        portal.users_roles,
+        name="portal-users",
+    ),
+    path(
+        "users/<int:pk>/suspend/",
+        portal.user_suspend,
+        name="portal-user-suspend",
+    ),
+    path(
+        "users/<int:pk>/reinstate/",
+        portal.user_reinstate,
+        name="portal-user-reinstate",
+    ),
+    path(
+        "users/<int:pk>/ban/",
+        portal.user_ban,
+        name="portal-user-ban",
+    ),
+    path(
+        "users/<int:pk>/revoke-lender/",
+        portal.user_revoke_lender,
+        name="portal-user-revoke-lender",
+    ),
 ]

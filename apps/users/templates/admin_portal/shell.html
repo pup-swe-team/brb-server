@@ -22,18 +22,16 @@
         <svg class="nav-icon"><use href="#icon-pickup"/></svg><span>Pickup Locations</span>
       </a>
       <p class="nav-group">Moderation</p>
-      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="CP-1101 lands in Sprint 4, then the portal mirror CP-1109">
+      <a class="nav-item {% if active_nav == 'users_roles' %}is-active{% endif %}" href="{% url 'portal-users' %}">
         <svg class="nav-icon"><use href="#icon-users"/></svg><span>Users &amp; Roles</span>
-        <span class="nav-tag">CP-1109</span>
       </a>
       <a class="nav-item is-disabled" href="#" aria-disabled="true" title="CP-901 and CP-902 land in Sprint 4, then the portal mirror CP-1111">
         <svg class="nav-icon"><use href="#icon-reports"/></svg><span>Reports &amp; Flags</span>
         {% if nav_reports_count %}<span class="nav-badge">{{ nav_reports_count }}</span>{% endif %}
         <span class="nav-tag">CP-1111</span>
       </a>
-      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="CP-1102 lands in Sprint 4, then the portal mirror CP-1110">
+      <a class="nav-item {% if active_nav == 'listings_reviews' %}is-active{% endif %}" href="{% url 'portal-listings-reviews' %}">
         <svg class="nav-icon"><use href="#icon-moderation"/></svg><span>Listings &amp; Reviews</span>
-        <span class="nav-tag">CP-1110</span>
       </a>
       <a class="nav-item is-disabled" href="#" aria-disabled="true" title="CP-506 lands in Sprint 5, then the portal mirror CP-1111">
         <svg class="nav-icon"><use href="#icon-unreturned"/></svg><span>Unreturned Cases</span>
