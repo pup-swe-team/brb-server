@@ -95,6 +95,19 @@ configure the external schedule; this repository does not provision it.
 > `listing-detail-legacy`) pointing at the same detail view. Use
 > `/api/v1/listings/<id>/` in clients; the bare alias is scheduled for cleanup.
 
+## Admin content removal — CP-1102
+
+| Method | Path | Auth |
+|---|---|---|
+| DELETE | `/api/v1/admin/listings/<id>/` | admin (`is_staff`) |
+| DELETE | `/api/v1/admin/reviews/<id>/` | admin (`is_staff`) |
+
+Both return `204` on removal or repeat removal, and `404` for an unknown ID.
+Listing removal sets its status to `deleted` even if it has ongoing orders;
+orders remain intact. Deleted listings are absent from search and other users'
+detail requests. Review removal stamps `deleted_at`, hiding the review from
+listing detail and rating totals while retaining linked reports.
+
 ## Borrow requests — `/api/v1/orders/` (CP-501)
 
 | Method | Path | Auth |

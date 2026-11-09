@@ -2,10 +2,12 @@ from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import generics, status
+from rest_framework.authentication import SessionAuthentication
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from apps.users.models import User
 from apps.users.permissions import IsIdentityVerified
@@ -22,7 +24,12 @@ from .serializers import (
     ListingUpdateSerializer,
     PickupLocationSerializer,
 )
-from .services import deactivate_listing, delete_listing, reactivate_listing
+from .services import (
+    admin_remove_listing,
+    deactivate_listing,
+    delete_listing,
+    reactivate_listing,
+)
 
 
 class ListingCollectionView(generics.ListCreateAPIView):
@@ -156,6 +163,15 @@ class ListingDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def perform_destroy(self, instance):
         delete_listing(listing=instance)
+
+
+class AdminRemoveListingView(APIView):
+    authentication_classes = (JWTAuthentication, SessionAuthentication)
+    permission_classes = (IsAdminUser,)
+
+    def delete(self, request, pk: int):
+        admin_remove_listing(listing_id=pk)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ListingDeactivateView(APIView):
