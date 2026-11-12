@@ -166,6 +166,14 @@ def request_borrow(
 ) -> Order:
     if not borrower.is_authenticated or not borrower.is_active:
         raise PermissionDenied("Authentication required.")
+    if borrower.account_status != User.AccountStatusChoices.ACTIVE:
+        raise PermissionDenied(
+            "Your account is not active and cannot submit borrow requests."
+        )
+    if getattr(borrower, "is_flag_confirmed", False):
+        raise PermissionDenied(
+            "Your account has a confirmed moderation flag and cannot submit new borrow requests."
+        )
     if not borrower.has_verified_identity():
         raise PermissionDenied("Identity verification required to borrow items.")
 

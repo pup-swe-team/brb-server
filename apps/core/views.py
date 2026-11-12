@@ -9,6 +9,7 @@ from apps.orders.services import (
     process_overdue_and_unreturned_orders,
     request_expiry_hours,
 )
+from apps.reports.services import auto_flag_repeatedly_reported_users
 from apps.users.services import (
     deactivate_unverified_users,
     email_verification_expiry_days,
@@ -115,6 +116,32 @@ class CheckOverdueOrdersView(CronSecretMixin):
                 "job": "check-overdue",
                 **summary,
                 "executed_at": now.isoformat(),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class AutoFlagRepeatedlyReportedUsersJobView(CronSecretMixin):
+    """
+    Scheduled sweep to automatically flag users with 3+ reports in rolling 30 days (CP-902).
+
+    POST /api/v1/jobs/auto-flag-users/ -- leaves account unrestricted until an Admin
+    confirms the flag.
+    """
+
+    authentication_classes = ()
+    permission_classes = ()
+
+    def post(self, request: Request) -> Response:
+        error_response = self.verify_cron_secret(request)
+        if error_response is not None:
+            return error_response
+
+        summary = auto_flag_repeatedly_reported_users()
+        return Response(
+            {
+                "job": "auto-flag-users",
+                **summary,
             },
             status=status.HTTP_200_OK,
         )

@@ -55,6 +55,10 @@ def create_listing(
         or lender.lender_status != User.LenderStatusChoices.ACTIVE
     ):
         raise ValidationError("Active Lender status is required to create a listing.")
+    if lender.is_flag_confirmed:
+        raise ValidationError(
+            "Your account has a confirmed moderation flag and cannot create new listings."
+        )
 
     listing = Listing.objects.create(
         lender=lender,

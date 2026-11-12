@@ -53,6 +53,14 @@ DEFAULT_AUTH_CODE_LOCKOUT_MINUTES = 15
 UNRETURNED_ESCALATION_DAYS = "unreturned_escalation_days"
 DEFAULT_UNRETURNED_ESCALATION_DAYS = 7
 
-# CP-605 -- number of days after order completion within which a review may be submitted.
+# CP-601 / CP-605 -- number of days after order completion within which a review may be submitted.
 REVIEW_WINDOW_DAYS = "review_window_days"
 DEFAULT_REVIEW_WINDOW_DAYS = 7
+
+# CP-902 -- number of reports in a rolling window that triggers automatic priority flagging.
+AUTO_FLAG_REPORT_THRESHOLD = "auto_flag_report_threshold"
+DEFAULT_AUTO_FLAG_REPORT_THRESHOLD = 3
+
+# CP-902 -- rolling window in days for counting repeated reports against a user.
+AUTO_FLAG_WINDOW_DAYS = "auto_flag_window_days"
+DEFAULT_AUTO_FLAG_WINDOW_DAYS = 30

@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    AutoFlagRepeatedlyReportedUsersJobView,
     CheckOverdueOrdersView,
     DeactivateUnverifiedAccountsView,
     ExpireBorrowRequestsView,
@@ -21,5 +22,10 @@ urlpatterns = [
         "check-overdue/",
         CheckOverdueOrdersView.as_view(),
         name="job-check-overdue",
+    ),
+    path(
+        "auto-flag-users/",
+        AutoFlagRepeatedlyReportedUsersJobView.as_view(),
+        name="job-auto-flag-users",
     ),
 ]

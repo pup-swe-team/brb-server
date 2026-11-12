@@ -18,10 +18,13 @@ class IsActiveLender(permissions.BasePermission):
 
     def has_permission(self, request, view) -> bool:
         user = getattr(request, "user", None)
+        if not (user and user.is_authenticated):
+            return False
+        if getattr(user, "is_flag_confirmed", False):
+            self.message = "Your account has a confirmed moderation flag and cannot create new listings."
+            return False
         return bool(
-            user
-            and user.is_authenticated
-            and user.account_status == User.AccountStatusChoices.ACTIVE
+            user.account_status == User.AccountStatusChoices.ACTIVE
             and user.lender_status == User.LenderStatusChoices.ACTIVE
         )
 

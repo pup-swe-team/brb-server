@@ -160,6 +160,17 @@ class User(AbstractUser):
         default=LenderStatusChoices.NONE,
     )
     lender_reapplication_hold = models.BooleanField(default=False)
+    is_flagged = models.BooleanField(default=False)
+    flagged_at = models.DateTimeField(null=True, blank=True)
+    is_flag_confirmed = models.BooleanField(default=False)
+    flag_confirmed_at = models.DateTimeField(null=True, blank=True)
+    flag_confirmed_by = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="confirmed_user_flags",
+    )
     street_address = models.CharField(max_length=255, blank=True, default="")
     municipality = models.ForeignKey(
         Municipality,
