@@ -44,7 +44,7 @@
   <div style="display: flex; gap: 10px; flex: 1; min-width: 280px; flex-wrap: wrap;">
     <input type="text" name="q" value="{{ query }}" placeholder="Search name, email, contact, student ID..."
            style="flex: 2; min-width: 180px; padding: 7px 12px; border: 1px solid var(--border); border-radius: var(--radius); font: inherit; font-size: 13px;">
-    
+
     <select name="status" style="flex: 1; min-width: 130px; padding: 7px 12px; border: 1px solid var(--border); border-radius: var(--radius); font: inherit; font-size: 13px; background: var(--card);">
       <option value="all" {% if filter_status == 'all' %}selected{% endif %}>All account states</option>
       <option value="active" {% if filter_status == 'active' %}selected{% endif %}>Active</option>
@@ -102,7 +102,13 @@
                   {% if u.is_staff %}
                     <span style="font-size: 10px; background: #e0e7ff; color: #4338ca; padding: 1px 6px; border-radius: 4px; font-weight: 600;">STAFF</span>
                   {% endif %}
-                  {% if u.account_status == 'pending_review' %}
+                  {% if u.is_flagged %}
+                    {% if u.is_flag_confirmed %}
+                      <span class="badge" style="background: #fee2e2; color: #991b1b; font-size: 10px; font-weight: 700; border: 1px solid #fca5a5;">🚩 FLAG CONFIRMED</span>
+                    {% else %}
+                      <span class="badge" style="background: #fef3c7; color: #92400e; font-size: 10px; font-weight: 700; border: 1px solid #fde68a;">🚩 AUTO-FLAGGED</span>
+                    {% endif %}
+                  {% elif u.account_status == 'pending_review' %}
                     <span class="badge" style="background: #fef3c7; color: #92400e; font-size: 10px; font-weight: 700; border: 1px solid #fde68a;">🚩 FLAGGED</span>
                   {% endif %}
                 </div>
@@ -181,6 +187,20 @@
                     {% csrf_token %}
                     <input type="hidden" name="reason" value="policy_violation">
                     <button type="submit" class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: #6b21a8; border-color: #e9d5ff;">Revoke Lender</button>
+                  </form>
+                {% endif %}
+
+                <!-- Moderation flag confirm / dismiss actions (CP-902) -->
+                {% if u.is_flagged %}
+                  {% if not u.is_flag_confirmed %}
+                    <form method="post" action="{% url 'portal-user-confirm-flag' u.id %}" onsubmit="return confirm('Confirm flag for “{{ u.full_name|default:u.email|escapejs }}”? This will restrict them from creating listings or borrow requests.');" style="margin: 0;">
+                      {% csrf_token %}
+                      <button type="submit" class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: #b91c1c; border-color: #fca5a5;">Confirm Flag</button>
+                    </form>
+                  {% endif %}
+                  <form method="post" action="{% url 'portal-user-dismiss-flag' u.id %}" onsubmit="return confirm('Dismiss flag for “{{ u.full_name|default:u.email|escapejs }}”?');" style="margin: 0;">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: #4b5563; border-color: #d1d5db;">Dismiss Flag</button>
                   </form>
                 {% endif %}
               </div>

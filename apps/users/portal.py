@@ -1057,3 +1057,42 @@ def user_revoke_lender(request, pk: int):
     except (ValidationError, PermissionDenied, Exception) as exc:  # noqa: BLE001
         messages.error(request, f"Could not revoke lender role: {exc}")
     return redirect(reverse("portal-users"))
+
+
+@require_POST
+@staff_login_required
+def user_confirm_flag(request, pk: int):
+    """Admin confirms an auto-flagged user's moderation flag from the portal (CP-902)."""
+    user = get_object_or_404(User, pk=pk)
+    reason = request.POST.get("reason", "").strip()
+
+    if user.pk == request.user.pk:
+        messages.error(request, "You cannot flag your own account.")
+    elif user.is_superuser:
+        messages.error(request, "Superuser accounts cannot be flagged.")
+    else:
+        from apps.users.services import confirm_user_flag
+
+        confirm_user_flag(user=user, actor=request.user, reason=reason)
+        messages.success(
+            request,
+            f"Moderation flag confirmed for “{user.full_name or user.email}”. Listing and borrow creation restricted.",
+        )
+    return redirect(reverse("portal-users"))
+
+
+@require_POST
+@staff_login_required
+def user_dismiss_flag(request, pk: int):
+    """Admin dismisses/clears a user's moderation flag from the portal (CP-902)."""
+    user = get_object_or_404(User, pk=pk)
+    reason = request.POST.get("reason", "").strip()
+
+    from apps.users.services import dismiss_user_flag
+
+    dismiss_user_flag(user=user, actor=request.user, reason=reason)
+    messages.success(
+        request,
+        f"Moderation flag dismissed for “{user.full_name or user.email}”.",
+    )
+    return redirect(reverse("portal-users"))

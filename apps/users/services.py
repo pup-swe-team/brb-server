@@ -823,7 +823,22 @@ def reinstate_user(
 
     with transaction.atomic():
         user.account_status = User.AccountStatusChoices.ACTIVE
-        user.save(update_fields=["account_status", "updated_at"])
+        user.is_flagged = False
+        user.flagged_at = None
+        user.is_flag_confirmed = False
+        user.flag_confirmed_at = None
+        user.flag_confirmed_by = None
+        user.save(
+            update_fields=[
+                "account_status",
+                "is_flagged",
+                "flagged_at",
+                "is_flag_confirmed",
+                "flag_confirmed_at",
+                "flag_confirmed_by",
+                "updated_at",
+            ]
+        )
 
         try:
             from apps.notifications.constants import NOTIFICATION_TYPE_REPORT_UPDATES
@@ -856,6 +871,7 @@ def ban_user(
     - Actor must be staff (is_staff=True).
     - Cannot ban oneself or a superuser.
     - Sets account_status to BANNED.
+    - Deactivates active listings and cancels/declines pending requested orders.
     - Invalidates all active refresh tokens (blacklist_outstanding_tokens).
     - Dispatches notification to user.
     """
@@ -873,6 +889,49 @@ def ban_user(
         user.save(update_fields=["account_status", "updated_at"])
         blacklist_outstanding_tokens(user)
 
+        from apps.listings.constants import (
+            LISTING_STATUS_ACTIVE,
+            LISTING_STATUS_DEACTIVATED,
+        )
+        from apps.listings.models import ListingStatus
+        from apps.listings.services import release_dates_for_order
+        from apps.orders.models import Order, OrderStatus
+
+        deactivated_status, _ = ListingStatus.objects.get_or_create(
+            name=LISTING_STATUS_DEACTIVATED
+        )
+        user.listings.filter(status__name=LISTING_STATUS_ACTIVE).update(
+            status=deactivated_status
+        )
+
+        declined_status, _ = OrderStatus.objects.get_or_create(name="declined")
+        for pending_lender_order in Order.objects.select_for_update().filter(
+            listing__lender=user,
+            status__name="requested",
+        ):
+            pending_lender_order.status = declined_status
+            pending_lender_order.decline_reason = (
+                reason.strip() or "Lender account permanently banned."
+            )
+            pending_lender_order.save(
+                update_fields=["status", "decline_reason", "updated_at"]
+            )
+            release_dates_for_order(pending_lender_order)
+
+        cancelled_status, _ = OrderStatus.objects.get_or_create(name="cancelled")
+        for pending_borrower_order in Order.objects.select_for_update().filter(
+            borrower=user,
+            status__name="requested",
+        ):
+            pending_borrower_order.status = cancelled_status
+            pending_borrower_order.cancel_reason = (
+                reason.strip() or "Borrower account permanently banned."
+            )
+            pending_borrower_order.save(
+                update_fields=["status", "cancel_reason", "updated_at"]
+            )
+            release_dates_for_order(pending_borrower_order)
+
         try:
             from apps.notifications.constants import NOTIFICATION_TYPE_REPORT_UPDATES
             from apps.notifications.services import create_notification
@@ -887,5 +946,93 @@ def ban_user(
                 "Failed to dispatch user_banned notification for user %s",
                 user.email,
             )
+
+    return user
+
+
+def confirm_user_flag(
+    *,
+    user: User,
+    actor: User,
+    reason: str = "",
+) -> User:
+    """
+    Admin confirms a user's moderation flag (CP-902).
+    Once confirmed, the user is restricted from creating new listings or borrow requests.
+    """
+    if not actor.is_staff:
+        raise PermissionDenied("Administrator access required.")
+    if user.pk == actor.pk:
+        raise ValidationError(
+            {"detail": "Administrators cannot flag their own account."}
+        )
+    if user.is_superuser:
+        raise ValidationError({"detail": "Superuser accounts cannot be flagged."})
+
+    now = timezone.now()
+    with transaction.atomic():
+        user.is_flagged = True
+        if user.flagged_at is None:
+            user.flagged_at = now
+        user.is_flag_confirmed = True
+        user.flag_confirmed_at = now
+        user.flag_confirmed_by = actor
+        user.save(
+            update_fields=[
+                "is_flagged",
+                "flagged_at",
+                "is_flag_confirmed",
+                "flag_confirmed_at",
+                "flag_confirmed_by",
+                "updated_at",
+            ]
+        )
+
+        try:
+            from apps.notifications.constants import NOTIFICATION_TYPE_REPORT_UPDATES
+            from apps.notifications.services import create_notification
+
+            create_notification(
+                user=user,
+                event_name=NOTIFICATION_TYPE_REPORT_UPDATES,
+                reference_id=str(user.pk),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to dispatch confirm_user_flag notification for user %s",
+                user.email,
+            )
+
+    return user
+
+
+def dismiss_user_flag(
+    *,
+    user: User,
+    actor: User,
+    reason: str = "",
+) -> User:
+    """
+    Admin dismisses/clears a user's moderation flag (CP-902), lifting any flag restrictions.
+    """
+    if not actor.is_staff:
+        raise PermissionDenied("Administrator access required.")
+
+    with transaction.atomic():
+        user.is_flagged = False
+        user.flagged_at = None
+        user.is_flag_confirmed = False
+        user.flag_confirmed_at = None
+        user.flag_confirmed_by = None
+        user.save(
+            update_fields=[
+                "is_flagged",
+                "flagged_at",
+                "is_flag_confirmed",
+                "flag_confirmed_at",
+                "flag_confirmed_by",
+                "updated_at",
+            ]
+        )
 
     return user

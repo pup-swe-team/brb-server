@@ -104,4 +104,14 @@ urlpatterns = [
         portal.user_revoke_lender,
         name="portal-user-revoke-lender",
     ),
+    path(
+        "users/<int:pk>/confirm-flag/",
+        portal.user_confirm_flag,
+        name="portal-user-confirm-flag",
+    ),
+    path(
+        "users/<int:pk>/dismiss-flag/",
+        portal.user_dismiss_flag,
+        name="portal-user-dismiss-flag",
+    ),
 ]

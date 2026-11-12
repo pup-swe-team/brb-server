@@ -50,8 +50,10 @@ from .services import (
     apply_new_password,
     ban_user,
     confirm_email_change,
+    confirm_user_flag,
     deactivate_account,
     deactivation_blockers,
+    dismiss_user_flag,
     password_reset_token_generator,
     register_user,
     reinstate_user,
@@ -807,11 +809,13 @@ class AdminUserListView(generics.ListAPIView):
         account_status = self.request.query_params.get("account_status")
         affiliation = self.request.query_params.get("affiliation")
         lender_status = self.request.query_params.get("lender_status")
+        flagged = self.request.query_params.get("flagged")
         return search_admin_users(
             q=q,
             account_status=account_status,
             affiliation=affiliation,
             lender_status=lender_status,
+            flagged=flagged,
         )
 
 
@@ -877,6 +881,54 @@ class AdminBanUserView(APIView):
         serializer = AdminUserActionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         updated_user = ban_user(
+            user=user,
+            actor=request.user,
+            reason=serializer.validated_data.get("reason", ""),
+        )
+        return Response(
+            AdminUserListSerializer(updated_user, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
+
+
+class AdminConfirmUserFlagView(APIView):
+    """
+    Confirm an auto-flagged user's moderation flag (CP-902).
+    POST /api/v1/admin/users/<int:pk>/confirm-flag/
+    """
+
+    authentication_classes = (JWTAuthentication, SessionAuthentication)
+    permission_classes = (permissions.IsAdminUser,)
+
+    def post(self, request: Request, pk: int) -> Response:
+        user = get_object_or_404(User, pk=pk)
+        serializer = AdminUserActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        updated_user = confirm_user_flag(
+            user=user,
+            actor=request.user,
+            reason=serializer.validated_data.get("reason", ""),
+        )
+        return Response(
+            AdminUserListSerializer(updated_user, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
+
+
+class AdminDismissUserFlagView(APIView):
+    """
+    Dismiss/clear a user's moderation flag (CP-902).
+    POST /api/v1/admin/users/<int:pk>/dismiss-flag/
+    """
+
+    authentication_classes = (JWTAuthentication, SessionAuthentication)
+    permission_classes = (permissions.IsAdminUser,)
+
+    def post(self, request: Request, pk: int) -> Response:
+        user = get_object_or_404(User, pk=pk)
+        serializer = AdminUserActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        updated_user = dismiss_user_flag(
             user=user,
             actor=request.user,
             reason=serializer.validated_data.get("reason", ""),

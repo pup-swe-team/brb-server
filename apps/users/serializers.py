@@ -640,7 +640,16 @@ class RefreshSerializer(serializers.Serializer):
         if user_id:
             user = User.objects.filter(pk=user_id).first()
 
-        if user is None or not user.is_active:
+        if (
+            user is None
+            or not user.is_active
+            or user.account_status
+            in (
+                User.AccountStatusChoices.SUSPENDED,
+                User.AccountStatusChoices.BANNED,
+                User.AccountStatusChoices.DEACTIVATED,
+            )
+        ):
             raise AuthenticationFailed(
                 self.error_messages["no_active_account"], code="no_active_account"
             )
@@ -1114,10 +1123,11 @@ class AdminUserActionSerializer(serializers.Serializer):
 
 
 class AdminUserListSerializer(serializers.ModelSerializer):
-    """Detailed user serializer for admin moderation endpoints (CP-1101)."""
+    """Detailed user serializer for admin moderation endpoints (CP-1101, CP-902)."""
 
     photo_url = serializers.SerializerMethodField()
     has_verified_identity = serializers.SerializerMethodField()
+    recent_report_count = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -1130,6 +1140,11 @@ class AdminUserListSerializer(serializers.ModelSerializer):
             "account_status",
             "lender_status",
             "lender_reapplication_hold",
+            "is_flagged",
+            "flagged_at",
+            "is_flag_confirmed",
+            "flag_confirmed_at",
+            "recent_report_count",
             "is_staff",
             "is_superuser",
             "is_active",
@@ -1157,3 +1172,8 @@ class AdminUserListSerializer(serializers.ModelSerializer):
 
     def get_has_verified_identity(self, obj: User) -> bool:
         return obj.has_verified_identity()
+
+    def get_recent_report_count(self, obj: User) -> int:
+        from apps.reports.services import get_user_rolling_report_count
+
+        return get_user_rolling_report_count(user_id=obj.pk)

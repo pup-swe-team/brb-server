@@ -4376,3 +4376,100 @@ class AdminUserManagementAPITests(APITestCase):
             reverse("api-admin-user-suspend", args=[self.superadmin.pk])
         )
         self.assertEqual(res_super.status_code, 400)
+
+    def test_suspended_or_banned_user_cannot_refresh_token(self) -> None:
+        """Suspended or banned users are rejected by the token refresh endpoint (CP-1101)."""
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        refresh_str = str(RefreshToken.for_user(self.regular_user))
+        self.regular_user.account_status = User.AccountStatusChoices.SUSPENDED
+        self.regular_user.save(update_fields=["account_status"])
+
+        res = self.client.post(
+            reverse("auth-token-refresh"),
+            {"refresh": refresh_str},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 401)
+
+    def test_admin_ban_deactivates_listings_and_cancels_pending_orders(self) -> None:
+        """Banning a user deactivates their active listings and cancels/declines pending requested orders."""
+        from datetime import date
+        from decimal import Decimal
+
+        from apps.listings.models import (
+            Listing,
+            ListingCategory,
+            ListingStatus,
+            PickupLocation,
+        )
+        from apps.orders.models import Order, OrderStatus
+
+        self.regular_user.lender_status = User.LenderStatusChoices.ACTIVE
+        self.regular_user.save(update_fields=["lender_status"])
+
+        cat, _ = ListingCategory.objects.get_or_create(name="Tools")
+        loc, _ = PickupLocation.objects.get_or_create(
+            name="Gym", defaults={"description": "Front"}
+        )
+        active_st, _ = ListingStatus.objects.get_or_create(name="active")
+        listing = Listing.objects.create(
+            lender=self.regular_user,
+            category=cat,
+            pickup_location=loc,
+            status=active_st,
+            title="Soldering Iron",
+            description="60W iron",
+            condition="good",
+            rate_per_day=Decimal("15.00"),
+            is_ownership_confirmed=True,
+        )
+
+        other_borrower = make_user(
+            "other-borrower-ban@iskolarngbayan.pup.edu.ph",
+            full_name="Other Borrower",
+        )
+        req_status, _ = OrderStatus.objects.get_or_create(name="requested")
+        pending_order = Order.objects.create(
+            listing=listing,
+            borrower=other_borrower,
+            start_date=date(2026, 11, 20),
+            end_date=date(2026, 11, 22),
+            status=req_status,
+        )
+
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.post(
+            reverse("api-admin-user-ban", args=[self.regular_user.pk]),
+            {"reason": "Fraudulent activity"},
+        )
+        self.assertEqual(res.status_code, 200)
+
+        listing.refresh_from_db()
+        self.assertEqual(listing.status.name, "deactivated")
+
+        pending_order.refresh_from_db()
+        self.assertEqual(pending_order.status.name, "declined")
+
+    def test_admin_search_flagged_filter_and_reinstate_clears_flags(self) -> None:
+        """Admin search filters by flagged state and reinstate clears moderation flags."""
+        self.regular_user.is_flagged = True
+        self.regular_user.is_flag_confirmed = True
+        self.regular_user.account_status = User.AccountStatusChoices.SUSPENDED
+        self.regular_user.save()
+
+        self.client.force_authenticate(user=self.admin)
+        flagged_res = self.client.get(
+            reverse("api-admin-user-list") + "?flagged=confirmed"
+        )
+        self.assertEqual(flagged_res.status_code, 200)
+        results = flagged_res.data.get("results", flagged_res.data)
+        self.assertTrue(any(u["id"] == self.regular_user.id for u in results))
+
+        reinstate_res = self.client.post(
+            reverse("api-admin-user-reinstate", args=[self.regular_user.pk]),
+            {"reason": "Cleared and reinstated"},
+        )
+        self.assertEqual(reinstate_res.status_code, 200)
+        self.assertFalse(reinstate_res.data["is_flagged"])
+        self.assertFalse(reinstate_res.data["is_flag_confirmed"])

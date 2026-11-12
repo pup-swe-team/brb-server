@@ -16,6 +16,8 @@ from apps.reviews.views import AdminRemoveReviewView
 from apps.users.dashboards import BorrowerDashboardView, LenderDashboardView
 from apps.users.views import (
     AdminBanUserView,
+    AdminConfirmUserFlagView,
+    AdminDismissUserFlagView,
     AdminReinstateUserView,
     AdminRevokeLenderView,
     AdminSuspendUserView,
@@ -45,6 +47,8 @@ urlpatterns = [
     path("api/v1/", include("apps.codes.urls")),
     path("api/v1/", include("apps.orders.urls")),
     path("api/v1/", include("apps.listings.urls")),
+    path("api/v1/", include("apps.reviews.urls")),
+    path("api/v1/", include("apps.reports.urls")),
     path("api/v1/notifications/", include("apps.notifications.urls")),
     # Uploads (listing photos, profile images). Render has no nginx and
     # DEBUG=False, so nothing else serves MEDIA_ROOT — see DECISIONS.md D-26.
@@ -115,6 +119,16 @@ urlpatterns = [
         name="api-admin-user-ban",
     ),
     path(
+        "api/v1/admin/users/<int:pk>/confirm-flag/",
+        AdminConfirmUserFlagView.as_view(),
+        name="api-admin-user-confirm-flag",
+    ),
+    path(
+        "api/v1/admin/users/<int:pk>/dismiss-flag/",
+        AdminDismissUserFlagView.as_view(),
+        name="api-admin-user-dismiss-flag",
+    ),
+    path(
         "api/v1/users/",
         AdminUserListView.as_view(),
         name="api-users-list",
@@ -133,5 +147,15 @@ urlpatterns = [
         "api/v1/users/<int:pk>/ban/",
         AdminBanUserView.as_view(),
         name="api-users-ban",
+    ),
+    path(
+        "api/v1/users/<int:pk>/confirm-flag/",
+        AdminConfirmUserFlagView.as_view(),
+        name="api-users-confirm-flag",
+    ),
+    path(
+        "api/v1/users/<int:pk>/dismiss-flag/",
+        AdminDismissUserFlagView.as_view(),
+        name="api-users-dismiss-flag",
     ),
 ]

@@ -1,5 +1,3 @@
-from apps.reviews.models import Review
-
 """
 Portal tests (BE-BUG-0006): server-rendered CoPUPAdmin verification workflow.
 
@@ -21,6 +19,7 @@ from apps.audit.models import AdminAccessLog
 from apps.listings.models import Listing, ListingCategory, ListingStatus, PickupLocation
 from apps.notifications.models import Notification
 from apps.reports.models import UserReport, UserReportCategory
+from apps.reviews.models import Review
 from apps.users.models import (
     IdentityDocument,
     IdentityDocumentStatus,
@@ -953,3 +952,30 @@ class AdminPortalUsersRolesTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertContains(res, "FLAGGED")
         self.assertContains(res, "Flagged (Review)")
+
+    def test_admin_confirms_and_dismisses_user_flag(self) -> None:
+        self.target_user.is_flagged = True
+        self.target_user.save()
+
+        self.client.force_login(self.admin)
+        page_res = self.client.get(reverse("portal-users"))
+        self.assertEqual(page_res.status_code, 200)
+        self.assertContains(page_res, "AUTO-FLAGGED")
+        self.assertContains(page_res, "Confirm Flag")
+
+        confirm_res = self.client.post(
+            reverse("portal-user-confirm-flag", args=[self.target_user.pk]),
+            {"reason": "Confirmed reports"},
+        )
+        self.assertEqual(confirm_res.status_code, 302)
+        self.target_user.refresh_from_db()
+        self.assertTrue(self.target_user.is_flag_confirmed)
+
+        dismiss_res = self.client.post(
+            reverse("portal-user-dismiss-flag", args=[self.target_user.pk]),
+            {"reason": "Dismissed flag"},
+        )
+        self.assertEqual(dismiss_res.status_code, 302)
+        self.target_user.refresh_from_db()
+        self.assertFalse(self.target_user.is_flagged)
+        self.assertFalse(self.target_user.is_flag_confirmed)
