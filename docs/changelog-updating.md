@@ -6,6 +6,27 @@ checkboxes, see [`BRB_BACKEND_SPRINTS.md`](BRB_BACKEND_SPRINTS.md).
 
 ---
 
+## 2026-11-12 — Mutual reviews, reporting queue, 30-day auto-flagging, and admin user moderation (CP-601, CP-901, CP-902, CP-1101)
+
+Branch: `feature/sprint-4_cp601-reviews-reports-moderation`.
+
+### Added
+
+- **CP-601 — Rate and Review Counterparty After Order Completion (`apps/reviews/`, `apps/orders/`):**
+  - Added `completed_at` timestamp on `Order` (`0007_order_completed_at.py`), automatically stamped when an order transitions to `completed` so subsequent row updates never drift the post-completion review window.
+  - `GET, POST /api/v1/orders/<order_id>/reviews/`, `POST /api/v1/reviews/`, `GET /api/v1/reviews/<id>/`, and `GET /api/v1/users/<user_id>/reviews/`: enforce one review per party per order (`unique_order_reviewer`), enforce the 7-day post-completion submission window (`SystemConfig` key `review_window_days`, default `7`), recalculate the reviewed user's average rating and review count immediately, dispatch a `new_review` notification, and link the report action (`can_report`, `report_url`).
+- **CP-901 — Report a User, Listing, Review, or Message (`apps/reports/`):**
+  - Seeded canonical report categories for `UserReportCategory`, `ListingReportCategory`, `ReviewReportCategory`, and `MessageReportCategory` and added optional `order` ForeignKey and uniqueness constraints in `0003_userreport_order_and_more.py`.
+  - Exposed `GET /api/v1/reports/categories/`, `POST /api/v1/reports/`, `/api/v1/reports/{users,listings,reviews,messages}/`, and direct action routes `/api/v1/{users,listings,reviews,messages}/<id>/report/` creating `open` moderation queue entries while enforcing one report per order/interaction and blocking self-reports and non-participant message reports.
+- **CP-902 — Automatic Flagging of Repeatedly Reported Users (`apps/reports/`, `apps/users/`, `apps/core/`):**
+  - Added two-stage moderation flag fields on `User` (`is_flagged`, `flagged_at`, `is_flag_confirmed`, `flag_confirmed_at`, `flag_confirmed_by`).
+  - `POST /api/v1/jobs/auto-flag-users/`: scheduled cron job (`CronSecretMixin`) sweeping rolling 30-day reports (`auto_flag_window_days=30`, `auto_flag_report_threshold=3`) and marking qualifying users `is_flagged=True, is_flag_confirmed=False` while leaving their accounts unrestricted until an Administrator confirms the flag.
+  - `POST /api/v1/admin/users/<id>/confirm-flag/` and `/dismiss-flag/` (plus portal actions): confirming a flag sets `is_flag_confirmed=True` and restricts new listing creation (`IsActiveLender`, `create_listing`) and new borrow request creation (`request_borrow`).
+- **CP-1101 — Search, Suspend, Reinstate, and Ban Users (`apps/users/`):**
+  - Enhanced `GET /api/v1/admin/users/` with `?flagged=true|false|confirmed|unconfirmed` filtering and `recent_report_count`, hardened `RefreshSerializer` and `request_borrow` against suspended/banned users, cleared flags on `reinstate_user`, and updated `ban_user` to deactivate active listings and cancel/decline pending `requested` orders.
+
+---
+
 ## 2026-10-29 — Handover & return authentication codes, overdue detection, and unreturned case administration (CP-504, CP-505, CP-506)
 
 Branch: `feature/sprint-3_cp504-505-506-codes-overdue-escalation`.

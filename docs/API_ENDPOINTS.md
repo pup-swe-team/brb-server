@@ -206,6 +206,44 @@ detail requests; the owner can still view them. Admin revocations place a
 reapplication hold, cleared through the Django Admin user action. Self-revoked
 users can reapply through `/api/v1/auth/apply-lender/` after identity verification.
 
+## Mutual Reviews (`apps/reviews/` — CP-601, CP-1102)
+
+| Method | Path | Auth | Request body / query | Success |
+|---|---|---|---|---|
+| GET | `/api/v1/orders/<order_id>/reviews/` | JWT | — | `200` list of reviews on the order |
+| POST | `/api/v1/orders/<order_id>/reviews/` | JWT | `{rating (1-5), comment?}` | `201` review + updated `reviewee_average_rating` & `reviewee_review_count` |
+| POST | `/api/v1/reviews/` | JWT | `{order_id, rating (1-5), comment?}` | `201` review + updated `reviewee_average_rating` & `reviewee_review_count` |
+| GET | `/api/v1/reviews/<id>/` | JWT | — | `200` review detail with `can_report` and `report_url` |
+| GET | `/api/v1/users/<user_id>/reviews/` | JWT | — | `200` `{user_id, average_rating, review_count, results}` |
+| DELETE | `/api/v1/admin/reviews/<id>/` | admin | — | `204` soft-deletes review |
+
+## Reporting & Auto-Flagging (`apps/reports/`, `apps/core/` — CP-901, CP-902)
+
+| Method | Path | Auth | Request body / query | Success |
+|---|---|---|---|---|
+| GET | `/api/v1/reports/categories/` | JWT | — | `200` `{user, listing, review, message}` category lists |
+| POST | `/api/v1/reports/` | JWT | `{target_type, target_id, category, description, order_id?}` | `201` open report entry |
+| POST | `/api/v1/reports/users/` | JWT | `{target_user_id, category, description, order_id?}` | `201` open `UserReport` |
+| POST | `/api/v1/reports/listings/` | JWT | `{target_listing_id, category, description}` | `201` open `ListingReport` |
+| POST | `/api/v1/reports/reviews/` | JWT | `{target_review_id, category, description}` | `201` open `ReviewReport` |
+| POST | `/api/v1/reports/messages/` | JWT | `{target_message_id, category, description}` | `201` open `MessageReport` |
+| POST | `/api/v1/users/<id>/report/` | JWT | `{category, description, order_id?}` | `201` open `UserReport` |
+| POST | `/api/v1/listings/<id>/report/` | JWT | `{category, description}` | `201` open `ListingReport` |
+| POST | `/api/v1/reviews/<id>/report/` | JWT | `{category, description}` | `201` open `ReviewReport` |
+| POST | `/api/v1/messages/<id>/report/` | JWT | `{category, description}` | `201` open `MessageReport` |
+| POST | `/api/v1/jobs/auto-flag-users/` | cron secret | — | `200` `{flagged_count, flagged_user_ids, threshold, window_days, executed_at}` |
+
+## Admin User Moderation (`apps/users/` — CP-1101, CP-902)
+
+| Method | Path | Auth | Request body / query | Success |
+|---|---|---|---|---|
+| GET | `/api/v1/admin/users/` | admin | `?q=&account_status=&affiliation=&lender_status=&flagged=` | `200` user list with `is_flagged`, `is_flag_confirmed`, `recent_report_count` |
+| POST | `/api/v1/admin/users/<id>/suspend/` | admin | `{reason?}` | `200` suspends account & blacklists refresh tokens |
+| POST | `/api/v1/admin/users/<id>/reinstate/` | admin | `{reason?}` | `200` reinstates account & clears moderation flags |
+| POST | `/api/v1/admin/users/<id>/ban/` | admin | `{reason?}` | `200` bans account, deactivates listings, declines/cancels pending orders |
+| POST | `/api/v1/admin/users/<id>/confirm-flag/` | admin | `{reason?}` | `200` confirms flag & restricts new listing/borrow creation |
+| POST | `/api/v1/admin/users/<id>/dismiss-flag/` | admin | `{reason?}` | `200` clears flag & lifts restrictions |
+
 ## Admin portal (HTML, session login) — `/portal/`
 
 | Method | Path |
@@ -216,9 +254,9 @@ users can reapply through `/api/v1/auth/apply-lender/` after identity verificati
 | GET | `/portal/verification/` (queue) |
 | GET | `/portal/verification/<id>/` (review page) |
 | GET/POST | `/portal/verification/<id>/review/` (submit decision) |
-
-## Not implemented yet (planned domains)
-
-Chat, reviews (write), reports, notifications have **no endpoints yet** —
-their tables exist but are empty. Do not point a client at paths under these
-names until the owning tickets land.
+| GET | `/portal/users/` (users & roles moderation) |
+| POST | `/portal/users/<id>/suspend/` |
+| POST | `/portal/users/<id>/reinstate/` |
+| POST | `/portal/users/<id>/ban/` |
+| POST | `/portal/users/<id>/confirm-flag/` |
+| POST | `/portal/users/<id>/dismiss-flag/` |
