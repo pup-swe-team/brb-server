@@ -63,7 +63,9 @@ class BorrowRequestView(APIView):
             orders = queryset.filter(
                 Q(borrower=request.user) | Q(listing__lender=request.user)
             )
-        return Response(OrderDetailSerializer(orders, many=True).data)
+        return Response(
+            OrderDetailSerializer(orders, many=True, context={"request": request}).data
+        )
 
     def post(self, request):
         if not request.user.has_verified_identity():
@@ -118,7 +120,7 @@ class OrderDetailView(APIView):
         if request.user.pk not in (order.borrower_id, order.listing.lender_id):
             raise PermissionDenied("Only the borrower or lender can view this order.")
         order = sync_order_time_derived_status(order)
-        return Response(OrderDetailSerializer(order).data)
+        return Response(OrderDetailSerializer(order, context={"request": request}).data)
 
 
 class CancelOrderView(APIView):
@@ -130,7 +132,10 @@ class CancelOrderView(APIView):
         order = cancel_order(
             actor=request.user, order_id=pk, reason=serializer.validated_data["reason"]
         )
-        return Response(OrderDetailSerializer(order).data, status=status.HTTP_200_OK)
+        return Response(
+            OrderDetailSerializer(order, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
 
 
 class UnreturnedCaseListView(APIView):

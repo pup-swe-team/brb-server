@@ -67,6 +67,9 @@ class OrderDetailSerializer(BorrowRequestResultSerializer):
     remaining_lockout_seconds = serializers.SerializerMethodField()
     handover_code_expires_at = serializers.SerializerMethodField()
     return_code_expires_at = serializers.SerializerMethodField()
+    has_reviewed = serializers.SerializerMethodField()
+    can_review = serializers.SerializerMethodField()
+    review_deadline = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
@@ -90,6 +93,10 @@ class OrderDetailSerializer(BorrowRequestResultSerializer):
             "remaining_lockout_seconds",
             "handover_code_expires_at",
             "return_code_expires_at",
+            "has_reviewed",
+            "can_review",
+            "review_deadline",
+            "completed_at",
             "created_at",
             "updated_at",
         ]
@@ -165,6 +172,30 @@ class OrderDetailSerializer(BorrowRequestResultSerializer):
         if obj.listing and obj.listing.rate_per_day is not None:
             return float(obj.listing.rate_per_day)
         return 0.0
+
+    def get_has_reviewed(self, obj) -> bool:
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        from apps.reviews.models import Review
+
+        return Review.objects.filter(order_id=obj.pk, reviewer_id=user.pk).exists()
+
+    def get_can_review(self, obj) -> bool:
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        from apps.reviews.services import can_user_review_order
+
+        return can_user_review_order(order=obj, user=user)
+
+    def get_review_deadline(self, obj) -> str | None:
+        from apps.reviews.services import get_order_review_deadline
+
+        deadline = get_order_review_deadline(obj)
+        return deadline.isoformat() if deadline else None
 
 
 class UnreturnedCaseSummarySerializer(serializers.ModelSerializer):

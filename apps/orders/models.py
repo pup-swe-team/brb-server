@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 
 class OrderStatus(models.Model):
@@ -45,6 +46,7 @@ class Order(models.Model):
     )
     cancel_reason = models.TextField(blank=True, default="")
     decline_reason = models.TextField(blank=True, default="")
+    completed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -52,6 +54,20 @@ class Order(models.Model):
         db_table = "orders"
         verbose_name = "Order"
         verbose_name_plural = "Orders"
+
+    def save(self, *args, **kwargs) -> None:
+        if self.completed_at is None and self.status_id is not None:
+            try:
+                if self.status.name == "completed":
+                    self.completed_at = timezone.now()
+                    update_fields = kwargs.get("update_fields")
+                    if update_fields is not None:
+                        kwargs["update_fields"] = list(
+                            set(update_fields) | {"completed_at"}
+                        )
+            except OrderStatus.DoesNotExist:
+                pass
+        super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return f"Order #{self.id} - {self.listing.title} ({self.status.name})"
