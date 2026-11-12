@@ -109,6 +109,7 @@ class NotificationSerializer(serializers.ModelSerializer):
     title = serializers.SerializerMethodField()
     message = serializers.SerializerMethodField()
     reference_type = serializers.SerializerMethodField()
+    order_id = serializers.SerializerMethodField()
 
     class Meta:
         model = Notification
@@ -119,6 +120,7 @@ class NotificationSerializer(serializers.ModelSerializer):
             "message",
             "reference_id",
             "reference_type",
+            "order_id",
             "is_read",
             "created_at",
         ]
@@ -148,6 +150,18 @@ class NotificationSerializer(serializers.ModelSerializer):
     def get_reference_type(self, obj: Notification) -> str:
         meta = NOTIFICATION_METADATA.get(obj.type.name, {})
         return meta.get("reference_type", "order")
+
+    def get_order_id(self, obj: Notification) -> int | None:
+        meta = NOTIFICATION_METADATA.get(obj.type.name, {})
+        ref_type = meta.get("reference_type")
+        if (
+            ref_type == "order"
+            or obj.type.name.startswith("order_")
+            or "handover" in obj.type.name
+            or "return" in obj.type.name
+        ) and (obj.reference_id and str(obj.reference_id).isdigit()):
+            return int(obj.reference_id)
+        return None
 
 
 class NotificationChannelPreferenceSerializer(serializers.Serializer):

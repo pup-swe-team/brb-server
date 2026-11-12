@@ -1083,7 +1083,17 @@ class LenderProfileSerializer(serializers.ModelSerializer):
     average_rating = serializers.FloatField(read_only=True)
     review_count = serializers.IntegerField(read_only=True)
     active_listings = serializers.SerializerMethodField()
+    reviews = serializers.SerializerMethodField()
     date_joined = serializers.DateTimeField(read_only=True)
+
+    def get_reviews(self, obj: User) -> list[dict]:
+        from apps.reviews.selectors import get_user_received_reviews
+        from apps.reviews.serializers import ReviewResponseSerializer
+
+        reviews_qs = get_user_received_reviews(obj.pk)[:15]
+        return ReviewResponseSerializer(
+            reviews_qs, many=True, context=self.context
+        ).data
 
     def get_active_listings(self, obj: User) -> list[dict]:
         from apps.listings.serializers import ListingSearchResultSerializer
@@ -1111,6 +1121,7 @@ class LenderProfileSerializer(serializers.ModelSerializer):
             "average_rating",
             "review_count",
             "active_listings",
+            "reviews",
             "date_joined",
         )
         read_only_fields = fields

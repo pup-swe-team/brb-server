@@ -586,3 +586,51 @@ class AutoFlagRepeatedlyReportedUsersTests(TestCase):
             end_date=today + timedelta(days=11),
         )
         self.assertIsNotNone(restored_order.pk)
+
+    def test_submit_report_accepts_frontend_category_names_and_string_ids(self) -> None:
+        """CP-901: Friendly frontend categories (fraud, inappropriate, other, prohibited_item) and string target_id succeed."""
+        reporter = self.reporters[0]
+        self.client.force_authenticate(user=reporter)
+
+        # 1. user report with "fraud" and string target_id "u<pk>"
+        res_user = self.client.post(
+            "/api/v1/reports/",
+            {
+                "target_type": "user",
+                "target_id": f"u{self.target.pk}",
+                "category": "fraud",
+                "description": "Reported as fraud from frontend modal",
+            },
+            format="json",
+        )
+        self.assertEqual(res_user.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res_user.data["category"], "scam_fraud")
+
+        # 2. listing report with "prohibited_item"
+        res_listing = self.client.post(
+            "/api/v1/reports/",
+            {
+                "target_type": "listing",
+                "target_id": str(self.other_listing.pk),
+                "category": "prohibited_item",
+                "description": "Prohibited item reported",
+            },
+            format="json",
+        )
+        self.assertEqual(res_listing.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res_listing.data["category"], "prohibited")
+
+        # 3. report with "other" by another reporter
+        self.client.force_authenticate(user=self.reporters[1])
+        res_other = self.client.post(
+            "/api/v1/reports/",
+            {
+                "target_type": "listing",
+                "target_id": self.other_listing.pk,
+                "category": "other",
+                "description": "Other unspecified issue",
+            },
+            format="json",
+        )
+        self.assertEqual(res_other.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res_other.data["category"], "other")

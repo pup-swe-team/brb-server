@@ -4,6 +4,7 @@ from django.urls import path
 
 from .views import (
     OrderReviewListCreateView,
+    OrderUserReviewDetailView,
     ReviewCreateView,
     ReviewDetailView,
     UserReviewListView,
@@ -14,6 +15,11 @@ urlpatterns = [
         "orders/<int:order_id>/reviews/",
         OrderReviewListCreateView.as_view(),
         name="order-reviews",
+    ),
+    path(
+        "orders/<int:order_id>/review/",
+        OrderUserReviewDetailView.as_view(),
+        name="order-user-review",
     ),
     path(
         "reviews/",

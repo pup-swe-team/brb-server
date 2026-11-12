@@ -513,3 +513,25 @@ class NotificationWorkflowIntegrationTests(TestCase):
         # Sweep again does not duplicate
         notifs2 = process_upcoming_due_date_notifications()
         self.assertEqual(len(notifs2), 0)
+
+    def test_notification_serializer_exposes_order_id(self) -> None:
+        """CP-801: Notifications referencing orders expose order_id for frontend direct navigation."""
+        from apps.notifications.serializers import NotificationSerializer
+
+        active_status, _ = OrderStatus.objects.get_or_create(name=ORDER_STATUS_ACTIVE)
+        order = Order.objects.create(
+            listing=self.listing,
+            borrower=self.borrower,
+            status=active_status,
+            start_date=timezone.localdate() - timedelta(days=2),
+            end_date=timezone.localdate() + timedelta(days=1),
+        )
+        notif = create_notification(
+            user=self.borrower,
+            event_name=NOTIFICATION_TYPE_UPCOMING_DUE_DATE,
+            reference_id=str(order.pk),
+        )
+        serialized = NotificationSerializer(notif).data
+        self.assertEqual(serialized["order_id"], order.pk)
+        self.assertEqual(serialized["reference_id"], str(order.pk))
+        self.assertEqual(serialized["reference_type"], "order")

@@ -308,3 +308,22 @@ class ReviewSubmissionTests(TestCase):
 
         detail_after = self.client.get(f"/api/v1/reviews/{review_id}/")
         self.assertFalse(detail_after.data["can_report"])
+
+    def test_singular_order_review_endpoint(self) -> None:
+        """GET /orders/<id>/review/ returns 404 before review and 200 with review object after review."""
+        self.client.force_authenticate(user=self.borrower)
+        get_before = self.client.get(f"/api/v1/orders/{self.order.pk}/review/")
+        self.assertEqual(get_before.status_code, status.HTTP_404_NOT_FOUND)
+
+        post_resp = self.client.post(
+            f"/api/v1/orders/{self.order.pk}/review/",
+            {"rating": 5, "comment": "Excellent experience"},
+            format="json",
+        )
+        self.assertEqual(post_resp.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(post_resp.data["rating"], 5)
+
+        get_after = self.client.get(f"/api/v1/orders/{self.order.pk}/review/")
+        self.assertEqual(get_after.status_code, status.HTTP_200_OK)
+        self.assertEqual(get_after.data["id"], post_resp.data["id"])
+        self.assertEqual(get_after.data["comment"], "Excellent experience")

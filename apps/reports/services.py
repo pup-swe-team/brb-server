@@ -93,6 +93,37 @@ def _resolve_category(
         obj, _ = category_model.objects.get_or_create(name=slug)
         return obj
 
+    if slug in ("other", "general", "misc", "miscellaneous"):
+        obj, _ = category_model.objects.get_or_create(name="other")
+        return obj
+
+    # Support friendly frontend category names across user, listing, review, message
+    if "fraud" in slug or "scam" in slug:
+        for candidate in ("scam_fraud", "misleading_description", "fraud"):
+            if candidate in default_names:
+                obj, _ = category_model.objects.get_or_create(name=candidate)
+                return obj
+
+    if "inappropriate" in slug or "offensive" in slug:
+        for candidate in (
+            "inappropriate_content",
+            "inappropriate_pfp",
+            "offensive_content",
+        ):
+            if candidate in default_names:
+                obj, _ = category_model.objects.get_or_create(name=candidate)
+                return obj
+
+    if "prohibited" in slug and "prohibited" in default_names:
+        obj, _ = category_model.objects.get_or_create(name="prohibited")
+        return obj
+
+    if "fake" in slug:
+        for candidate in ("fake_review", "fake_account", "counterfeit"):
+            if candidate in default_names:
+                obj, _ = category_model.objects.get_or_create(name=candidate)
+                return obj
+
     raise ValidationError(
         {
             "category": (

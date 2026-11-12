@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from django.http import Http404
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.authentication import SessionAuthentication
@@ -52,6 +53,53 @@ class OrderReviewListCreateView(APIView):
             many=True,
             context={"request": request},
         )
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def post(self, request: Request, order_id: int) -> Response:
+        serializer = ReviewCreateSerializer(
+            data=request.data,
+            context={"request": request, "order_id": order_id},
+        )
+        serializer.is_valid(raise_exception=True)
+        review = submit_review(
+            order_id=order_id,
+            reviewer=request.user,
+            rating=serializer.validated_data["rating"],
+            comment=serializer.validated_data.get("comment"),
+        )
+        output = ReviewResponseSerializer(review, context={"request": request})
+        return Response(output.data, status=status.HTTP_201_CREATED)
+
+
+class OrderUserReviewDetailView(APIView):
+    """
+    GET  /api/v1/orders/<int:order_id>/review/ — retrieve the current user's review for this order (CP-601).
+    POST /api/v1/orders/<int:order_id>/review/ — submit a review on a completed order (CP-601).
+    """
+
+    authentication_classes = (JWTAuthentication, SessionAuthentication)
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request: Request, order_id: int) -> Response:
+        order = get_object_or_404(
+            Order.objects.select_related("listing", "listing__lender", "borrower"),
+            pk=order_id,
+        )
+        if not request.user.is_staff and request.user.pk not in (
+            order.borrower_id,
+            order.listing.lender_id,
+        ):
+            raise PermissionDenied(
+                "Only participants of this order may view its reviews."
+            )
+        review = Review.objects.filter(
+            order_id=order.pk,
+            reviewer_id=request.user.pk,
+            deleted_at__isnull=True,
+        ).first()
+        if review is None:
+            raise Http404("You have not reviewed this order yet.")
+        serializer = ReviewResponseSerializer(review, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def post(self, request: Request, order_id: int) -> Response:

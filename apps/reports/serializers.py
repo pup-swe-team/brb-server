@@ -54,6 +54,18 @@ class UnifiedReportCreateSerializer(BaseTargetedReportSerializer):
     order_id = serializers.IntegerField(min_value=1, required=False, allow_null=True)
     order = serializers.IntegerField(min_value=1, required=False, allow_null=True)
 
+    def to_internal_value(self, data: Any) -> dict[str, Any]:
+        if isinstance(data, dict):
+            import re
+
+            data = data.copy()
+            tid = data.get("target_id")
+            if isinstance(tid, str) and not tid.isdigit():
+                cleaned = re.sub(r"\D", "", tid)
+                if cleaned:
+                    data["target_id"] = int(cleaned)
+        return super().to_internal_value(data)
+
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         attrs["resolved_category"] = self._extract_category(attrs)
         attrs["resolved_order_id"] = attrs.get("order_id") or attrs.get("order")

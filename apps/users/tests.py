@@ -3987,6 +3987,10 @@ class LenderProfileTests(APITestCase):
         self.assertEqual(response.data["average_rating"], 4.5)
         self.assertEqual(response.data["review_count"], 2)
 
+        # Reviews embedded for frontend LenderProfileScreen
+        self.assertIn("reviews", response.data)
+        self.assertEqual(len(response.data["reviews"]), 2)
+
         # Active listings: listing1 and listing2 only (deactivated excluded)
         active_listings = response.data["active_listings"]
         self.assertEqual(len(active_listings), 2)
