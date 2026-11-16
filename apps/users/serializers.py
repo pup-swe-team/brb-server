@@ -46,6 +46,7 @@ from .models import (
 )
 from .services import (
     email_change_token_generator,
+    email_verification_expiry_days,
     email_verification_token_generator,
     password_reset_token_generator,
 )
@@ -461,6 +462,18 @@ class EmailVerificationSerializer(serializers.Serializer):
                 {"detail": self.error_messages["invalid_link"]}
             )
 
+        cutoff = timezone.now() - timedelta(days=email_verification_expiry_days())
+        if user.email_verified_at is None and user.created_at <= cutoff:
+            user.delete()
+            raise serializers.ValidationError(
+                {
+                    "detail": (
+                        "This account was not verified within 7 days and has been "
+                        "deactivated. Please register again."
+                    )
+                }
+            )
+
         if not email_verification_token_generator().check_token(user, attrs["token"]):
             raise serializers.ValidationError(
                 {"detail": self.error_messages["invalid_link"]}
@@ -558,6 +571,13 @@ class LoginSerializer(serializers.Serializer):
         if user.account_status == User.AccountStatusChoices.BANNED:
             raise AuthenticationFailed(self.error_messages["banned"], code="banned")
         if not user.is_email_verified:
+            cutoff = timezone.now() - timedelta(days=email_verification_expiry_days())
+            if user.created_at <= cutoff:
+                user.delete()
+                raise AuthenticationFailed(
+                    "This account was not verified within 7 days and has been deactivated. Please register again.",
+                    code="unverified_expired",
+                )
             raise AuthenticationFailed(
                 self.error_messages["unverified_email"], code="unverified_email"
             )

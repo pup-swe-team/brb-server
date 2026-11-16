@@ -282,10 +282,11 @@ def respond_to_borrow_request(
 
 def expire_unanswered_requests() -> list[int]:
     cutoff = timezone.now() - timedelta(hours=request_expiry_hours())
+    today = timezone.localdate()
     candidate_ids = list(
         Order.objects.filter(
-            status__name="requested",
-            created_at__lte=cutoff,
+            Q(status__name="requested"),
+            Q(created_at__lte=cutoff) | Q(start_date__lt=today),
         ).values_list("id", flat=True)
     )
 
@@ -297,7 +298,9 @@ def expire_unanswered_requests() -> list[int]:
                 .select_related("status")
                 .get(pk=order_id)
             )
-            if order.status.name != "requested" or order.created_at > cutoff:
+            if order.status.name != "requested":
+                continue
+            if order.created_at > cutoff and order.start_date >= today:
                 continue
             _expire_order(order)
             expired_ids.append(order.pk)
@@ -401,7 +404,7 @@ def sync_order_time_derived_status(
 
     if order.status.name == "requested":
         deadline = order.created_at + timedelta(hours=request_expiry_hours())
-        if now >= deadline:
+        if now >= deadline or order.start_date < today:
             with transaction.atomic():
                 order = (
                     Order.objects.select_for_update()
@@ -412,7 +415,7 @@ def sync_order_time_derived_status(
                     deadline = order.created_at + timedelta(
                         hours=request_expiry_hours()
                     )
-                    if now >= deadline:
+                    if now >= deadline or order.start_date < today:
                         _expire_order(order)
             return order
 

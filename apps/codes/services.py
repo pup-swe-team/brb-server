@@ -11,6 +11,7 @@ from typing import Any
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from rest_framework import serializers
 from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
 
 from apps.core.constants import (
@@ -728,14 +729,18 @@ def get_order_code_info(
         "code_value": active_code.code_value
         if (active_code and is_generator)
         else None,
-        "expires_at": active_code.expires_at.isoformat().replace("+00:00", "Z")
-        if active_code
-        else None,
+        "expires_at": (
+            serializers.DateTimeField().to_representation(active_code.expires_at)
+            if active_code
+            else None
+        ),
         "remaining_seconds": remaining_seconds,
         "is_locked_out": locked_until is not None,
-        "locked_until": locked_until.isoformat().replace("+00:00", "Z")
-        if locked_until
-        else None,
+        "locked_until": (
+            serializers.DateTimeField().to_representation(locked_until)
+            if locked_until
+            else None
+        ),
         "remaining_lockout_seconds": remaining_lockout_seconds,
         "failed_attempts": failed_attempts,
     }

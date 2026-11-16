@@ -158,6 +158,23 @@ def verify_user_email(user: User) -> None:
     if user.email_verified_at is not None:
         return
 
+    cutoff = timezone.now() - timedelta(days=email_verification_expiry_days())
+    if user.created_at <= cutoff:
+        logger.info(
+            "CP-102: Purging expired unverified account on verify attempt: user_id=%d, email=%s",
+            user.pk,
+            user.email,
+        )
+        user.delete()
+        raise ValidationError(
+            {
+                "detail": (
+                    "This account was not verified within 7 days and has been "
+                    "deactivated. Please register again."
+                )
+            }
+        )
+
     with transaction.atomic():
         user.email_verified_at = timezone.now()
         if user.account_status == User.AccountStatusChoices.PENDING_REVIEW:
@@ -181,8 +198,20 @@ def resend_email_verification(email: str) -> None:
         return
     if user.email_verified_at is not None:
         return
+
+    cutoff = timezone.now() - timedelta(days=email_verification_expiry_days())
+    if user.created_at <= cutoff:
+        logger.info(
+            "CP-102: Purging expired unverified account on resend attempt: user_id=%d, email=%s",
+            user.pk,
+            user.email,
+        )
+        user.delete()
+        return
+
     if user.account_status != User.AccountStatusChoices.PENDING_REVIEW:
         return
+
     send_email_verification(user)
 
 
