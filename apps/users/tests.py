@@ -4355,6 +4355,27 @@ class AdminUserManagementAPITests(APITestCase):
             self.regular_user.account_status, User.AccountStatusChoices.ACTIVE
         )
 
+    def test_admin_reinstate_banned_user_rejected(self) -> None:
+        """Admin cannot reinstate a permanently banned user (BE-BUG-4004 / CP-1101)."""
+        self.regular_user.account_status = User.AccountStatusChoices.BANNED
+        self.regular_user.save()
+
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.post(
+            reverse("api-admin-user-reinstate", args=[self.regular_user.pk]),
+            {"reason": "Attempt reinstatement"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(
+            res.data.get("detail"),
+            "Permanently banned user accounts cannot be reinstated.",
+        )
+
+        self.regular_user.refresh_from_db()
+        self.assertEqual(
+            self.regular_user.account_status, User.AccountStatusChoices.BANNED
+        )
+
     def test_admin_ban_user_api(self) -> None:
         self.client.force_authenticate(user=self.admin)
         res = self.client.post(

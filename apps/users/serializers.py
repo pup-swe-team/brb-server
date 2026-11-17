@@ -83,6 +83,8 @@ class UserResponseSerializer(serializers.ModelSerializer):
 
     photo_url = serializers.SerializerMethodField()
     home_address = serializers.CharField(source="street_address", read_only=True)
+    average_rating = serializers.SerializerMethodField()
+    review_count = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -100,8 +102,20 @@ class UserResponseSerializer(serializers.ModelSerializer):
             "bio",
             "street_address",
             "home_address",
+            "average_rating",
+            "review_count",
         )
         read_only_fields = fields
+
+    def get_average_rating(self, obj: User) -> float | None:
+        from apps.reviews.selectors import get_user_rating_stats
+
+        return get_user_rating_stats(obj.pk)["average_rating"]
+
+    def get_review_count(self, obj: User) -> int:
+        from apps.reviews.selectors import get_user_rating_stats
+
+        return get_user_rating_stats(obj.pk)["review_count"]
 
     def get_photo_url(self, obj):
         request = self.context.get("request")
@@ -1079,6 +1093,8 @@ class LenderSearchResultSerializer(serializers.ModelSerializer):
     """
 
     active_listing_count = serializers.IntegerField(read_only=True)
+    average_rating = serializers.SerializerMethodField()
+    review_count = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -1089,8 +1105,24 @@ class LenderSearchResultSerializer(serializers.ModelSerializer):
             "photo",
             "bio",
             "active_listing_count",
+            "average_rating",
+            "review_count",
         )
         read_only_fields = fields
+
+    def get_average_rating(self, obj: User) -> float | None:
+        if hasattr(obj, "average_rating") and obj.average_rating is not None:
+            return round(float(obj.average_rating), 1)
+        from apps.reviews.selectors import get_user_rating_stats
+
+        return get_user_rating_stats(obj.pk)["average_rating"]
+
+    def get_review_count(self, obj: User) -> int:
+        if hasattr(obj, "review_count") and obj.review_count is not None:
+            return int(obj.review_count)
+        from apps.reviews.selectors import get_user_rating_stats
+
+        return get_user_rating_stats(obj.pk)["review_count"]
 
 
 class LenderProfileSerializer(serializers.ModelSerializer):

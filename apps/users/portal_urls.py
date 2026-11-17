@@ -105,6 +105,11 @@ urlpatterns = [
         name="portal-user-revoke-lender",
     ),
     path(
+        "users/<int:pk>/clear-lender-hold/",
+        portal.user_clear_lender_hold,
+        name="portal-user-clear-lender-hold",
+    ),
+    path(
         "users/<int:pk>/confirm-flag/",
         portal.user_confirm_flag,
         name="portal-user-confirm-flag",
@@ -113,5 +118,16 @@ urlpatterns = [
         "users/<int:pk>/dismiss-flag/",
         portal.user_dismiss_flag,
         name="portal-user-dismiss-flag",
+    ),
+    # Reports & flags moderation (CP-1111 / CP-1103 / TC-109).
+    path(
+        "reports/",
+        portal.reports_queue,
+        name="portal-reports-queue",
+    ),
+    path(
+        "reports/<str:report_type>/<int:pk>/resolve/",
+        portal.report_resolve,
+        name="portal-report-resolve",
     ),
 ]

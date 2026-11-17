@@ -24,6 +24,7 @@ from apps.users.models import (
     IdentityDocument,
     IdentityDocumentStatus,
     IdentityDocumentType,
+    LenderRevocation,
     User,
 )
 
@@ -636,6 +637,7 @@ class PortalSidebarTests(TestCase):
         self.assertContains(response, reverse("portal-pickup-locations"))
         self.assertContains(response, reverse("portal-listings-reviews"))
         self.assertContains(response, reverse("portal-users"))
+        self.assertContains(response, reverse("portal-reports-queue"))
 
     def test_locked_sections_carry_their_ticket(self) -> None:
         response = self.client.get(reverse("portal-dashboard"))
@@ -836,6 +838,10 @@ class AdminPortalUsersRolesTests(TestCase):
         self.assertContains(res, "Suspend")
         self.assertContains(res, "Ban")
         self.assertContains(res, "Revoke Lender")
+        self.assertContains(res, "Revoke Lender Status")
+        self.assertContains(res, "Repeated late returns")
+        self.assertContains(res, "data-open-revoke-lender")
+        self.assertContains(res, "revoke_lender_reason")
 
     def test_search_and_filters(self) -> None:
         self.client.force_login(self.admin)
@@ -910,6 +916,36 @@ class AdminPortalUsersRolesTests(TestCase):
         self.assertEqual(login_res.status_code, 401)
         self.assertEqual(login_res.data.get("code"), "banned")
 
+    def test_banned_user_cannot_be_reinstated(self) -> None:
+        """Permanently banned user accounts cannot be reinstated via portal (BE-BUG-4004 / CP-1101)."""
+        self.target_user.account_status = User.AccountStatusChoices.BANNED
+        self.target_user.save()
+
+        self.client.force_login(self.admin)
+        res = self.client.post(
+            reverse("portal-user-reinstate", args=[self.target_user.pk]),
+            {"reason": "Attempting to reinstate"},
+            follow=True,
+        )
+        self.assertEqual(res.status_code, 200)
+
+        self.target_user.refresh_from_db()
+        self.assertEqual(
+            self.target_user.account_status, User.AccountStatusChoices.BANNED
+        )
+        self.assertContains(
+            res, "Permanently banned user accounts cannot be reinstated."
+        )
+
+        # Confirm users portal table shows "Permanently Banned" badge and no Reinstate form/button
+        users_page_res = self.client.get(reverse("portal-users"))
+        self.assertEqual(users_page_res.status_code, 200)
+        self.assertContains(users_page_res, "Permanently Banned")
+        self.assertNotContains(
+            users_page_res,
+            reverse("portal-user-reinstate", args=[self.target_user.pk]),
+        )
+
     def test_admin_cannot_suspend_or_ban_self(self) -> None:
         self.client.force_login(self.admin)
         res = self.client.post(reverse("portal-user-suspend", args=[self.admin.pk]))
@@ -935,13 +971,17 @@ class AdminPortalUsersRolesTests(TestCase):
         self.client.force_login(self.admin)
         res = self.client.post(
             reverse("portal-user-revoke-lender", args=[self.target_user.pk]),
-            {"reason": "repeated_late_returns"},
+            {"reason": "repeated_late_returns", "detail": "Test detail reason"},
         )
         self.assertEqual(res.status_code, 302)
         self.target_user.refresh_from_db()
         self.assertEqual(
             self.target_user.lender_status, User.LenderStatusChoices.REVOKED
         )
+        revocation = LenderRevocation.objects.filter(user=self.target_user).first()
+        self.assertIsNotNone(revocation)
+        self.assertEqual(revocation.reason, "repeated_late_returns")
+        self.assertEqual(revocation.detail, "Test detail reason")
 
     def test_flagged_user_indicator_in_admin_ui(self) -> None:
         self.target_user.account_status = User.AccountStatusChoices.PENDING_REVIEW
@@ -979,3 +1019,80 @@ class AdminPortalUsersRolesTests(TestCase):
         self.target_user.refresh_from_db()
         self.assertFalse(self.target_user.is_flagged)
         self.assertFalse(self.target_user.is_flag_confirmed)
+
+    def test_admin_clears_lender_application_hold(self) -> None:
+        self.target_user.lender_status = User.LenderStatusChoices.REVOKED
+        self.target_user.lender_reapplication_hold = True
+        self.target_user.save()
+
+        self.client.force_login(self.admin)
+        page_res = self.client.get(reverse("portal-users"))
+        self.assertEqual(page_res.status_code, 200)
+        self.assertContains(page_res, "Hold Active")
+        self.assertContains(page_res, "Clear Hold")
+
+        clear_res = self.client.post(
+            reverse("portal-user-clear-lender-hold", args=[self.target_user.pk])
+        )
+        self.assertEqual(clear_res.status_code, 302)
+        self.target_user.refresh_from_db()
+        self.assertFalse(self.target_user.lender_reapplication_hold)
+
+
+class AdminPortalReportsQueueTests(TestCase):
+    """Staff review queue for reported users, listings, reviews, messages (CP-1111 / CP-1103 / TC-109)."""
+
+    def setUp(self) -> None:
+        self.admin = make_user(
+            "admin-reports@iskolarngbayan.pup.edu.ph",
+            is_staff=True,
+            full_name="Staff Admin",
+        )
+        self.member = make_user(
+            "reporter@iskolarngbayan.pup.edu.ph", full_name="Reporter User"
+        )
+        self.target_user = make_user(
+            "reported@iskolarngbayan.pup.edu.ph", full_name="Reported User"
+        )
+        self.category = UserReportCategory.objects.create(name="Harassment")
+        self.report = UserReport.objects.create(
+            reporter=self.member,
+            target_user=self.target_user,
+            category=self.category,
+            description="Inappropriate behavior in chat",
+            status="open",
+        )
+
+    def test_anonymous_redirected_to_login(self) -> None:
+        res = self.client.get(reverse("portal-reports-queue"))
+        self.assertEqual(res.status_code, 302)
+        self.assertIn(reverse("portal-login"), res.url)
+
+    def test_reports_queue_renders_open_reports(self) -> None:
+        self.client.force_login(self.admin)
+        res = self.client.get(reverse("portal-reports-queue"))
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "Reports &amp; Flags Moderation")
+        self.assertContains(res, "Reported User")
+        self.assertContains(res, "Inappropriate behavior in chat")
+        self.assertContains(res, "Harassment")
+        self.assertContains(res, "Resolve")
+
+    def test_filter_by_status(self) -> None:
+        self.client.force_login(self.admin)
+        res_open = self.client.get(reverse("portal-reports-queue") + "?status=open")
+        self.assertContains(res_open, "Inappropriate behavior in chat")
+
+        res_resolved = self.client.get(
+            reverse("portal-reports-queue") + "?status=resolved"
+        )
+        self.assertNotContains(res_resolved, "Inappropriate behavior in chat")
+
+    def test_resolve_report(self) -> None:
+        self.client.force_login(self.admin)
+        res = self.client.post(
+            reverse("portal-report-resolve", args=["user", self.report.pk])
+        )
+        self.assertEqual(res.status_code, 302)
+        self.report.refresh_from_db()
+        self.assertEqual(self.report.status, "resolved")

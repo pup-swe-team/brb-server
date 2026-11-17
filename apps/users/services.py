@@ -840,15 +840,22 @@ def reinstate_user(
     reason: str = "",
 ) -> User:
     """
-    Reinstate a suspended or banned user account (CP-1101, TC-104).
+    Reinstate a suspended user account (CP-1101, TC-104).
 
     Rules:
     - Actor must be staff (is_staff=True).
+    - Permanently banned accounts cannot be reinstated (BE-BUG-4004).
     - Sets account_status to ACTIVE.
     - Dispatches notification to user.
     """
     if not actor.is_staff:
         raise PermissionDenied("Administrator access required.")
+
+    if user.account_status == User.AccountStatusChoices.BANNED:
+        raise ValidationError(
+            {"detail": "Permanently banned user accounts cannot be reinstated."},
+            code="banned_account_immutable",
+        )
 
     with transaction.atomic():
         user.account_status = User.AccountStatusChoices.ACTIVE

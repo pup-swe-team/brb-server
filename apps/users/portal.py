@@ -97,13 +97,15 @@ def format_user_address(user: User) -> str:
 
 
 def day_or_time_label(timestamp) -> str:
-    """'h:mm AM/PM' for today, 'Jan. 30' otherwise -- mirrors the design."""
+    """Format timestamp using local timezone (Asia/Manila / UTC+8)."""
+    if not timestamp:
+        return ""
     local = timezone.localtime(timestamp)
+    hour = local.hour % 12 or 12
+    ampm = "AM" if local.hour < 12 else "PM"
     if local.date() == timezone.localdate():
-        hour = local.hour % 12 or 12
-        ampm = "AM" if local.hour < 12 else "PM"
-        return f"{hour}:{local.minute:02d} {ampm}"
-    return DateFormat(local).format("M. j, Y")
+        return f"Today, {hour}:{local.minute:02d} {ampm}"
+    return f"{DateFormat(local).format('M. j, Y')}, {hour}:{local.minute:02d} {ampm}"
 
 
 def staff_login_required(view):
@@ -201,6 +203,12 @@ def _recent_activity() -> list[dict[str, str]]:
     return [
         {
             "time": day_or_time_label(stamp),
+            "iso_time": timezone.localtime(stamp).isoformat() if stamp else "",
+            "full_time": (
+                timezone.localtime(stamp).strftime("%b. %d, %Y, %I:%M %p")
+                if stamp
+                else ""
+            ),
             "kind": kind,
             "title": title,
             "detail": detail,
@@ -300,6 +308,7 @@ def dashboard(request):
         "stats": stats,
         "orders_by_status_rows": order_rows,
         "activity": _recent_activity(),
+        "current_time": timezone.localtime(timezone.now()),
         "nav_verification_count": stats["pending_verifications"],
         "nav_reports_count": stats["open_reports"],
     }
@@ -970,6 +979,7 @@ def users_roles(request):
         "active_lenders_count": active_lenders_count,
         "nav_verification_count": _identity_document_tab_counts()["pending"],
         "nav_reports_count": _open_reports_count(),
+        "revocation_reasons": LenderRevocation.Reason.choices,
     }
     return render(request, "admin_portal/users_roles.html", context)
 
@@ -998,16 +1008,26 @@ def user_suspend(request, pk: int):
 @require_POST
 @staff_login_required
 def user_reinstate(request, pk: int):
-    """Admin reinstates a suspended or banned user from the portal (CP-1109 / CP-1101 / TC-104)."""
+    """Admin reinstates a suspended user from the portal (CP-1109 / CP-1101 / TC-104)."""
     user = get_object_or_404(User, pk=pk)
     reason = request.POST.get("reason", "").strip()
 
+    from rest_framework.exceptions import ValidationError
+
     from apps.users.services import reinstate_user
 
-    reinstate_user(user=user, actor=request.user, reason=reason)
-    messages.success(
-        request, f"User “{user.full_name or user.email}” has been reinstated."
-    )
+    try:
+        reinstate_user(user=user, actor=request.user, reason=reason)
+        messages.success(
+            request, f"User “{user.full_name or user.email}” has been reinstated."
+        )
+    except ValidationError as exc:
+        msg = (
+            exc.detail.get("detail", str(exc))
+            if isinstance(exc.detail, dict)
+            else str(exc.detail)
+        )
+        messages.error(request, msg)
     return redirect(reverse("portal-users"))
 
 
@@ -1078,7 +1098,8 @@ def user_confirm_flag(request, pk: int):
             request,
             f"Moderation flag confirmed for “{user.full_name or user.email}”. Listing and borrow creation restricted.",
         )
-    return redirect(reverse("portal-users"))
+    next_url = request.POST.get("next") or reverse("portal-users")
+    return redirect(next_url)
 
 
 @require_POST
@@ -1095,4 +1116,237 @@ def user_dismiss_flag(request, pk: int):
         request,
         f"Moderation flag dismissed for “{user.full_name or user.email}”.",
     )
+    next_url = request.POST.get("next") or reverse("portal-users")
+    return redirect(next_url)
+
+
+@require_POST
+@staff_login_required
+def user_clear_lender_hold(request, pk: int):
+    """Admin clears lender reapplication hold for a revoked user from the portal (CP-206 / CP-1109)."""
+    user = get_object_or_404(User, pk=pk)
+    from apps.users.services import clear_lender_reapplication_hold
+
+    try:
+        if clear_lender_reapplication_hold(user=user, actor=request.user):
+            messages.success(
+                request,
+                f"Lender application hold cleared for “{user.full_name or user.email}”. They can now reapply as a Lender.",
+            )
+        else:
+            messages.error(
+                request,
+                f"Could not clear hold for “{user.full_name or user.email}” (user not on reapplication hold).",
+            )
+    except Exception as exc:  # noqa: BLE001
+        messages.error(request, f"Could not clear lender hold: {exc}")
     return redirect(reverse("portal-users"))
+
+
+@staff_login_required
+def reports_queue(request):
+    """
+    Review queue for submitted reports (CP-1111 / CP-1103 / TC-109).
+    Lists open and resolved reports for Users, Listings, Reviews, and Messages.
+    """
+    tab = request.GET.get("type", "all").strip().lower()
+    status_filter = request.GET.get("status", "open").strip().lower()
+
+    items = []
+
+    # 1. User Reports
+    if tab in ("all", "user"):
+        qs = UserReport.objects.select_related(
+            "reporter", "target_user", "category"
+        ).order_by("-created_at")
+        if status_filter != "all":
+            qs = qs.filter(status=status_filter)
+        for r in qs[:100]:
+            items.append(
+                {
+                    "id": r.pk,
+                    "type": "user",
+                    "type_label": "User Report",
+                    "reporter": r.reporter,
+                    "target_display": r.target_user.full_name or r.target_user.email,
+                    "target_meta": f"Target User ID #{r.target_user.pk}",
+                    "category": r.category.name if r.category else "Uncategorized",
+                    "description": r.description,
+                    "status": r.status,
+                    "created_at": r.created_at,
+                }
+            )
+
+    # 2. Listing Reports
+    if tab in ("all", "listing"):
+        qs = ListingReport.objects.select_related(
+            "reporter", "target_listing", "target_listing__lender", "category"
+        ).order_by("-created_at")
+        if status_filter != "all":
+            qs = qs.filter(status=status_filter)
+        for r in qs[:100]:
+            items.append(
+                {
+                    "id": r.pk,
+                    "type": "listing",
+                    "type_label": "Listing Report",
+                    "reporter": r.reporter,
+                    "target_display": r.target_listing.title,
+                    "target_meta": f"Listing #{r.target_listing.pk} · Lender: {r.target_listing.lender.full_name or r.target_listing.lender.email}",
+                    "category": r.category.name if r.category else "Uncategorized",
+                    "description": r.description,
+                    "status": r.status,
+                    "created_at": r.created_at,
+                }
+            )
+
+    # 3. Review Reports
+    if tab in ("all", "review"):
+        qs = ReviewReport.objects.select_related(
+            "reporter", "target_review", "target_review__reviewer", "category"
+        ).order_by("-created_at")
+        if status_filter != "all":
+            qs = qs.filter(status=status_filter)
+        for r in qs[:100]:
+            items.append(
+                {
+                    "id": r.pk,
+                    "type": "review",
+                    "type_label": "Review Report",
+                    "reporter": r.reporter,
+                    "target_display": f"Review #{r.target_review.pk} ({r.target_review.rating}★)",
+                    "target_meta": f"Reviewer: {r.target_review.reviewer.full_name or r.target_review.reviewer.email}",
+                    "category": r.category.name if r.category else "Uncategorized",
+                    "description": r.description,
+                    "status": r.status,
+                    "created_at": r.created_at,
+                }
+            )
+
+    # 4. Message Reports
+    if tab in ("all", "message"):
+        qs = MessageReport.objects.select_related(
+            "reporter", "target_message", "target_message__sender", "category"
+        ).order_by("-created_at")
+        if status_filter != "all":
+            qs = qs.filter(status=status_filter)
+        for r in qs[:100]:
+            snippet = (
+                r.target_message.content[:40] + "..."
+                if len(r.target_message.content) > 40
+                else r.target_message.content
+            )
+            items.append(
+                {
+                    "id": r.pk,
+                    "type": "message",
+                    "type_label": "Message Report",
+                    "reporter": r.reporter,
+                    "target_display": f"“{snippet}”",
+                    "target_meta": f"Sender: {r.target_message.sender.full_name or r.target_message.sender.email}",
+                    "category": r.category.name if r.category else "Uncategorized",
+                    "description": r.description,
+                    "status": r.status,
+                    "created_at": r.created_at,
+                }
+            )
+
+    # 5. Flagged User Accounts (CP-902 / TC-103)
+    flagged_users_qs = User.objects.filter(
+        Q(is_flagged=True) | Q(account_status=User.AccountStatusChoices.PENDING_REVIEW)
+    ).order_by("-flagged_at", "-updated_at")
+    flagged_users_count = flagged_users_qs.count()
+
+    if tab in ("all", "flagged"):
+        for u in flagged_users_qs[:50]:
+            if status_filter == "open" and u.is_flag_confirmed:
+                continue
+            if status_filter == "resolved" and not u.is_flag_confirmed:
+                continue
+            items.append(
+                {
+                    "id": u.pk,
+                    "type": "flagged_user",
+                    "type_label": "Flagged User",
+                    "reporter": u.flag_confirmed_by,
+                    "reporter_name": (
+                        "Automated (30-day threshold)"
+                        if (u.is_flagged and not u.flag_confirmed_by)
+                        else (
+                            u.flag_confirmed_by.full_name
+                            if u.flag_confirmed_by
+                            else "System"
+                        )
+                    ),
+                    "target_display": u.full_name or u.email,
+                    "target_meta": f"User ID #{u.pk} · {u.get_account_status_display()}",
+                    "category": (
+                        "Auto-Flagged (CP-902)" if u.is_flagged else "Pending Review"
+                    ),
+                    "description": (
+                        f"Account flagged for administrative review on {u.flagged_at.strftime('%b. %d, %Y') if u.flagged_at else 'recently'}. Action required."
+                    ),
+                    "status": "open" if not u.is_flag_confirmed else "resolved",
+                    "created_at": u.flagged_at or u.updated_at,
+                    "is_flagged_user": True,
+                    "user_pk": u.pk,
+                    "is_flag_confirmed": u.is_flag_confirmed,
+                }
+            )
+
+    items.sort(key=lambda x: x["created_at"], reverse=True)
+
+    user_open_count = UserReport.objects.filter(status="open").count()
+    listing_open_count = ListingReport.objects.filter(status="open").count()
+    review_open_count = ReviewReport.objects.filter(status="open").count()
+    message_open_count = MessageReport.objects.filter(status="open").count()
+    total_open_count = (
+        user_open_count
+        + listing_open_count
+        + review_open_count
+        + message_open_count
+        + flagged_users_count
+    )
+
+    context = {
+        "page_title": "Reports & Flags",
+        "active_nav": "reports",
+        "tab": tab,
+        "status_filter": status_filter,
+        "items": items,
+        "flagged_users_count": flagged_users_count,
+        "user_open_count": user_open_count,
+        "listing_open_count": listing_open_count,
+        "review_open_count": review_open_count,
+        "message_open_count": message_open_count,
+        "total_open_count": total_open_count,
+        "nav_verification_count": _identity_document_tab_counts()["pending"],
+        "nav_reports_count": total_open_count,
+    }
+    return render(request, "admin_portal/reports.html", context)
+
+
+@require_POST
+@staff_login_required
+def report_resolve(request, report_type: str, pk: int):
+    """Admin marks a report as resolved (CP-1111 / CP-1103 / TC-109)."""
+    model_map = {
+        "user": UserReport,
+        "listing": ListingReport,
+        "review": ReviewReport,
+        "message": MessageReport,
+    }
+    model = model_map.get(report_type.lower())
+    if not model:
+        messages.error(request, "Invalid report type.")
+        return redirect(reverse("portal-reports-queue"))
+
+    report = get_object_or_404(model, pk=pk)
+    report.status = "resolved"
+    report.save(update_fields=["status"])
+    messages.success(
+        request, f"{report_type.title()} Report #{pk} has been marked as Resolved."
+    )
+    return redirect(
+        reverse("portal-reports-queue") + f"?type={report_type}&status=open"
+    )

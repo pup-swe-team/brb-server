@@ -16,6 +16,7 @@ from .services import (
     get_user_notification_preferences,
     mark_all_notifications_as_read,
     mark_notification_as_read,
+    process_upcoming_due_date_notifications,
     update_user_notification_preferences,
 )
 
@@ -35,6 +36,7 @@ class NotificationListView(APIView):
     pagination_class = NotificationPagination
 
     def get(self, request: Request) -> Response:
+        process_upcoming_due_date_notifications()
         queryset = (
             Notification.objects.filter(user=request.user)
             .select_related("type")

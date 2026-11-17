@@ -120,11 +120,54 @@ class OrderUserReviewDetailView(APIView):
 
 class ReviewCreateView(APIView):
     """
+    GET  /api/v1/reviews/ — list reviews received by target_user and/or role (FE-BUG-4009, CP-601).
     POST /api/v1/reviews/ — submit a review specifying order_id in the request body (CP-601).
     """
 
     authentication_classes = (JWTAuthentication, SessionAuthentication)
     permission_classes = (IsAuthenticated,)
+
+    def get(self, request: Request) -> Response:
+        from django.db.models import Q
+
+        target_user_param = request.query_params.get("target_user")
+        role_param = (request.query_params.get("role") or "").strip().lower()
+
+        user_id = None
+        if target_user_param:
+            try:
+                user_id = int(str(target_user_param).strip())
+            except (ValueError, TypeError):
+                user_id = None
+        if user_id is None:
+            user_id = request.user.pk
+
+        qs = Review.objects.filter(deleted_at__isnull=True).select_related(
+            "reviewer",
+            "order",
+            "order__listing",
+            "order__listing__lender",
+            "order__borrower",
+        )
+
+        if role_param == "borrower":
+            qs = qs.filter(order__borrower_id=user_id).exclude(reviewer_id=user_id)
+        elif role_param == "lender":
+            qs = qs.filter(order__listing__lender_id=user_id).exclude(
+                reviewer_id=user_id
+            )
+        else:
+            qs = qs.filter(
+                Q(order__listing__lender_id=user_id) | Q(order__borrower_id=user_id)
+            ).exclude(reviewer_id=user_id)
+
+        qs = qs.order_by("-created_at")
+        serializer = ReviewResponseSerializer(
+            qs,
+            many=True,
+            context={"request": request},
+        )
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
     def post(self, request: Request) -> Response:
         serializer = ReviewCreateSerializer(

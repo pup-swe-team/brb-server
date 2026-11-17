@@ -299,6 +299,7 @@ class ListingSearchQuerySerializer(serializers.Serializer):
         required=False, max_digits=10, decimal_places=2, min_value=0
     )
     free_only = serializers.BooleanField(required=False, default=False)
+    min_rating = serializers.FloatField(required=False, min_value=0, max_value=5)
     available_from = serializers.DateField(required=False)
     available_to = serializers.DateField(required=False)
     sort = serializers.ChoiceField(
@@ -324,10 +325,16 @@ class ListingSearchResultSerializer(serializers.ModelSerializer):
     active_orders = serializers.SerializerMethodField()
 
     def get_lender(self, obj: Listing) -> dict:
+        from apps.listings.selectors import get_lender_rating_stats
+
+        stats = get_lender_rating_stats(obj.lender)
         return {
             "id": obj.lender_id,
             "full_name": obj.lender.full_name,
             "photo": obj.lender.photo.url if obj.lender.photo else None,
+            "rating": stats["rating_average"],
+            "rating_average": stats["rating_average"],
+            "review_count": stats["total_reviews"],
         }
 
     def get_active_orders(self, obj: Listing) -> int:

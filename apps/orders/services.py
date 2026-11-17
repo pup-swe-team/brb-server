@@ -256,7 +256,8 @@ def respond_to_borrow_request(
         raise OrderStateConflict()
 
     deadline = order.created_at + timedelta(hours=request_expiry_hours())
-    if timezone.now() >= deadline:
+    today = timezone.localdate()
+    if timezone.now() >= deadline or order.start_date < today:
         _expire_order(order)
         return order, "expired"
 

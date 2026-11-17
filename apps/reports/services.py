@@ -98,11 +98,24 @@ def _resolve_category(
         return obj
 
     # Support friendly frontend category names across user, listing, review, message
+    if "spam" in slug:
+        if "spam" in default_names:
+            obj, _ = category_model.objects.get_or_create(name="spam")
+            return obj
+        for candidate in ("misleading_description", "irrelevant_review", "other"):
+            if candidate in default_names:
+                obj, _ = category_model.objects.get_or_create(name=candidate)
+                return obj
+        obj, _ = category_model.objects.get_or_create(name="spam")
+        return obj
+
     if "fraud" in slug or "scam" in slug:
         for candidate in ("scam_fraud", "misleading_description", "fraud"):
             if candidate in default_names:
                 obj, _ = category_model.objects.get_or_create(name=candidate)
                 return obj
+        obj, _ = category_model.objects.get_or_create(name="scam_fraud")
+        return obj
 
     if "inappropriate" in slug or "offensive" in slug:
         for candidate in (
@@ -216,7 +229,7 @@ def submit_user_report(
             )
 
     try:
-        return UserReport.objects.create(
+        report = UserReport.objects.create(
             reporter=reporter,
             target_user=target_user,
             category=category_obj,
@@ -224,6 +237,8 @@ def submit_user_report(
             description=cleaned_description,
             status=REPORT_STATUS_OPEN,
         )
+        check_and_apply_user_autoflag(user_id=target_user.pk)
+        return report
     except IntegrityError as exc:
         raise ValidationError(
             {
@@ -275,13 +290,15 @@ def submit_listing_report(
         )
 
     try:
-        return ListingReport.objects.create(
+        report = ListingReport.objects.create(
             reporter=reporter,
             target_listing=listing,
             category=category_obj,
             description=cleaned_description,
             status=REPORT_STATUS_OPEN,
         )
+        check_and_apply_user_autoflag(user_id=listing.lender_id)
+        return report
     except IntegrityError as exc:
         raise ValidationError(
             {"detail": "You have already submitted a report for this listing."},
@@ -329,13 +346,15 @@ def submit_review_report(
         )
 
     try:
-        return ReviewReport.objects.create(
+        report = ReviewReport.objects.create(
             reporter=reporter,
             target_review=review,
             category=category_obj,
             description=cleaned_description,
             status=REPORT_STATUS_OPEN,
         )
+        check_and_apply_user_autoflag(user_id=review.reviewer_id)
+        return report
     except IntegrityError as exc:
         raise ValidationError(
             {"detail": "You have already submitted a report for this review."},
@@ -386,13 +405,15 @@ def submit_message_report(
         )
 
     try:
-        return MessageReport.objects.create(
+        report = MessageReport.objects.create(
             reporter=reporter,
             target_message=message,
             category=category_obj,
             description=cleaned_description,
             status=REPORT_STATUS_OPEN,
         )
+        check_and_apply_user_autoflag(user_id=message.sender_id)
+        return report
     except IntegrityError as exc:
         raise ValidationError(
             {"detail": "You have already submitted a report for this message."},
@@ -496,6 +517,35 @@ def get_user_rolling_report_count(
     ).count()
 
     return user_reports + listing_reports + review_reports + message_reports
+
+
+def check_and_apply_user_autoflag(
+    *,
+    user_id: int,
+    now: datetime | None = None,
+) -> bool:
+    """
+    Check if a specific user reaches the rolling 30-day report threshold (CP-902).
+    If threshold is met and user is not flagged, immediately auto-flag them (check-on-write).
+    Returns True if user was newly flagged, False otherwise.
+    """
+    threshold = auto_flag_report_threshold()
+    total_reports = get_user_rolling_report_count(user_id=user_id, now=now)
+    if total_reports >= threshold:
+        current_time = now or timezone.now()
+        with transaction.atomic():
+            user = (
+                User.objects.select_for_update()
+                .filter(pk=user_id, is_staff=False, is_superuser=False)
+                .exclude(account_status=User.AccountStatusChoices.BANNED)
+                .first()
+            )
+            if user and not user.is_flagged:
+                user.is_flagged = True
+                user.flagged_at = current_time
+                user.save(update_fields=["is_flagged", "flagged_at", "updated_at"])
+                return True
+    return False
 
 
 @transaction.atomic

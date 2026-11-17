@@ -449,6 +449,55 @@ class AutoFlagRepeatedlyReportedUsersTests(TestCase):
         self.assertFalse(self.target.is_flag_confirmed)
         self.assertEqual(self.target.account_status, User.AccountStatusChoices.ACTIVE)
 
+    def test_tc089_third_report_triggers_inline_autoflag(self) -> None:
+        """TC-089: Submitting a third report within 30 days immediately auto-flags the user inline without cron."""
+        self.assertFalse(self.target.is_flagged)
+
+        self.client.force_authenticate(user=self.reporters[0])
+        r1 = self.client.post(
+            "/api/v1/reports/users/",
+            {
+                "target_user_id": self.target.pk,
+                "category": "scam_fraud",
+                "description": "Report 1",
+            },
+            format="json",
+        )
+        self.assertEqual(r1.status_code, status.HTTP_201_CREATED)
+        self.target.refresh_from_db()
+        self.assertFalse(self.target.is_flagged)
+
+        self.client.force_authenticate(user=self.reporters[1])
+        r2 = self.client.post(
+            "/api/v1/reports/users/",
+            {
+                "target_user_id": self.target.pk,
+                "category": "scam_fraud",
+                "description": "Report 2",
+            },
+            format="json",
+        )
+        self.assertEqual(r2.status_code, status.HTTP_201_CREATED)
+        self.target.refresh_from_db()
+        self.assertFalse(self.target.is_flagged)
+
+        self.client.force_authenticate(user=self.reporters[2])
+        r3 = self.client.post(
+            "/api/v1/reports/users/",
+            {
+                "target_user_id": self.target.pk,
+                "category": "scam_fraud",
+                "description": "Report 3",
+            },
+            format="json",
+        )
+        self.assertEqual(r3.status_code, status.HTTP_201_CREATED)
+
+        self.target.refresh_from_db()
+        self.assertTrue(self.target.is_flagged)
+        self.assertFalse(self.target.is_flag_confirmed)
+        self.assertIsNotNone(self.target.flagged_at)
+
     def test_unconfirmed_flag_leaves_account_unrestricted_until_admin_confirms(
         self,
     ) -> None:

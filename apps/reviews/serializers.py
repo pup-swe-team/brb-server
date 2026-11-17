@@ -55,6 +55,9 @@ class ReviewResponseSerializer(serializers.ModelSerializer):
     reviewee_name = serializers.SerializerMethodField()
     reviewee_average_rating = serializers.SerializerMethodField()
     reviewee_review_count = serializers.SerializerMethodField()
+    listing_id = serializers.SerializerMethodField()
+    listing_title = serializers.SerializerMethodField()
+    item_title = serializers.SerializerMethodField()
     can_report = serializers.SerializerMethodField()
     report_url = serializers.SerializerMethodField()
 
@@ -63,6 +66,9 @@ class ReviewResponseSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "order_id",
+            "listing_id",
+            "listing_title",
+            "item_title",
             "reviewer_id",
             "reviewer",
             "reviewee_id",
@@ -82,6 +88,17 @@ class ReviewResponseSerializer(serializers.ModelSerializer):
         if not hasattr(obj, "_reviewee_stats"):
             obj._reviewee_stats = get_user_rating_stats(obj.reviewee_id)
         return obj._reviewee_stats
+
+    def get_listing_id(self, obj: Review) -> int | None:
+        return obj.order.listing_id if obj.order_id else None
+
+    def get_listing_title(self, obj: Review) -> str:
+        if obj.order and getattr(obj.order, "listing", None):
+            return obj.order.listing.title
+        return ""
+
+    def get_item_title(self, obj: Review) -> str:
+        return self.get_listing_title(obj)
 
     def get_reviewee_name(self, obj: Review) -> str:
         return obj.reviewee.full_name

@@ -21,6 +21,8 @@ DEFAULT_LISTING_REPORT_CATEGORIES = (
     "misleading_description",
     "wrong_category",
     "inappropriate_content",
+    "spam",
+    "scam_fraud",
 )
 
 DEFAULT_USER_REPORT_CATEGORIES = (
@@ -37,6 +39,7 @@ DEFAULT_REVIEW_REPORT_CATEGORIES = (
     "spam",
     "offensive_content",
     "irrelevant_review",
+    "scam_fraud",
 )
 
 DEFAULT_MESSAGE_REPORT_CATEGORIES = (

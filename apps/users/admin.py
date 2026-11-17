@@ -66,6 +66,7 @@ class UserAdmin(admin.ModelAdmin):
     actions = (
         "deactivate_selected_accounts",
         "reactivate_selected_accounts",
+        "reinstate_selected_accounts",
         "revoke_selected_lenders",
         "clear_selected_lender_holds",
     )
@@ -163,6 +164,37 @@ class UserAdmin(admin.ModelAdmin):
             updated_at=timezone.now(),
         )
         self.message_user(request, f"Reactivated {reactivated} account(s).")
+
+    @admin.action(
+        description="Reinstate selected suspended or banned accounts (/admin/ override)"
+    )
+    def reinstate_selected_accounts(self, request, queryset) -> None:
+        """
+        Superuser emergency override: reinstate suspended or banned accounts from /admin/ only.
+        Clears ban/suspension state, resets moderation flags, and restores account to ACTIVE.
+        """
+        now = timezone.now()
+        eligible = queryset.filter(
+            account_status__in=[
+                User.AccountStatusChoices.BANNED,
+                User.AccountStatusChoices.SUSPENDED,
+                User.AccountStatusChoices.PENDING_REVIEW,
+            ]
+        )
+        reinstated = eligible.update(
+            account_status=User.AccountStatusChoices.ACTIVE,
+            is_active=True,
+            is_flagged=False,
+            flagged_at=None,
+            is_flag_confirmed=False,
+            flag_confirmed_at=None,
+            flag_confirmed_by=None,
+            updated_at=now,
+        )
+        self.message_user(
+            request,
+            f"Successfully reinstated {reinstated} account(s) to Active.",
+        )
 
 
 class AdminLenderRevocationForm(forms.Form):

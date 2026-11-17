@@ -12,8 +12,10 @@ def search_lenders(q: str | None = None) -> QuerySet[User]:
     Exclusion rules:
     - Only users with lender_status='active' (excludes 'none', 'revoked')
     - Only users with account_status='active' (excludes 'suspended', 'banned', 'deactivated')
-    - Annotates active_listing_count without N+1 queries.
+    - Annotates active_listing_count, average_rating, and review_count without N+1 queries.
     """
+    from django.db.models import F
+
     qs = User.objects.filter(
         account_status=User.AccountStatusChoices.ACTIVE,
         lender_status=User.LenderStatusChoices.ACTIVE,
@@ -22,7 +24,22 @@ def search_lenders(q: str | None = None) -> QuerySet[User]:
             "listings",
             filter=Q(listings__status__name="active"),
             distinct=True,
-        )
+        ),
+        average_rating=Avg(
+            "listings__orders__reviews__rating",
+            filter=Q(
+                listings__orders__reviews__deleted_at__isnull=True,
+            )
+            & ~Q(listings__orders__reviews__reviewer=F("pk")),
+        ),
+        review_count=Count(
+            "listings__orders__reviews",
+            filter=Q(
+                listings__orders__reviews__deleted_at__isnull=True,
+            )
+            & ~Q(listings__orders__reviews__reviewer=F("pk")),
+            distinct=True,
+        ),
     )
 
     if q:

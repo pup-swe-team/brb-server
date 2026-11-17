@@ -142,6 +142,9 @@
               <span class="badge" style="background: #f3e8ff; color: #7e22ce; font-weight: 600;">Active Lender</span>
             {% elif u.lender_status == 'revoked' %}
               <span class="badge badge-rejected">Revoked</span>
+              {% if u.lender_reapplication_hold %}
+                <span style="display: block; font-size: 10px; color: #b91c1c; font-weight: 600; margin-top: 2px;">Hold Active</span>
+              {% endif %}
             {% else %}
               <span style="color: var(--muted); font-size: 12px;">None</span>
             {% endif %}
@@ -167,26 +170,37 @@
                     {% csrf_token %}
                     <button type="submit" class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: var(--red); border-color: #f2c9cd;">Ban</button>
                   </form>
-                {% elif u.account_status == 'suspended' or u.account_status == 'banned' %}
-                  <!-- Reinstate form -->
+                {% elif u.account_status == 'suspended' %}
+                  <!-- Reinstate form (only for suspended accounts; banned accounts cannot be reinstated) -->
                   <form method="post" action="{% url 'portal-user-reinstate' u.id %}" onsubmit="return confirm('Reinstate user “{{ u.full_name|default:u.email|escapejs }}”? Login access will be restored.');" style="margin: 0;">
                     {% csrf_token %}
                     <button type="submit" class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: #15803d; border-color: #bbf7d0;">Reinstate</button>
                   </form>
-                  {% if u.account_status == 'suspended' %}
-                    <form method="post" action="{% url 'portal-user-ban' u.id %}" onsubmit="return confirm('Permanently BAN user “{{ u.full_name|default:u.email|escapejs }}”?');" style="margin: 0;">
-                      {% csrf_token %}
-                      <button type="submit" class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: var(--red); border-color: #f2c9cd;">Ban</button>
-                    </form>
-                  {% endif %}
+                  <form method="post" action="{% url 'portal-user-ban' u.id %}" onsubmit="return confirm('Permanently BAN user “{{ u.full_name|default:u.email|escapejs }}”?');" style="margin: 0;">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: var(--red); border-color: #f2c9cd;">Ban</button>
+                  </form>
+                {% elif u.account_status == 'banned' %}
+                  <span class="badge" style="font-size: 11px; color: var(--red); background: #fee2e2; border: 1px solid #fecaca;">Permanently Banned</span>
                 {% endif %}
 
-                <!-- Revoke Lender action if active lender -->
+                <!-- Revoke Lender action if active lender (CP-206) -->
                 {% if u.lender_status == 'active' %}
-                  <form method="post" action="{% url 'portal-user-revoke-lender' u.id %}" onsubmit="return confirm('Revoke Lender role for “{{ u.full_name|default:u.email|escapejs }}”? All active listings will be deactivated.');" style="margin: 0;">
+                  <button type="button" class="btn btn-outline"
+                          data-open-revoke-lender
+                          data-user-id="{{ u.id }}"
+                          data-user-name="{{ u.full_name|default:u.email }}"
+                          data-action-url="{% url 'portal-user-revoke-lender' u.id %}"
+                          style="padding: 3px 8px; font-size: 11px; color: #6b21a8; border-color: #e9d5ff;">
+                    Revoke Lender
+                  </button>
+                {% endif %}
+
+                <!-- Clear Lender Application Hold action -->
+                {% if u.account_status != 'banned' and u.lender_status == 'revoked' and u.lender_reapplication_hold %}
+                  <form method="post" action="{% url 'portal-user-clear-lender-hold' u.id %}" onsubmit="return confirm('Clear Lender application hold for “{{ u.full_name|default:u.email|escapejs }}”? They will be allowed to reapply as a Lender.');" style="margin: 0;">
                     {% csrf_token %}
-                    <input type="hidden" name="reason" value="policy_violation">
-                    <button type="submit" class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: #6b21a8; border-color: #e9d5ff;">Revoke Lender</button>
+                    <button type="submit" class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: #0284c7; border-color: #bae6fd;">Clear Hold</button>
                   </form>
                 {% endif %}
 
@@ -233,4 +247,37 @@
   </div>
   {% endif %}
 </div>
+
+<dialog class="overlay" data-revoke-lender-overlay id="revokeLenderDialog">
+  <div class="overlay-card">
+    <h2>Revoke Lender Status</h2>
+    <p class="overlay-sub">
+      Revoke Lender role for <strong data-revoke-target-name>this user</strong>. All active listings will be deactivated and requested orders will be declined.
+    </p>
+    <form method="post" action="">
+      {% csrf_token %}
+      <div class="field">
+        <label for="revoke_lender_reason">Revocation Reason <em>*</em></label>
+        <select class="field-input" name="reason" id="revoke_lender_reason" required>
+          <option value="" disabled selected>Select a reason from the list...</option>
+          {% for value, label in revocation_reasons %}
+            <option value="{{ value }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+        <span class="field-error">Please select a reason.</span>
+      </div>
+
+      <div class="field">
+        <label for="revoke_lender_detail">Additional Details (Optional)</label>
+        <textarea class="field-input" name="detail" id="revoke_lender_detail" rows="3"
+                  placeholder="Provide additional context or reference internal notes..."></textarea>
+      </div>
+
+      <div class="overlay-actions">
+        <button class="btn btn-ghost" type="button" data-close-revoke>Cancel</button>
+        <button class="btn btn-danger" type="submit" style="background: #6b21a8; border-color: #6b21a8; color: #fff;">Confirm Revocation</button>
+      </div>
+    </form>
+  </div>
+</dialog>
 {% endblock %}
