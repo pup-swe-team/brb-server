@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from rest_framework import serializers
 
 from apps.reports.models import ReviewReport
@@ -14,10 +16,15 @@ from .selectors import get_user_rating_stats
 class ReviewUserSummarySerializer(serializers.ModelSerializer):
     """Minimal user summary for review payloads."""
 
+    is_verified = serializers.SerializerMethodField()
+
     class Meta:
         model = User
-        fields = ["id", "full_name", "photo"]
+        fields = ["id", "full_name", "photo", "is_verified"]
         read_only_fields = fields
+
+    def get_is_verified(self, obj: User) -> bool:
+        return obj.has_verified_identity()
 
 
 class ReviewCreateSerializer(serializers.Serializer):
@@ -49,8 +56,10 @@ class ReviewResponseSerializer(serializers.ModelSerializer):
     """Output serializer for a review including updated reviewee rating stats and report action link."""
 
     order_id = serializers.IntegerField(read_only=True)
+    order = serializers.SerializerMethodField()
     reviewer_id = serializers.IntegerField(read_only=True)
     reviewer = ReviewUserSummarySerializer(read_only=True)
+    reviewer_name = serializers.CharField(source="reviewer.full_name", read_only=True)
     reviewee_id = serializers.IntegerField(read_only=True)
     reviewee_name = serializers.SerializerMethodField()
     reviewee_average_rating = serializers.SerializerMethodField()
@@ -66,11 +75,13 @@ class ReviewResponseSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "order_id",
+            "order",
             "listing_id",
             "listing_title",
             "item_title",
             "reviewer_id",
             "reviewer",
+            "reviewer_name",
             "reviewee_id",
             "reviewee_name",
             "rating",
@@ -88,6 +99,14 @@ class ReviewResponseSerializer(serializers.ModelSerializer):
         if not hasattr(obj, "_reviewee_stats"):
             obj._reviewee_stats = get_user_rating_stats(obj.reviewee_id)
         return obj._reviewee_stats
+
+    def get_order(self, obj: Review) -> dict[str, Any]:
+        return {
+            "id": obj.order_id,
+            "listing_id": obj.order.listing_id if obj.order_id else None,
+            "listing_title": self.get_listing_title(obj),
+            "item_title": self.get_listing_title(obj),
+        }
 
     def get_listing_id(self, obj: Review) -> int | None:
         return obj.order.listing_id if obj.order_id else None

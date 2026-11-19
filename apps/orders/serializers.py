@@ -70,6 +70,8 @@ class OrderDetailSerializer(BorrowRequestResultSerializer):
     has_reviewed = serializers.SerializerMethodField()
     can_review = serializers.SerializerMethodField()
     review_deadline = serializers.SerializerMethodField()
+    review = serializers.SerializerMethodField()
+    reviews = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
@@ -96,6 +98,8 @@ class OrderDetailSerializer(BorrowRequestResultSerializer):
             "has_reviewed",
             "can_review",
             "review_deadline",
+            "review",
+            "reviews",
             "completed_at",
             "created_at",
             "updated_at",
@@ -196,6 +200,28 @@ class OrderDetailSerializer(BorrowRequestResultSerializer):
 
         deadline = get_order_review_deadline(obj)
         return deadline.isoformat() if deadline else None
+
+    def get_review(self, obj) -> dict | None:
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return None
+        from apps.reviews.models import Review
+        from apps.reviews.serializers import ReviewResponseSerializer
+
+        r = (
+            Review.objects.filter(order_id=obj.pk, deleted_at__isnull=True)
+            .exclude(reviewer_id=user.pk)
+            .select_related("reviewer", "order", "order__listing")
+            .first()
+        )
+        if not r:
+            return None
+        return ReviewResponseSerializer(r, context=self.context).data
+
+    def get_reviews(self, obj) -> list[dict]:
+        r = self.get_review(obj)
+        return [r] if r else []
 
 
 class UnreturnedCaseSummarySerializer(serializers.ModelSerializer):

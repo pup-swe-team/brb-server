@@ -6,6 +6,8 @@ from apps.core.constants import BORROWING_LIMIT, DEFAULT_BORROWING_LIMIT
 from apps.core.selectors import get_int_config
 from apps.listings.models import Listing
 from apps.orders.models import Order
+from apps.reviews.models import Review
+from apps.reviews.serializers import ReviewResponseSerializer
 from apps.users.serializers import UserResponseSerializer
 
 
@@ -21,6 +23,29 @@ class BorrowerDashboardView(APIView):
 
         expire_unanswered_requests()
         process_overdue_and_unreturned_orders()
+        borrower_reviews = (
+            Review.objects.filter(
+                order__borrower=user,
+                deleted_at__isnull=True,
+            )
+            .exclude(reviewer=user)
+            .select_related(
+                "reviewer",
+                "order",
+                "order__listing",
+            )
+            .order_by("-created_at")
+        )
+        serialized_reviews = ReviewResponseSerializer(
+            borrower_reviews,
+            many=True,
+            context={"request": request},
+        ).data
+        reviews_by_order = {
+            r.order_id: ReviewResponseSerializer(r, context={"request": request}).data
+            for r in borrower_reviews
+        }
+
         orders = (
             Order.objects.filter(borrower=user)
             .select_related(
@@ -74,6 +99,10 @@ class BorrowerDashboardView(APIView):
                 ),
                 "cancel_reason": getattr(order, "cancel_reason", "") or "",
                 "decline_reason": getattr(order, "decline_reason", "") or "",
+                "review": reviews_by_order.get(order.id),
+                "reviews": [reviews_by_order[order.id]]
+                if order.id in reviews_by_order
+                else [],
             }
             if status_name in grouped:
                 grouped[status_name].append(data)
@@ -97,6 +126,8 @@ class BorrowerDashboardView(APIView):
                 "borrowing_limit": borrowing_limit,
                 "items_held": items_held,
                 "orders": grouped,
+                "reviews": serialized_reviews,
+                "reviews_received": serialized_reviews,
             },
             status=status.HTTP_200_OK,
         )
@@ -134,6 +165,29 @@ class LenderDashboardView(APIView):
                     "created_at": listing.created_at,
                 }
             )
+        lender_reviews = (
+            Review.objects.filter(
+                order__listing__lender=user,
+                deleted_at__isnull=True,
+            )
+            .exclude(reviewer=user)
+            .select_related(
+                "reviewer",
+                "order",
+                "order__listing",
+            )
+            .order_by("-created_at")
+        )
+        serialized_lender_reviews = ReviewResponseSerializer(
+            lender_reviews,
+            many=True,
+            context={"request": request},
+        ).data
+        lender_reviews_by_order = {
+            r.order_id: ReviewResponseSerializer(r, context={"request": request}).data
+            for r in lender_reviews
+        }
+
         orders_on_listings = (
             Order.objects.filter(listing__lender=user)
             .select_related("listing", "borrower", "status")
@@ -156,6 +210,10 @@ class LenderDashboardView(APIView):
                 "start_date": order.start_date,
                 "end_date": order.end_date,
                 "created_at": order.created_at,
+                "review": lender_reviews_by_order.get(order.id),
+                "reviews": [lender_reviews_by_order[order.id]]
+                if order.id in lender_reviews_by_order
+                else [],
             }
             if status_name == "requested":
                 incoming_requests.append(data)
@@ -179,6 +237,8 @@ class LenderDashboardView(APIView):
                 "incoming_requests": incoming_requests,
                 "ongoing_lends": ongoing,
                 "past_orders": past,
+                "reviews": serialized_lender_reviews,
+                "reviews_received": serialized_lender_reviews,
             },
             status=status.HTTP_200_OK,
         )

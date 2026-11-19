@@ -66,10 +66,11 @@ def _extract_and_validate_photos(serializer: serializers.BaseSerializer) -> list
     allowed = ", ".join(
         t.split("/")[-1].upper() for t in ALLOWED_LISTING_PHOTO_CONTENT_TYPES
     )
+    is_update = serializer.__class__.__name__ == "ListingUpdateSerializer"
     valid_photos: list[Any] = []
     for photo in photos:
         if not isinstance(photo, UploadedFile):
-            if isinstance(photo, str):
+            if isinstance(photo, str) and is_update:
                 continue
             raise serializers.ValidationError(
                 {"photos": "Photos must be uploaded as image files."}
@@ -143,9 +144,11 @@ class ReviewerSummarySerializer(serializers.ModelSerializer):
 
 
 class ListingReviewSerializer(serializers.ModelSerializer):
-    """Review details for a specific listing (CP-303)."""
+    """Review details for a specific listing (CP-303, FE-BUG-4101)."""
 
     reviewer = ReviewerSummarySerializer(read_only=True)
+    reviewer_name = serializers.CharField(source="reviewer.full_name", read_only=True)
+    item_title = serializers.CharField(source="order.listing.title", read_only=True)
 
     class Meta:
         model = Review
@@ -155,6 +158,8 @@ class ListingReviewSerializer(serializers.ModelSerializer):
             "comment",
             "created_at",
             "reviewer",
+            "reviewer_name",
+            "item_title",
         ]
         read_only_fields = fields
 
@@ -374,7 +379,7 @@ class ListingCreateSerializer(serializers.ModelSerializer):
     """Serializer for publishing a resource listing (FR6, FR7, CP-401)."""
 
     title = serializers.CharField(max_length=200, required=True)
-    description = serializers.CharField(required=False, allow_blank=True, default="")
+    description = serializers.CharField(required=True, allow_blank=False)
     category = serializers.PrimaryKeyRelatedField(
         queryset=ListingCategory.objects.all(),
         required=True,
@@ -557,6 +562,10 @@ class ListingCreateSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         photos = _extract_and_validate_photos(self)
+        if not photos:
+            raise serializers.ValidationError(
+                {"photos": "At least one photo is required."}
+            )
         attrs["photos"] = photos
 
         # Extract and validate availability windows

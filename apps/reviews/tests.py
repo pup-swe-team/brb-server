@@ -327,3 +327,79 @@ class ReviewSubmissionTests(TestCase):
         self.assertEqual(get_after.status_code, status.HTTP_200_OK)
         self.assertEqual(get_after.data["id"], post_resp.data["id"])
         self.assertEqual(get_after.data["comment"], "Excellent experience")
+
+    def test_fe_bug_4009_and_4101_review_payload_and_dashboards(self) -> None:
+        """
+        Verify FE-BUG-4009 & FE-BUG-4101:
+        1. Lender submits a review for borrower.
+        2. GET /api/v1/reviews/?target_user={id}&role=borrower returns received review with
+           reviewer.is_verified, reviewer_name, order: { id, listing_title }, item_title.
+        3. GET /api/v1/users/me/borrower-dashboard/ returns reviews and reviews_received.
+        4. GET /api/v1/orders/ returns embedded review.
+        5. GET /api/v1/listings/{id}/ returns item_title and reviewer_name in reviews.
+        """
+        # 1. Lender reviews borrower
+        self.client.force_authenticate(user=self.lender)
+        post_resp = self.client.post(
+            f"/api/v1/orders/{self.order.pk}/review/",
+            {"rating": 5, "comment": "Great borrower! Handled item carefully."},
+            format="json",
+        )
+        self.assertEqual(post_resp.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(post_resp.data["reviewer_name"], "Lender One")
+        self.assertIn("order", post_resp.data)
+        self.assertEqual(post_resp.data["order"]["id"], self.order.pk)
+        self.assertEqual(post_resp.data["order"]["listing_title"], self.listing.title)
+
+        # 2. Borrower queries reviews received
+        self.client.force_authenticate(user=self.borrower)
+        resp = self.client.get(
+            f"/api/v1/reviews/?target_user={self.borrower.pk}&role=borrower"
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(resp.data), 1)
+        r = resp.data[0]
+        self.assertEqual(r["rating"], 5)
+        self.assertEqual(r["comment"], "Great borrower! Handled item carefully.")
+        self.assertEqual(r["reviewer_name"], "Lender One")
+        self.assertIn("is_verified", r["reviewer"])
+        self.assertEqual(r["order"]["id"], self.order.pk)
+        self.assertEqual(r["item_title"], self.listing.title)
+
+        # 3. Borrower dashboard includes reviews and reviews_received
+        dash_resp = self.client.get("/api/v1/users/me/borrower-dashboard/")
+        self.assertEqual(dash_resp.status_code, status.HTTP_200_OK)
+        self.assertIn("reviews", dash_resp.data)
+        self.assertIn("reviews_received", dash_resp.data)
+        self.assertEqual(len(dash_resp.data["reviews_received"]), 1)
+        self.assertEqual(
+            dash_resp.data["reviews_received"][0]["comment"],
+            "Great borrower! Handled item carefully.",
+        )
+
+        # 4. GET /api/v1/orders/ includes embedded review on completed order
+        orders_resp = self.client.get("/api/v1/orders/?role=borrower")
+        self.assertEqual(orders_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(orders_resp.data), 1)
+        self.assertIsNotNone(orders_resp.data[0].get("review"))
+        self.assertEqual(
+            orders_resp.data[0]["review"]["comment"],
+            "Great borrower! Handled item carefully.",
+        )
+
+        # 5. Borrower reviews lender -> Listing reviews check (FE-BUG-4101)
+        borrower_post = self.client.post(
+            f"/api/v1/orders/{self.order.pk}/review/",
+            {"rating": 5, "comment": "Works great for exams!"},
+            format="json",
+        )
+        self.assertEqual(borrower_post.status_code, status.HTTP_201_CREATED)
+
+        listing_resp = self.client.get(f"/api/v1/listings/{self.listing.pk}/")
+        self.assertEqual(listing_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(listing_resp.data["reviews"]), 1)
+        listing_review = listing_resp.data["reviews"][0]
+        self.assertEqual(listing_review["rating"], 5)
+        self.assertEqual(listing_review["comment"], "Works great for exams!")
+        self.assertEqual(listing_review["reviewer_name"], "Borrower One")
+        self.assertEqual(listing_review["item_title"], self.listing.title)

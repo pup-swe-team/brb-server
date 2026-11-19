@@ -39,7 +39,8 @@ class AvailabilityCalendarLogicTests(APITestCase):
             affiliation=User.AffiliationChoices.STUDENT,
         )
         self.lender.account_status = User.AccountStatusChoices.ACTIVE
-        self.lender.save(update_fields=["account_status"])
+        self.lender.lender_status = User.LenderStatusChoices.ACTIVE
+        self.lender.save(update_fields=["account_status", "lender_status"])
 
         self.borrower = User.objects.create_user(
             email="borrower2@iskolarngbayan.pup.edu.ph",

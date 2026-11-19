@@ -218,6 +218,8 @@ class ListingCreateViewTests(BaseListingTestCase):
     def test_create_listing_requires_photos(self):
         """Listing creation fails when no photo is provided."""
         self.client.force_authenticate(user=self.owner)
+        start_d = timezone.now().date() + timedelta(days=1)
+        end_d = start_d + timedelta(days=5)
         payload = {
             "title": "Physics Volume 1",
             "description": "Halliday Resnick Physics.",
@@ -225,8 +227,8 @@ class ListingCreateViewTests(BaseListingTestCase):
             "condition": "Good",
             "pickup_location": self.pickup_location.id,
             "is_ownership_confirmed": True,
-            "start_date": "2026-10-15",
-            "end_date": "2026-10-20",
+            "start_date": start_d.isoformat(),
+            "end_date": end_d.isoformat(),
         }
 
         response = self.client.post(self.create_url, data=payload, format="multipart")
