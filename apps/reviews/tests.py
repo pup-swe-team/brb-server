@@ -357,9 +357,13 @@ class ReviewSubmissionTests(TestCase):
         # Before borrower reviews: authored check is 404, but ?view=received returns lender review
         not_authored = self.client.get(f"/api/v1/orders/{self.order.pk}/review/")
         self.assertEqual(not_authored.status_code, status.HTTP_404_NOT_FOUND)
-        received = self.client.get(f"/api/v1/orders/{self.order.pk}/review/?view=received")
+        received = self.client.get(
+            f"/api/v1/orders/{self.order.pk}/review/?view=received"
+        )
         self.assertEqual(received.status_code, status.HTTP_200_OK)
-        self.assertEqual(received.data["comment"], "Great borrower! Handled item carefully.")
+        self.assertEqual(
+            received.data["comment"], "Great borrower! Handled item carefully."
+        )
 
         resp = self.client.get(
             f"/api/v1/reviews/?target_user={self.borrower.pk}&role=borrower"
@@ -373,6 +377,12 @@ class ReviewSubmissionTests(TestCase):
         self.assertIn("is_verified", r["reviewer"])
         self.assertEqual(r["order"]["id"], self.order.pk)
         self.assertEqual(r["item_title"], self.listing.title)
+        self.assertEqual(r["target_role"], "borrower")
+        self.assertEqual(r["role"], "borrower")
+        lender_side = self.client.get(
+            f"/api/v1/reviews/?target_user={self.borrower.pk}&role=lender"
+        )
+        self.assertEqual(len(lender_side.data), 0)
 
         # 3. Borrower dashboard includes reviews and reviews_received
         dash_resp = self.client.get("/api/v1/users/me/borrower-dashboard/")

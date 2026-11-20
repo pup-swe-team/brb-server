@@ -15,13 +15,22 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
 
 class IsActiveLender(permissions.BasePermission):
     message = "Active lender status is required before you can post resources."
+    code = "permission_denied"
 
     def has_permission(self, request, view) -> bool:
         user = getattr(request, "user", None)
         if not (user and user.is_authenticated):
             return False
-        if getattr(user, "is_flag_confirmed", False):
-            self.message = "Your account has a confirmed moderation flag and cannot create new listings."
+        if (
+            getattr(user, "is_flag_confirmed", False)
+            or getattr(user, "account_status", "") == "flagged"
+            or getattr(user, "lender_status", "") == "flagged"
+        ):
+            self.message = (
+                "Your account has been flagged. You are currently restricted from "
+                "creating new listings. Please contact BRB support."
+            )
+            self.code = "account_flagged"
             return False
         return bool(
             user.account_status == User.AccountStatusChoices.ACTIVE

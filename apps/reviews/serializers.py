@@ -69,6 +69,8 @@ class ReviewResponseSerializer(serializers.ModelSerializer):
     item_title = serializers.SerializerMethodField()
     can_report = serializers.SerializerMethodField()
     report_url = serializers.SerializerMethodField()
+    target_role = serializers.SerializerMethodField()
+    role = serializers.SerializerMethodField()
 
     class Meta:
         model = Review
@@ -92,6 +94,8 @@ class ReviewResponseSerializer(serializers.ModelSerializer):
             "reviewee_review_count",
             "can_report",
             "report_url",
+            "target_role",
+            "role",
         ]
         read_only_fields = fields
 
@@ -139,6 +143,15 @@ class ReviewResponseSerializer(serializers.ModelSerializer):
             reporter_id=user.pk,
             target_review_id=obj.pk,
         ).exists()
+
+    def get_target_role(self, obj: Review) -> str:
+        """FE-BUG-4009: role of the reviewee in the order ('borrower' or 'lender')."""
+        if obj.reviewer_id == obj.order.borrower_id:
+            return "lender"
+        return "borrower"
+
+    def get_role(self, obj: Review) -> str:
+        return self.get_target_role(obj)
 
     def get_report_url(self, obj: Review) -> str:
         return f"/api/v1/reviews/{obj.pk}/report/"

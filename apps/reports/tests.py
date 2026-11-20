@@ -581,6 +581,13 @@ class AutoFlagRepeatedlyReportedUsersTests(TestCase):
             format="json",
         )
         self.assertEqual(blocked_listing_resp.status_code, status.HTTP_403_FORBIDDEN)
+        # FE-BUG-4102: machine-readable code and flagged state on /auth/me/
+        self.assertEqual(blocked_listing_resp.data.get("code"), "account_flagged")
+        me_resp = self.client.get("/api/v1/auth/me/")
+        self.assertEqual(me_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(me_resp.data["account_status"], "flagged")
+        self.assertTrue(me_resp.data["is_flagged"])
+        self.assertTrue(me_resp.data["flagged_reason"])
 
         with self.assertRaises(ValidationError):
             create_listing(

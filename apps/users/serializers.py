@@ -85,6 +85,10 @@ class UserResponseSerializer(serializers.ModelSerializer):
     home_address = serializers.CharField(source="street_address", read_only=True)
     average_rating = serializers.SerializerMethodField()
     review_count = serializers.SerializerMethodField()
+    account_status = serializers.SerializerMethodField()
+    is_flagged = serializers.SerializerMethodField()
+    is_flag_confirmed = serializers.BooleanField(read_only=True)
+    flagged_reason = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -96,6 +100,9 @@ class UserResponseSerializer(serializers.ModelSerializer):
             "affiliation",
             "account_status",
             "lender_status",
+            "is_flagged",
+            "is_flag_confirmed",
+            "flagged_reason",
             "email_verified_at",
             "created_at",
             "photo_url",
@@ -106,6 +113,29 @@ class UserResponseSerializer(serializers.ModelSerializer):
             "review_count",
         )
         read_only_fields = fields
+
+    def get_account_status(self, obj: User) -> str:
+        if (
+            getattr(obj, "is_flag_confirmed", False)
+            or getattr(obj, "account_status", "") == "flagged"
+        ):
+            return "flagged"
+        return obj.account_status
+
+    def get_is_flagged(self, obj: User) -> bool:
+        return bool(
+            getattr(obj, "is_flag_confirmed", False)
+            or getattr(obj, "account_status", "") in ("flagged", "suspended", "banned")
+            or getattr(obj, "lender_status", "") == "flagged"
+        )
+
+    def get_flagged_reason(self, obj: User) -> str | None:
+        if self.get_is_flagged(obj):
+            return (
+                "Your account has been flagged. You are currently restricted from "
+                "creating new listings. Please contact BRB support."
+            )
+        return None
 
     def get_average_rating(self, obj: User) -> float | None:
         from apps.reviews.selectors import get_user_rating_stats
