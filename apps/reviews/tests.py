@@ -353,6 +353,14 @@ class ReviewSubmissionTests(TestCase):
 
         # 2. Borrower queries reviews received
         self.client.force_authenticate(user=self.borrower)
+
+        # Before borrower reviews: authored check is 404, but ?view=received returns lender review
+        not_authored = self.client.get(f"/api/v1/orders/{self.order.pk}/review/")
+        self.assertEqual(not_authored.status_code, status.HTTP_404_NOT_FOUND)
+        received = self.client.get(f"/api/v1/orders/{self.order.pk}/review/?view=received")
+        self.assertEqual(received.status_code, status.HTTP_200_OK)
+        self.assertEqual(received.data["comment"], "Great borrower! Handled item carefully.")
+
         resp = self.client.get(
             f"/api/v1/reviews/?target_user={self.borrower.pk}&role=borrower"
         )
@@ -403,3 +411,16 @@ class ReviewSubmissionTests(TestCase):
         self.assertEqual(listing_review["comment"], "Works great for exams!")
         self.assertEqual(listing_review["reviewer_name"], "Borrower One")
         self.assertEqual(listing_review["item_title"], self.listing.title)
+
+        # 6. Search listings returns product-specific rating and review_count
+        search_resp = self.client.get(f"/api/v1/listings/?search={self.listing.title}")
+        self.assertEqual(search_resp.status_code, status.HTTP_200_OK)
+        results = (
+            search_resp.data
+            if isinstance(search_resp.data, list)
+            else search_resp.data.get("results", [])
+        )
+        self.assertTrue(len(results) > 0)
+        item_data = results[0]
+        self.assertEqual(item_data["rating"], 5.0)
+        self.assertEqual(item_data["review_count"], 1)

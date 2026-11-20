@@ -88,6 +88,23 @@ def search_listings(
         .prefetch_related(
             "photos",
         )
+        .annotate(
+            product_rating_avg=Avg(
+                "orders__reviews__rating",
+                filter=Q(
+                    orders__reviews__deleted_at__isnull=True,
+                    orders__reviews__reviewer=F("orders__borrower"),
+                ),
+            ),
+            product_review_count=Count(
+                "orders__reviews__id",
+                filter=Q(
+                    orders__reviews__deleted_at__isnull=True,
+                    orders__reviews__reviewer=F("orders__borrower"),
+                ),
+                distinct=True,
+            ),
+        )
     )
 
     if q:
@@ -98,8 +115,6 @@ def search_listings(
             )
 
     if min_rating is not None:
-        from django.db.models import F
-
         qs = qs.annotate(
             lender_avg_rating=Avg(
                 "lender__listings__orders__reviews__rating",

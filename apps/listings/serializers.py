@@ -328,6 +328,40 @@ class ListingSearchResultSerializer(serializers.ModelSerializer):
     photos = ListingPhotoSerializer(many=True, read_only=True)
     availability_windows = AvailabilityWindowSerializer(many=True, read_only=True)
     active_orders = serializers.SerializerMethodField()
+    rating = serializers.SerializerMethodField()
+    rating_average = serializers.SerializerMethodField()
+    review_count = serializers.SerializerMethodField()
+
+    def _get_product_stats(self, obj: Listing) -> dict[str, Any]:
+        if hasattr(obj, "product_rating_avg") and hasattr(obj, "product_review_count"):
+            avg = obj.product_rating_avg
+            count = obj.product_review_count
+            return {
+                "rating": round(float(avg), 1) if avg is not None else 0.0,
+                "count": int(count) if count is not None else 0,
+            }
+        from apps.listings.selectors import get_listing_reviews
+
+        reviews = get_listing_reviews(obj)
+        count = reviews.count()
+        if count == 0:
+            return {"rating": 0.0, "count": 0}
+        from django.db.models import Avg
+
+        avg = reviews.aggregate(a=Avg("rating"))["a"]
+        return {
+            "rating": round(float(avg), 1) if avg is not None else 0.0,
+            "count": count,
+        }
+
+    def get_rating(self, obj: Listing) -> float:
+        return self._get_product_stats(obj)["rating"]
+
+    def get_rating_average(self, obj: Listing) -> float:
+        return self._get_product_stats(obj)["rating"]
+
+    def get_review_count(self, obj: Listing) -> int:
+        return self._get_product_stats(obj)["count"]
 
     def get_lender(self, obj: Listing) -> dict:
         from apps.listings.selectors import get_lender_rating_stats
@@ -370,6 +404,9 @@ class ListingSearchResultSerializer(serializers.ModelSerializer):
             "photos",
             "availability_windows",
             "active_orders",
+            "rating",
+            "rating_average",
+            "review_count",
             "created_at",
             "updated_at",
         ]

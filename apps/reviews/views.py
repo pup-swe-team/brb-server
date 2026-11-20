@@ -108,15 +108,6 @@ class OrderUserReviewDetailView(APIView):
                 reviewer_id=request.user.pk,
                 deleted_at__isnull=True,
             ).first()
-            if review is None:
-                review = (
-                    Review.objects.filter(
-                        order_id=order.pk,
-                        deleted_at__isnull=True,
-                    )
-                    .exclude(reviewer_id=request.user.pk)
-                    .first()
-                )
         if review is None:
             raise Http404("You have not reviewed this order yet.")
         serializer = ReviewResponseSerializer(review, context={"request": request})
