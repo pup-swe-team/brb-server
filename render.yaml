@@ -66,3 +66,12 @@ services:
         sync: false
       - key: JWT_SECRET
         sync: false
+      # Cloudinary persistent media storage (listing photos, avatar images)
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: CLOUDINARY_URL
+        sync: false
