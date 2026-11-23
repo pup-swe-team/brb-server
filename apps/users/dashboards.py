@@ -33,6 +33,8 @@ class BorrowerDashboardView(APIView):
                 "reviewer",
                 "order",
                 "order__listing",
+                "order__listing__lender",
+                "order__borrower",
             )
             .order_by("-created_at")
         )
@@ -42,8 +44,9 @@ class BorrowerDashboardView(APIView):
             context={"request": request},
         ).data
         reviews_by_order = {
-            r.order_id: ReviewResponseSerializer(r, context={"request": request}).data
-            for r in borrower_reviews
+            r["order"]["id"]: r
+            for r in serialized_reviews
+            if r.get("order") and r["order"].get("id")
         }
 
         orders = (
@@ -113,9 +116,12 @@ class BorrowerDashboardView(APIView):
         for name in past_statuses:
             grouped["past"].extend(grouped.get(name, []))
         borrowing_limit = get_int_config(BORROWING_LIMIT, DEFAULT_BORROWING_LIMIT)
-        items_held = orders.filter(
-            status__name__in=["requested", "confirmed", "active", "overdue"]
-        ).count()
+        items_held = sum(
+            1
+            for order in orders
+            if getattr(order.status, "name", "")
+            in ["requested", "confirmed", "active", "overdue"]
+        )
         return Response(
             {
                 "user": UserResponseSerializer(user, context={"request": request}).data,
@@ -175,6 +181,8 @@ class LenderDashboardView(APIView):
                 "reviewer",
                 "order",
                 "order__listing",
+                "order__listing__lender",
+                "order__borrower",
             )
             .order_by("-created_at")
         )
@@ -184,8 +192,9 @@ class LenderDashboardView(APIView):
             context={"request": request},
         ).data
         lender_reviews_by_order = {
-            r.order_id: ReviewResponseSerializer(r, context={"request": request}).data
-            for r in lender_reviews
+            r["order"]["id"]: r
+            for r in serialized_lender_reviews
+            if r.get("order") and r["order"].get("id")
         }
 
         orders_on_listings = (

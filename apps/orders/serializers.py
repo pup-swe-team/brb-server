@@ -110,10 +110,19 @@ class OrderDetailSerializer(BorrowRequestResultSerializer):
         if not request or not request.user or not request.user.is_authenticated:
             return {}
         if not hasattr(obj, "_cached_lockout_info"):
+            status_name = getattr(obj.status, "name", "")
+            if status_name not in ("confirmed", "active"):
+                obj._cached_lockout_info = {
+                    "is_locked_out": False,
+                    "locked_until": None,
+                    "remaining_lockout_seconds": 0,
+                }
+                return obj._cached_lockout_info
+
             from apps.codes.services import get_code_lockout_until
 
             now = timezone.now()
-            code_type = "handover" if obj.status.name == "confirmed" else "return"
+            code_type = "handover" if status_name == "confirmed" else "return"
             locked_until = get_code_lockout_until(
                 order=obj, code_type_name=code_type, actor=request.user, now=now
             )
@@ -138,6 +147,8 @@ class OrderDetailSerializer(BorrowRequestResultSerializer):
         return self._get_lockout_info(obj).get("remaining_lockout_seconds", 0)
 
     def get_handover_code_expires_at(self, obj) -> str | None:
+        if getattr(obj.status, "name", "") != "confirmed":
+            return None
         from apps.codes.models import AuthCode
 
         code = (
@@ -153,6 +164,8 @@ class OrderDetailSerializer(BorrowRequestResultSerializer):
         return code.expires_at.isoformat() if code else None
 
     def get_return_code_expires_at(self, obj) -> str | None:
+        if getattr(obj.status, "name", "") not in ("active", "overdue"):
+            return None
         from apps.codes.models import AuthCode
 
         code = (
@@ -178,6 +191,8 @@ class OrderDetailSerializer(BorrowRequestResultSerializer):
         return 0.0
 
     def get_has_reviewed(self, obj) -> bool:
+        if getattr(obj.status, "name", "") not in ("completed", "returned"):
+            return False
         request = self.context.get("request")
         user = getattr(request, "user", None)
         if not user or not user.is_authenticated:
@@ -187,6 +202,8 @@ class OrderDetailSerializer(BorrowRequestResultSerializer):
         return Review.objects.filter(order_id=obj.pk, reviewer_id=user.pk).exists()
 
     def get_can_review(self, obj) -> bool:
+        if getattr(obj.status, "name", "") != "completed":
+            return False
         request = self.context.get("request")
         user = getattr(request, "user", None)
         if not user or not user.is_authenticated:
@@ -196,28 +213,41 @@ class OrderDetailSerializer(BorrowRequestResultSerializer):
         return can_user_review_order(order=obj, user=user)
 
     def get_review_deadline(self, obj) -> str | None:
+        if getattr(obj.status, "name", "") != "completed":
+            return None
         from apps.reviews.services import get_order_review_deadline
 
         deadline = get_order_review_deadline(obj)
         return deadline.isoformat() if deadline else None
 
     def get_review(self, obj) -> dict | None:
-        request = self.context.get("request")
-        user = getattr(request, "user", None)
-        if not user or not user.is_authenticated:
+        if getattr(obj.status, "name", "") not in ("completed", "returned"):
             return None
-        from apps.reviews.models import Review
-        from apps.reviews.serializers import ReviewResponseSerializer
+        if not hasattr(obj, "_cached_counterpart_review"):
+            request = self.context.get("request")
+            user = getattr(request, "user", None)
+            if not user or not user.is_authenticated:
+                obj._cached_counterpart_review = None
+                return None
+            from apps.reviews.models import Review
+            from apps.reviews.serializers import ReviewResponseSerializer
 
-        r = (
-            Review.objects.filter(order_id=obj.pk, deleted_at__isnull=True)
-            .exclude(reviewer_id=user.pk)
-            .select_related("reviewer", "order", "order__listing")
-            .first()
-        )
-        if not r:
-            return None
-        return ReviewResponseSerializer(r, context=self.context).data
+            r = (
+                Review.objects.filter(order_id=obj.pk, deleted_at__isnull=True)
+                .exclude(reviewer_id=user.pk)
+                .select_related(
+                    "reviewer",
+                    "order",
+                    "order__listing",
+                    "order__listing__lender",
+                    "order__borrower",
+                )
+                .first()
+            )
+            obj._cached_counterpart_review = (
+                ReviewResponseSerializer(r, context=self.context).data if r else None
+            )
+        return obj._cached_counterpart_review
 
     def get_reviews(self, obj) -> list[dict]:
         r = self.get_review(obj)
