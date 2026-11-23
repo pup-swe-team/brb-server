@@ -19,8 +19,8 @@ services:
       uv sync --frozen --no-dev &&
       uv run python manage.py migrate --noinput
     startCommand: >-
-      uv run gunicorn brb_server.wsgi:application
-      --bind 0.0.0.0:$PORT --workers 1 --timeout 120
+      uv run --no-sync gunicorn brb_server.wsgi:application
+      --bind 0.0.0.0:$PORT --workers 1 --threads 4 --worker-class gthread --timeout 120
     healthCheckPath: /healthz/
     envVars:
       # Render's native runtime defaults to a newer Python (3.14.x as of 2026);

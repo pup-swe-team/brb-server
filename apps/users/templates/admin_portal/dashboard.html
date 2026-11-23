@@ -5,6 +5,9 @@
 <nav class="crumbs" aria-label="Breadcrumb"><span>Overview</span></nav>
 <div class="page-heading">
   <h1>Dashboard</h1>
+  <div class="header-time" title="System Time (Asia/Manila)">
+    <time id="system-time" datetime="{{ current_time|date:'c' }}">{{ current_time|date:"M. j, Y, h:i A" }} (PHT)</time>
+  </div>
 </div>
 
 <div class="stat-grid">
@@ -55,7 +58,7 @@
           <strong>{{ event.title }}</strong>
           <span>{{ event.detail }}</span>
         </span>
-        <time class="activity-time">{{ event.time }}</time>
+        <time class="activity-time" datetime="{{ event.iso_time }}" title="{{ event.full_time }}">{{ event.time }}</time>
       </li>
       {% endfor %}
     </ul>

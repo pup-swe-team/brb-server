@@ -1,0 +1,253 @@
+from rest_framework import permissions, status
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from apps.core.constants import BORROWING_LIMIT, DEFAULT_BORROWING_LIMIT
+from apps.core.selectors import get_int_config
+from apps.listings.models import Listing
+from apps.orders.models import Order
+from apps.reviews.models import Review
+from apps.reviews.serializers import ReviewResponseSerializer
+from apps.users.serializers import UserResponseSerializer
+
+
+class BorrowerDashboardView(APIView):
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request):
+        user = request.user
+        from apps.orders.services import (
+            expire_unanswered_requests,
+            process_overdue_and_unreturned_orders,
+        )
+
+        expire_unanswered_requests()
+        process_overdue_and_unreturned_orders()
+        borrower_reviews = (
+            Review.objects.filter(
+                order__borrower=user,
+                deleted_at__isnull=True,
+            )
+            .exclude(reviewer=user)
+            .select_related(
+                "reviewer",
+                "order",
+                "order__listing",
+                "order__listing__lender",
+                "order__borrower",
+            )
+            .order_by("-created_at")
+        )
+        serialized_reviews = ReviewResponseSerializer(
+            borrower_reviews,
+            many=True,
+            context={"request": request},
+        ).data
+        reviews_by_order = {
+            r["order"]["id"]: r
+            for r in serialized_reviews
+            if r.get("order") and r["order"].get("id")
+        }
+
+        orders = (
+            Order.objects.filter(borrower=user)
+            .select_related(
+                "listing", "listing__lender", "listing__pickup_location", "status"
+            )
+            .order_by("-created_at")
+        )
+        grouped = {
+            "requested": [],
+            "confirmed": [],
+            "active": [],
+            "overdue": [],
+            "returned": [],
+            "completed": [],
+            "declined": [],
+            "expired": [],
+            "cancelled": [],
+            "unreturned": [],
+            "disputed": [],
+            "past": [],
+        }
+        for order in orders:
+            status_name = getattr(order.status, "name", "")
+            lender_obj = (
+                getattr(order.listing, "lender", None) if order.listing else None
+            )
+            data = {
+                "id": order.id,
+                "listing_id": order.listing_id,
+                "listing_title": getattr(order.listing, "title", ""),
+                "status": status_name,
+                "start_date": order.start_date,
+                "end_date": order.end_date,
+                "created_at": order.created_at,
+                "lender_id": lender_obj.id if lender_obj else None,
+                "lender_name": getattr(lender_obj, "full_name", "")
+                if lender_obj
+                else "",
+                "counterpart": getattr(lender_obj, "full_name", "Lender")
+                if lender_obj
+                else "Lender",
+                "pickup_location": (
+                    order.listing.pickup_location.name
+                    if order.listing and order.listing.pickup_location
+                    else ""
+                ),
+                "price_per_day": (
+                    float(order.listing.rate_per_day)
+                    if order.listing and order.listing.rate_per_day is not None
+                    else 0.0
+                ),
+                "cancel_reason": getattr(order, "cancel_reason", "") or "",
+                "decline_reason": getattr(order, "decline_reason", "") or "",
+                "review": reviews_by_order.get(order.id),
+                "reviews": [reviews_by_order[order.id]]
+                if order.id in reviews_by_order
+                else [],
+            }
+            if status_name in grouped:
+                grouped[status_name].append(data)
+            else:
+                grouped.setdefault(status_name, []).append(data)
+        past_statuses = ["returned", "completed", "declined", "expired", "cancelled"]
+        grouped["past"] = []
+        for name in past_statuses:
+            grouped["past"].extend(grouped.get(name, []))
+        borrowing_limit = get_int_config(BORROWING_LIMIT, DEFAULT_BORROWING_LIMIT)
+        items_held = sum(
+            1
+            for order in orders
+            if getattr(order.status, "name", "")
+            in ["requested", "confirmed", "active", "overdue"]
+        )
+        return Response(
+            {
+                "user": UserResponseSerializer(user, context={"request": request}).data,
+                "verification_status": {
+                    "email_verified": bool(user.email_verified_at),
+                    "identity_verified": user.has_verified_identity(),
+                },
+                "borrowing_limit": borrowing_limit,
+                "items_held": items_held,
+                "orders": grouped,
+                "reviews": serialized_reviews,
+                "reviews_received": serialized_reviews,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class LenderDashboardView(APIView):
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request):
+        user = request.user
+        from apps.orders.services import (
+            expire_unanswered_requests,
+            process_overdue_and_unreturned_orders,
+        )
+
+        expire_unanswered_requests()
+        process_overdue_and_unreturned_orders()
+        listings = (
+            Listing.objects.filter(lender=user)
+            .select_related("category", "pickup_location", "status")
+            .prefetch_related("photos")
+            .order_by("-created_at")
+        )
+        listings_data = []
+        for listing in listings:
+            listings_data.append(
+                {
+                    "id": listing.id,
+                    "title": listing.title,
+                    "status": getattr(listing.status, "name", ""),
+                    "category": getattr(listing.category, "name", ""),
+                    "rate_per_day": float(listing.rate_per_day)
+                    if listing.rate_per_day is not None
+                    else None,
+                    "created_at": listing.created_at,
+                }
+            )
+        lender_reviews = (
+            Review.objects.filter(
+                order__listing__lender=user,
+                deleted_at__isnull=True,
+            )
+            .exclude(reviewer=user)
+            .select_related(
+                "reviewer",
+                "order",
+                "order__listing",
+                "order__listing__lender",
+                "order__borrower",
+            )
+            .order_by("-created_at")
+        )
+        serialized_lender_reviews = ReviewResponseSerializer(
+            lender_reviews,
+            many=True,
+            context={"request": request},
+        ).data
+        lender_reviews_by_order = {
+            r["order"]["id"]: r
+            for r in serialized_lender_reviews
+            if r.get("order") and r["order"].get("id")
+        }
+
+        orders_on_listings = (
+            Order.objects.filter(listing__lender=user)
+            .select_related("listing", "borrower", "status")
+            .order_by("-created_at")
+        )
+        incoming_requests = []
+        ongoing = []
+        past = []
+        for order in orders_on_listings:
+            status_name = getattr(order.status, "name", "")
+            data = {
+                "id": order.id,
+                "listing_id": order.listing_id,
+                "listing_title": getattr(order.listing, "title", ""),
+                "borrower": {
+                    "id": order.borrower_id,
+                    "full_name": getattr(order.borrower, "full_name", ""),
+                },
+                "status": status_name,
+                "start_date": order.start_date,
+                "end_date": order.end_date,
+                "created_at": order.created_at,
+                "review": lender_reviews_by_order.get(order.id),
+                "reviews": [lender_reviews_by_order[order.id]]
+                if order.id in lender_reviews_by_order
+                else [],
+            }
+            if status_name == "requested":
+                incoming_requests.append(data)
+            elif status_name in ["confirmed", "active", "overdue", "unreturned"]:
+                ongoing.append(data)
+            elif status_name in [
+                "returned",
+                "completed",
+                "declined",
+                "expired",
+                "cancelled",
+                "disputed",
+            ]:
+                past.append(data)
+            else:
+                past.append(data)
+        return Response(
+            {
+                "user": UserResponseSerializer(user, context={"request": request}).data,
+                "listings": listings_data,
+                "incoming_requests": incoming_requests,
+                "ongoing_lends": ongoing,
+                "past_orders": past,
+                "reviews": serialized_lender_reviews,
+                "reviews_received": serialized_lender_reviews,
+            },
+            status=status.HTTP_200_OK,
+        )

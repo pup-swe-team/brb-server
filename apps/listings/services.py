@@ -7,6 +7,7 @@ from typing import Any
 from django.core.files.uploadedfile import UploadedFile
 from django.db import transaction
 from django.db.models import QuerySet
+from django.shortcuts import get_object_or_404
 from rest_framework.exceptions import ValidationError
 
 from apps.orders.models import Order
@@ -48,6 +49,17 @@ def create_listing(
     if status is None:
         status, _ = ListingStatus.objects.get_or_create(name=LISTING_STATUS_ACTIVE)
 
+    lender = User.objects.select_for_update().get(pk=lender.pk)
+    if (
+        lender.account_status != User.AccountStatusChoices.ACTIVE
+        or lender.lender_status != User.LenderStatusChoices.ACTIVE
+    ):
+        raise ValidationError("Active Lender status is required to create a listing.")
+    if lender.is_flag_confirmed:
+        raise ValidationError(
+            "Your account has a confirmed moderation flag and cannot create new listings."
+        )
+
     listing = Listing.objects.create(
         lender=lender,
         title=title,
@@ -79,6 +91,9 @@ def create_listing(
 @transaction.atomic
 def deactivate_listing(*, listing: Listing) -> Listing:
     """Soft-remove a listing from search by transitioning its status to 'deactivated' (CP-402)."""
+    listing = (
+        Listing.objects.select_for_update().select_related("status").get(pk=listing.pk)
+    )
     if listing.status.name == LISTING_STATUS_DELETED:
         raise ValidationError("Cannot deactivate a deleted listing.")
 
@@ -93,8 +108,19 @@ def deactivate_listing(*, listing: Listing) -> Listing:
 @transaction.atomic
 def reactivate_listing(*, listing: Listing) -> Listing:
     """Restore a deactivated listing back to 'active' status (CP-402)."""
+    lender = User.objects.select_for_update().get(pk=listing.lender_id)
+    listing = (
+        Listing.objects.select_for_update().select_related("status").get(pk=listing.pk)
+    )
     if listing.status.name == LISTING_STATUS_DELETED:
         raise ValidationError("Cannot reactivate a deleted listing.")
+    if (
+        lender.account_status != User.AccountStatusChoices.ACTIVE
+        or lender.lender_status != User.LenderStatusChoices.ACTIVE
+    ):
+        raise ValidationError(
+            "Active Lender status is required to reactivate a listing."
+        )
 
     active_status, _ = ListingStatus.objects.get_or_create(name=LISTING_STATUS_ACTIVE)
     listing.status = active_status
@@ -125,12 +151,28 @@ def delete_listing(*, listing: Listing) -> None:
 
 
 @transaction.atomic
+def admin_remove_listing(*, listing_id: int) -> None:
+    """Hide a moderated listing while preserving its orders and history (CP-1102)."""
+    listing = get_object_or_404(
+        Listing.objects.select_for_update().select_related("status"), pk=listing_id
+    )
+    if listing.status.name == LISTING_STATUS_DELETED:
+        return
+    deleted_status, _ = ListingStatus.objects.get_or_create(name=LISTING_STATUS_DELETED)
+    listing.status = deleted_status
+    listing.save(update_fields=["status", "updated_at"])
+
+
+@transaction.atomic
 def update_listing(
     *,
     listing: Listing,
     validated_data: dict[str, Any],
 ) -> Listing:
     """Update listing details, photos, or availability windows (CP-402)."""
+    listing = (
+        Listing.objects.select_for_update().select_related("status").get(pk=listing.pk)
+    )
     if listing.status.name == LISTING_STATUS_DELETED:
         raise ValidationError("Cannot edit a deleted listing.")
 
@@ -243,7 +285,21 @@ def is_listing_available_for_range(
     if exclude_order_id is not None:
         qs = qs.exclude(order_id=exclude_order_id)
 
-    return not qs.exists()
+    if qs.exists():
+        return False
+
+    from apps.orders.models import Order
+
+    order_qs = Order.objects.filter(
+        listing=listing,
+        status__name__in=("confirmed", "active", "overdue"),
+        start_date__lte=end_date,
+        end_date__gte=start_date,
+    )
+    if exclude_order_id is not None:
+        order_qs = order_qs.exclude(pk=exclude_order_id)
+
+    return not order_qs.exists()
 
 
 def get_blocked_dates_for_listing(listing: Listing) -> QuerySet[BlockedDateRange]:

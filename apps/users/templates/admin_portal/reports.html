@@ -1,0 +1,152 @@
+{% extends "admin_portal/shell.html" %}
+{% load portal_extras %}
+{% block title %}Reports &amp; Flags &middot; CoPUPAdmin{% endblock %}
+{% block content %}
+<nav class="crumbs" aria-label="Breadcrumb">
+  <span>Moderation</span> / <a href="{% url 'portal-reports-queue' %}">Reports &amp; Flags</a>
+</nav>
+
+<div class="page-heading">
+  <h1>Reports &amp; Flags Moderation</h1>
+</div>
+
+<div class="tabs" role="tablist" aria-label="Report type tabs">
+  <a class="tab {% if tab == 'all' %}is-active{% endif %}"
+     role="tab" aria-selected="{% if tab == 'all' %}true{% else %}false{% endif %}"
+     href="?type=all{% if status_filter %}&status={{ status_filter }}{% endif %}">
+    All Reports ({{ total_open_count }} Open)
+  </a>
+  <a class="tab {% if tab == 'flagged' %}is-active{% endif %}"
+     role="tab" aria-selected="{% if tab == 'flagged' %}true{% else %}false{% endif %}"
+     href="?type=flagged{% if status_filter %}&status={{ status_filter }}{% endif %}">
+    Flagged Users ({{ flagged_users_count }})
+  </a>
+  <a class="tab {% if tab == 'user' %}is-active{% endif %}"
+     role="tab" aria-selected="{% if tab == 'user' %}true{% else %}false{% endif %}"
+     href="?type=user{% if status_filter %}&status={{ status_filter }}{% endif %}">
+    User Reports ({{ user_open_count }})
+  </a>
+  <a class="tab {% if tab == 'listing' %}is-active{% endif %}"
+     role="tab" aria-selected="{% if tab == 'listing' %}true{% else %}false{% endif %}"
+     href="?type=listing{% if status_filter %}&status={{ status_filter }}{% endif %}">
+    Listing Reports ({{ listing_open_count }})
+  </a>
+  <a class="tab {% if tab == 'review' %}is-active{% endif %}"
+     role="tab" aria-selected="{% if tab == 'review' %}true{% else %}false{% endif %}"
+     href="?type=review{% if status_filter %}&status={{ status_filter }}{% endif %}">
+    Review Reports ({{ review_open_count }})
+  </a>
+  <a class="tab {% if tab == 'message' %}is-active{% endif %}"
+     role="tab" aria-selected="{% if tab == 'message' %}true{% else %}false{% endif %}"
+     href="?type=message{% if status_filter %}&status={{ status_filter }}{% endif %}">
+    Message Reports ({{ message_open_count }})
+  </a>
+</div>
+
+<!-- Status filter toolbar -->
+<form method="get" class="card" style="padding: 14px 18px; margin-bottom: 16px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;">
+  <input type="hidden" name="type" value="{{ tab }}">
+  <div style="display: flex; gap: 10px; flex: 1; min-width: 200px;">
+    <select name="status" style="padding: 7px 12px; border: 1px solid var(--border); border-radius: var(--radius); font: inherit; font-size: 13px; background: var(--card);">
+      <option value="open" {% if status_filter == 'open' %}selected{% endif %}>Open Reports Only</option>
+      <option value="resolved" {% if status_filter == 'resolved' %}selected{% endif %}>Resolved Reports</option>
+      <option value="all" {% if status_filter == 'all' %}selected{% endif %}>All Reports</option>
+    </select>
+  </div>
+  <div style="display: flex; gap: 8px;">
+    <button type="submit" class="btn btn-primary" style="padding: 6px 16px; font-size: 13px;">Filter</button>
+    {% if status_filter != 'open' or tab != 'all' %}
+      <a href="{% url 'portal-reports-queue' %}" class="btn btn-outline" style="padding: 6px 14px; font-size: 13px;">Reset</a>
+    {% endif %}
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>ID &amp; Type</th>
+          <th>Reporter</th>
+          <th>Target</th>
+          <th>Category</th>
+          <th>Description</th>
+          <th>Submitted</th>
+          <th>Status</th>
+          <th style="text-align: right;">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for report in items %}
+        <tr>
+          <td data-label="ID &amp; Type">
+            <span style="font-weight: 600; color: var(--navy);">#{{ report.id }}</span>
+            <span class="badge" style="font-size: 10px; padding: 2px 6px; margin-left: 4px; background: #f1f5f9; color: #475569;">{{ report.type|title }}</span>
+          </td>
+          <td data-label="Reporter">
+            {% if report.reporter_name %}
+              <div style="font-weight: 600; font-size: 13px; color: var(--navy);">{{ report.reporter_name }}</div>
+            {% else %}
+              <div style="font-weight: 600; font-size: 13px; color: var(--navy);">{{ report.reporter.full_name|default:report.reporter.email }}</div>
+              <div style="font-size: 11px; color: var(--muted);">ID #{{ report.reporter.pk }}</div>
+            {% endif %}
+          </td>
+          <td data-label="Target">
+            <div style="font-weight: 600; font-size: 13px; color: var(--navy);">{{ report.target_display }}</div>
+            <div style="font-size: 11px; color: var(--muted);">{{ report.target_meta }}</div>
+          </td>
+          <td data-label="Category">
+            <span class="badge" style="background: #eff6ff; color: #1d4ed8; font-weight: 600;">{{ report.category }}</span>
+          </td>
+          <td data-label="Description" style="max-width: 260px;">
+            <span style="font-size: 12px; color: var(--charcoal); word-break: break-word;">{{ report.description }}</span>
+          </td>
+          <td data-label="Submitted">
+            <span style="font-size: 12px; color: var(--muted);">{{ report.created_at|date:"M. j, Y H:i" }}</span>
+          </td>
+          <td data-label="Status">
+            {% if report.status == 'open' %}
+              <span class="badge badge-pending">Open</span>
+            {% elif report.status == 'resolved' %}
+              <span class="badge badge-approved">Resolved</span>
+            {% else %}
+              <span class="badge">{{ report.status|title }}</span>
+            {% endif %}
+          </td>
+          <td data-label="Action" style="text-align: right;">
+            {% if report.is_flagged_user %}
+              <div style="display: inline-flex; gap: 6px; align-items: center; justify-content: flex-end;">
+                {% if not report.is_flag_confirmed %}
+                  <form method="post" action="{% url 'portal-user-confirm-flag' report.user_pk %}" onsubmit="return confirm('Confirm moderation flag for “{{ report.target_display|escapejs }}”?');" style="margin: 0;">
+                    {% csrf_token %}
+                    <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                    <button type="submit" class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: #b91c1c; border-color: #fca5a5;">Confirm Flag</button>
+                  </form>
+                {% endif %}
+                <form method="post" action="{% url 'portal-user-dismiss-flag' report.user_pk %}" onsubmit="return confirm('Dismiss moderation flag for “{{ report.target_display|escapejs }}”?');" style="margin: 0;">
+                  {% csrf_token %}
+                  <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                  <button type="submit" class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: #4b5563; border-color: #d1d5db;">Dismiss</button>
+                </form>
+                <a href="{% url 'portal-users' %}?q={{ report.target_display }}" class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: #0284c7; border-color: #bae6fd;">View User</a>
+              </div>
+            {% elif report.status == 'open' %}
+              <form method="post" action="{% url 'portal-report-resolve' report.type report.id %}" onsubmit="return confirm('Mark {{ report.type_label }} #{{ report.id }} as Resolved?');" style="margin: 0; display: inline-block;">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-outline" style="padding: 4px 10px; font-size: 12px; color: #15803d; border-color: #bbf7d0;">Resolve</button>
+              </form>
+            {% else %}
+              <span style="color: var(--muted); font-size: 12px;">Resolved</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="8" class="table-empty">No {{ status_filter }} reports found.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

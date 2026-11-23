@@ -44,6 +44,12 @@ class ListingReport(models.Model):
         db_table = "listing_reports"
         verbose_name = "Listing Report"
         verbose_name_plural = "Listing Reports"
+        constraints = (
+            models.UniqueConstraint(
+                fields=["reporter", "target_listing"],
+                name="unique_reporter_target_listing",
+            ),
+        )
 
     def __str__(self) -> str:
         return f"Report #{self.id} on Listing #{self.target_listing_id} ({self.status})"
@@ -87,6 +93,13 @@ class UserReport(models.Model):
         on_delete=models.PROTECT,
         related_name="reports",
     )
+    order = models.ForeignKey(
+        "orders.Order",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="user_reports",
+    )
     description = models.TextField()
     status = models.CharField(max_length=50, default="open")  # open, resolved
     created_at = models.DateTimeField(auto_now_add=True)
@@ -95,6 +108,13 @@ class UserReport(models.Model):
         db_table = "user_reports"
         verbose_name = "User Report"
         verbose_name_plural = "User Reports"
+        constraints = (
+            models.UniqueConstraint(
+                fields=["reporter", "target_user", "order"],
+                condition=models.Q(order__isnull=False),
+                name="unique_reporter_target_user_order",
+            ),
+        )
 
     def __str__(self) -> str:
         return f"Report #{self.id} on {self.target_user.full_name} ({self.status})"
@@ -143,6 +163,12 @@ class ReviewReport(models.Model):
         db_table = "review_reports"
         verbose_name = "Review Report"
         verbose_name_plural = "Review Reports"
+        constraints = (
+            models.UniqueConstraint(
+                fields=["reporter", "target_review"],
+                name="unique_reporter_target_review",
+            ),
+        )
 
     def __str__(self) -> str:
         return f"Report #{self.id} on Review #{self.target_review_id} ({self.status})"
@@ -191,6 +217,12 @@ class MessageReport(models.Model):
         db_table = "message_reports"
         verbose_name = "Message Report"
         verbose_name_plural = "Message Reports"
+        constraints = (
+            models.UniqueConstraint(
+                fields=["reporter", "target_message"],
+                name="unique_reporter_target_message",
+            ),
+        )
 
     def __str__(self) -> str:
         return f"Report #{self.id} on Message #{self.target_message_id} ({self.status})"

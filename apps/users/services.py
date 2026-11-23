@@ -8,6 +8,7 @@ from django.db.models import Q
 from django.utils import timezone
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
+from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
 
 from apps.core.constants import (
     DEFAULT_EMAIL_VERIFICATION_EXPIRY_DAYS,
@@ -16,15 +17,19 @@ from apps.core.constants import (
     PASSWORD_RESET_EXPIRY_MINUTES,
 )
 from apps.core.selectors import get_int_config
-from apps.notifications.constants import NOTIFICATION_TYPE_VERIFICATION_RESULT
+from apps.listings.models import Listing, ListingStatus
+from apps.notifications.constants import (
+    NOTIFICATION_TYPE_DECLINE,
+    NOTIFICATION_TYPE_VERIFICATION_RESULT,
+)
 from apps.notifications.models import Notification, NotificationType
-from apps.orders.models import Order, UnreturnedCase
+from apps.orders.models import Order, OrderStatus, UnreturnedCase
 
 from .constants import (
     IDENTITY_DOCUMENT_STATUS_APPROVED,
     IDENTITY_DOCUMENT_STATUS_REJECTED,
 )
-from .models import IdentityDocument, IdentityDocumentStatus, User
+from .models import IdentityDocument, IdentityDocumentStatus, LenderRevocation, User
 from .tokens import (
     EmailChangeTokenGenerator,
     EmailVerificationTokenGenerator,
@@ -153,6 +158,23 @@ def verify_user_email(user: User) -> None:
     if user.email_verified_at is not None:
         return
 
+    cutoff = timezone.now() - timedelta(days=email_verification_expiry_days())
+    if user.created_at <= cutoff:
+        logger.info(
+            "CP-102: Purging expired unverified account on verify attempt: user_id=%d, email=%s",
+            user.pk,
+            user.email,
+        )
+        user.delete()
+        raise ValidationError(
+            {
+                "detail": (
+                    "This account was not verified within 7 days and has been "
+                    "deactivated. Please register again."
+                )
+            }
+        )
+
     with transaction.atomic():
         user.email_verified_at = timezone.now()
         if user.account_status == User.AccountStatusChoices.PENDING_REVIEW:
@@ -176,8 +198,20 @@ def resend_email_verification(email: str) -> None:
         return
     if user.email_verified_at is not None:
         return
+
+    cutoff = timezone.now() - timedelta(days=email_verification_expiry_days())
+    if user.created_at <= cutoff:
+        logger.info(
+            "CP-102: Purging expired unverified account on resend attempt: user_id=%d, email=%s",
+            user.pk,
+            user.email,
+        )
+        user.delete()
+        return
+
     if user.account_status != User.AccountStatusChoices.PENDING_REVIEW:
         return
+
     send_email_verification(user)
 
 
@@ -465,6 +499,109 @@ class LenderApplicationError(Exception):
         self.message = message
 
 
+class LenderRevocationConflict(APIException):
+    status_code = 409
+    default_detail = (
+        "Complete confirmed or active orders before revoking Lender status."
+    )
+    default_code = "lender_revocation_blocked"
+
+
+@transaction.atomic
+def revoke_lender_role(
+    *, user: User, actor: User, source: str, reason: str = "", detail: str = ""
+) -> dict[str, int]:
+    """Revoke a Lender and settle their pending requests as one transaction."""
+    if source not in LenderRevocation.Source.values:
+        raise ValidationError({"source": "Invalid revocation source."})
+    if source == LenderRevocation.Source.ADMIN:
+        if not actor.is_staff:
+            raise PermissionDenied("Administrator access required.")
+        if reason not in LenderRevocation.Reason.values:
+            raise ValidationError({"reason": "Select a valid revocation reason."})
+    elif actor.pk != user.pk:
+        raise PermissionDenied("You can only revoke your own Lender status.")
+
+    locked_user = User.objects.select_for_update().get(pk=user.pk)
+    if locked_user.lender_status != User.LenderStatusChoices.ACTIVE:
+        raise ValidationError({"detail": "This user is not an active Lender."})
+
+    listings = list(
+        Listing.objects.select_for_update().filter(lender=locked_user).order_by("pk")
+    )
+    listing_ids = [listing.pk for listing in listings]
+    orders = list(
+        Order.objects.select_for_update()
+        .filter(
+            listing_id__in=listing_ids,
+            status__name__in=("requested", "confirmed", "active"),
+        )
+        .select_related("status")
+        .order_by("pk")
+    )
+    if any(order.status.name in ("confirmed", "active") for order in orders):
+        raise LenderRevocationConflict()
+
+    now = timezone.now()
+    declined_status, _ = OrderStatus.objects.get_or_create(name="declined")
+    requested_ids = [order.pk for order in orders if order.status.name == "requested"]
+    if requested_ids:
+        Order.objects.filter(pk__in=requested_ids).update(
+            status=declined_status,
+            decline_reason="Lender status revoked.",
+            updated_at=now,
+        )
+        decline_type, _ = NotificationType.objects.get_or_create(
+            name=NOTIFICATION_TYPE_DECLINE
+        )
+        Notification.objects.bulk_create(
+            [
+                Notification(
+                    user_id=order.borrower_id,
+                    type=decline_type,
+                    reference_id=str(order.pk),
+                )
+                for order in orders
+                if order.status.name == "requested"
+            ]
+        )
+
+    deactivated_status, _ = ListingStatus.objects.get_or_create(name="deactivated")
+    deactivated_count = Listing.objects.filter(
+        pk__in=listing_ids, status__name__in=("active",)
+    ).update(status=deactivated_status, updated_at=now)
+    locked_user.lender_status = User.LenderStatusChoices.REVOKED
+    locked_user.lender_reapplication_hold = source == LenderRevocation.Source.ADMIN
+    locked_user.save(
+        update_fields=["lender_status", "lender_reapplication_hold", "updated_at"]
+    )
+    LenderRevocation.objects.create(
+        user=locked_user,
+        actor=actor,
+        source=source,
+        reason=reason if source == LenderRevocation.Source.ADMIN else "",
+        detail=detail.strip() if source == LenderRevocation.Source.ADMIN else "",
+    )
+    return {
+        "declined_orders": len(requested_ids),
+        "deactivated_listings": deactivated_count,
+    }
+
+
+@transaction.atomic
+def clear_lender_reapplication_hold(*, user: User, actor: User) -> bool:
+    if not actor.is_staff:
+        raise PermissionDenied("Administrator access required.")
+    locked_user = User.objects.select_for_update().get(pk=user.pk)
+    if locked_user.lender_status != User.LenderStatusChoices.REVOKED:
+        return False
+    if not locked_user.lender_reapplication_hold:
+        return False
+    locked_user.lender_reapplication_hold = False
+    locked_user.save(update_fields=["lender_reapplication_hold", "updated_at"])
+    return True
+
+
 def apply_for_lender_role(user: User) -> User:
     """
     Grant the Lender role to a verified borrower (CP-1003).
@@ -482,30 +619,26 @@ def apply_for_lender_role(user: User) -> User:
     * the identity must have been Admin-approved, because lending means
       handing something over to a stranger and CP-105 makes verification the
       gate for exactly that;
-    * the account must not already be a lender, and a revoked lender may not
-      quietly re-apply -- revocation is a trust decision, and re-applying
-      without an Admin's say-so would undo it.
+    * the account must not already be a lender; an Admin-revoked user must
+      have their application hold cleared before reapplying.
     """
-    if user.account_status != User.AccountStatusChoices.ACTIVE:
-        raise LenderApplicationError(
-            "Your account is not active, so you cannot become a lender right now."
-        )
-
-    if not user.has_verified_identity():
-        raise LenderApplicationError(
-            "Identity verification is required before you can become a lender. "
-            "Submit an identity document and wait for review to complete."
-        )
-
-    if user.lender_status == User.LenderStatusChoices.ACTIVE:
-        raise LenderApplicationError("You are already a lender.")
-
-    if user.lender_status == User.LenderStatusChoices.REVOKED:
-        raise LenderApplicationError(
-            "Your lender status was revoked. Please contact an administrator."
-        )
-
     with transaction.atomic():
+        user = User.objects.select_for_update().get(pk=user.pk)
+        if user.account_status != User.AccountStatusChoices.ACTIVE:
+            raise LenderApplicationError(
+                "Your account is not active, so you cannot become a lender right now."
+            )
+        if not user.has_verified_identity():
+            raise LenderApplicationError(
+                "Identity verification is required before you can become a lender. "
+                "Submit an identity document and wait for review to complete."
+            )
+        if user.lender_status == User.LenderStatusChoices.ACTIVE:
+            raise LenderApplicationError("You are already a lender.")
+        if user.lender_reapplication_hold:
+            raise LenderApplicationError(
+                "An administrator must clear your Lender application hold before you can reapply."
+            )
         user.lender_status = User.LenderStatusChoices.ACTIVE
         user.save(update_fields=["lender_status", "updated_at"])
 
@@ -650,3 +783,292 @@ def review_identity_document(
         )
 
     return document
+
+
+def suspend_user(
+    *,
+    user: User,
+    actor: User,
+    reason: str = "",
+) -> User:
+    """
+    Suspend a user account (CP-1101, TC-103).
+
+    Rules:
+    - Actor must be staff (is_staff=True).
+    - Cannot suspend oneself or a superuser.
+    - Sets account_status to SUSPENDED.
+    - Invalidates all active refresh tokens (blacklist_outstanding_tokens).
+    - Dispatches notification to user.
+    """
+    if not actor.is_staff:
+        raise PermissionDenied("Administrator access required.")
+    if user.pk == actor.pk:
+        raise ValidationError(
+            {"detail": "Administrators cannot suspend their own account."}
+        )
+    if user.is_superuser:
+        raise ValidationError({"detail": "Superuser accounts cannot be suspended."})
+
+    with transaction.atomic():
+        user.account_status = User.AccountStatusChoices.SUSPENDED
+        user.save(update_fields=["account_status", "updated_at"])
+        blacklist_outstanding_tokens(user)
+
+        try:
+            from apps.notifications.constants import NOTIFICATION_TYPE_REPORT_UPDATES
+            from apps.notifications.services import create_notification
+
+            create_notification(
+                user=user,
+                event_name=NOTIFICATION_TYPE_REPORT_UPDATES,
+                reference_id=str(user.pk),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to dispatch user_suspended notification for user %s",
+                user.email,
+            )
+
+    return user
+
+
+def reinstate_user(
+    *,
+    user: User,
+    actor: User,
+    reason: str = "",
+) -> User:
+    """
+    Reinstate a suspended user account (CP-1101, TC-104).
+
+    Rules:
+    - Actor must be staff (is_staff=True).
+    - Permanently banned accounts cannot be reinstated (BE-BUG-4004).
+    - Sets account_status to ACTIVE.
+    - Dispatches notification to user.
+    """
+    if not actor.is_staff:
+        raise PermissionDenied("Administrator access required.")
+
+    if user.account_status == User.AccountStatusChoices.BANNED:
+        raise ValidationError(
+            {"detail": "Permanently banned user accounts cannot be reinstated."},
+            code="banned_account_immutable",
+        )
+
+    with transaction.atomic():
+        user.account_status = User.AccountStatusChoices.ACTIVE
+        user.is_flagged = False
+        user.flagged_at = None
+        user.is_flag_confirmed = False
+        user.flag_confirmed_at = None
+        user.flag_confirmed_by = None
+        user.save(
+            update_fields=[
+                "account_status",
+                "is_flagged",
+                "flagged_at",
+                "is_flag_confirmed",
+                "flag_confirmed_at",
+                "flag_confirmed_by",
+                "updated_at",
+            ]
+        )
+
+        try:
+            from apps.notifications.constants import NOTIFICATION_TYPE_REPORT_UPDATES
+            from apps.notifications.services import create_notification
+
+            create_notification(
+                user=user,
+                event_name=NOTIFICATION_TYPE_REPORT_UPDATES,
+                reference_id=str(user.pk),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to dispatch user_reinstated notification for user %s",
+                user.email,
+            )
+
+    return user
+
+
+def ban_user(
+    *,
+    user: User,
+    actor: User,
+    reason: str = "",
+) -> User:
+    """
+    Ban a user account permanently (CP-1101, TC-105).
+
+    Rules:
+    - Actor must be staff (is_staff=True).
+    - Cannot ban oneself or a superuser.
+    - Sets account_status to BANNED.
+    - Deactivates active listings and cancels/declines pending requested orders.
+    - Invalidates all active refresh tokens (blacklist_outstanding_tokens).
+    - Dispatches notification to user.
+    """
+    if not actor.is_staff:
+        raise PermissionDenied("Administrator access required.")
+    if user.pk == actor.pk:
+        raise ValidationError(
+            {"detail": "Administrators cannot ban their own account."}
+        )
+    if user.is_superuser:
+        raise ValidationError({"detail": "Superuser accounts cannot be banned."})
+
+    with transaction.atomic():
+        user.account_status = User.AccountStatusChoices.BANNED
+        user.save(update_fields=["account_status", "updated_at"])
+        blacklist_outstanding_tokens(user)
+
+        from apps.listings.constants import (
+            LISTING_STATUS_ACTIVE,
+            LISTING_STATUS_DEACTIVATED,
+        )
+        from apps.listings.models import ListingStatus
+        from apps.listings.services import release_dates_for_order
+        from apps.orders.models import Order, OrderStatus
+
+        deactivated_status, _ = ListingStatus.objects.get_or_create(
+            name=LISTING_STATUS_DEACTIVATED
+        )
+        user.listings.filter(status__name=LISTING_STATUS_ACTIVE).update(
+            status=deactivated_status
+        )
+
+        declined_status, _ = OrderStatus.objects.get_or_create(name="declined")
+        for pending_lender_order in Order.objects.select_for_update().filter(
+            listing__lender=user,
+            status__name="requested",
+        ):
+            pending_lender_order.status = declined_status
+            pending_lender_order.decline_reason = (
+                reason.strip() or "Lender account permanently banned."
+            )
+            pending_lender_order.save(
+                update_fields=["status", "decline_reason", "updated_at"]
+            )
+            release_dates_for_order(pending_lender_order)
+
+        cancelled_status, _ = OrderStatus.objects.get_or_create(name="cancelled")
+        for pending_borrower_order in Order.objects.select_for_update().filter(
+            borrower=user,
+            status__name="requested",
+        ):
+            pending_borrower_order.status = cancelled_status
+            pending_borrower_order.cancel_reason = (
+                reason.strip() or "Borrower account permanently banned."
+            )
+            pending_borrower_order.save(
+                update_fields=["status", "cancel_reason", "updated_at"]
+            )
+            release_dates_for_order(pending_borrower_order)
+
+        try:
+            from apps.notifications.constants import NOTIFICATION_TYPE_REPORT_UPDATES
+            from apps.notifications.services import create_notification
+
+            create_notification(
+                user=user,
+                event_name=NOTIFICATION_TYPE_REPORT_UPDATES,
+                reference_id=str(user.pk),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to dispatch user_banned notification for user %s",
+                user.email,
+            )
+
+    return user
+
+
+def confirm_user_flag(
+    *,
+    user: User,
+    actor: User,
+    reason: str = "",
+) -> User:
+    """
+    Admin confirms a user's moderation flag (CP-902).
+    Once confirmed, the user is restricted from creating new listings or borrow requests.
+    """
+    if not actor.is_staff:
+        raise PermissionDenied("Administrator access required.")
+    if user.pk == actor.pk:
+        raise ValidationError(
+            {"detail": "Administrators cannot flag their own account."}
+        )
+    if user.is_superuser:
+        raise ValidationError({"detail": "Superuser accounts cannot be flagged."})
+
+    now = timezone.now()
+    with transaction.atomic():
+        user.is_flagged = True
+        if user.flagged_at is None:
+            user.flagged_at = now
+        user.is_flag_confirmed = True
+        user.flag_confirmed_at = now
+        user.flag_confirmed_by = actor
+        user.save(
+            update_fields=[
+                "is_flagged",
+                "flagged_at",
+                "is_flag_confirmed",
+                "flag_confirmed_at",
+                "flag_confirmed_by",
+                "updated_at",
+            ]
+        )
+
+        try:
+            from apps.notifications.constants import NOTIFICATION_TYPE_REPORT_UPDATES
+            from apps.notifications.services import create_notification
+
+            create_notification(
+                user=user,
+                event_name=NOTIFICATION_TYPE_REPORT_UPDATES,
+                reference_id=str(user.pk),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to dispatch confirm_user_flag notification for user %s",
+                user.email,
+            )
+
+    return user
+
+
+def dismiss_user_flag(
+    *,
+    user: User,
+    actor: User,
+    reason: str = "",
+) -> User:
+    """
+    Admin dismisses/clears a user's moderation flag (CP-902), lifting any flag restrictions.
+    """
+    if not actor.is_staff:
+        raise PermissionDenied("Administrator access required.")
+
+    with transaction.atomic():
+        user.is_flagged = False
+        user.flagged_at = None
+        user.is_flag_confirmed = False
+        user.flag_confirmed_at = None
+        user.flag_confirmed_by = None
+        user.save(
+            update_fields=[
+                "is_flagged",
+                "flagged_at",
+                "is_flag_confirmed",
+                "flag_confirmed_at",
+                "flag_confirmed_by",
+                "updated_at",
+            ]
+        )
+
+    return user

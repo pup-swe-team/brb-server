@@ -3549,6 +3549,21 @@ class AccountDeactivationTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
+    def test_users_me_deactivate_alias_url_blocks_when_open_orders_exist(self) -> None:
+        """CP-1004 / FE-BUG-3006: /api/v1/users/me/deactivate/ answers with blocker details."""
+        lender = make_user("lender.alias@iskolarngbayan.pup.edu.ph")
+        listing = self.make_listing(lender)
+        self.make_order(self.user, listing, "active")
+
+        alias_url = reverse("api-users-me-deactivate")
+        response = self.client.post(
+            alias_url, {"password": "StrongPassword123!"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "has_unsettled_orders")
+        self.assertEqual(response.data["open_orders"], 1)
+        self.assertIn("open orders", response.data["detail"])
+
 
 class LenderSearchTests(APITestCase):
     """
@@ -3972,6 +3987,10 @@ class LenderProfileTests(APITestCase):
         self.assertEqual(response.data["average_rating"], 4.5)
         self.assertEqual(response.data["review_count"], 2)
 
+        # Reviews embedded for frontend LenderProfileScreen
+        self.assertIn("reviews", response.data)
+        self.assertEqual(len(response.data["reviews"]), 2)
+
         # Active listings: listing1 and listing2 only (deactivated excluded)
         active_listings = response.data["active_listings"]
         self.assertEqual(len(active_listings), 2)
@@ -4168,11 +4187,12 @@ class ApplyLenderTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("already a lender", str(response.data["detail"]))
 
-    def test_a_revoked_lender_cannot_re_apply(self) -> None:
-        """Revocation is a trust decision; re-applying would undo it."""
+    def test_a_revoked_lender_with_admin_hold_cannot_re_apply(self) -> None:
+        """An Admin revocation requires explicit reinstatement."""
         self.approve_identity(self.user)
         self.user.lender_status = User.LenderStatusChoices.REVOKED
-        self.user.save(update_fields=["lender_status"])
+        self.user.lender_reapplication_hold = True
+        self.user.save(update_fields=["lender_status", "lender_reapplication_hold"])
 
         response = self.client.post(self.url)
 
@@ -4253,3 +4273,228 @@ class UserAdminActionTests(APITestCase):
         self.assertEqual(
             self.member.account_status, User.AccountStatusChoices.SUSPENDED
         )
+
+
+class AdminUserManagementAPITests(APITestCase):
+    """
+    Tests for Admin user search and moderation endpoints (CP-1101, TC-103, TC-104, TC-105).
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.admin = make_user(
+            "admin-api-mod@iskolarngbayan.pup.edu.ph",
+            is_staff=True,
+            full_name="Staff Admin",
+        )
+        self.superadmin = make_user(
+            "superadmin-api@pup.edu.ph",
+            is_staff=True,
+            full_name="Super Admin",
+        )
+        self.superadmin.is_superuser = True
+        self.superadmin.save()
+
+        self.regular_user = make_user(
+            "regular-student@iskolarngbayan.pup.edu.ph",
+            full_name="Regular Student",
+            contact_number="09181234567",
+        )
+        self.regular_user.account_status = User.AccountStatusChoices.ACTIVE
+        self.regular_user.save()
+
+    def test_non_admin_cannot_access_endpoints(self) -> None:
+        self.client.force_authenticate(user=self.regular_user)
+        res_list = self.client.get(reverse("api-admin-user-list"))
+        self.assertEqual(res_list.status_code, 403)
+
+        res_suspend = self.client.post(
+            reverse("api-admin-user-suspend", args=[self.regular_user.pk])
+        )
+        self.assertEqual(res_suspend.status_code, 403)
+
+    def test_admin_user_list_and_search(self) -> None:
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.get(reverse("api-admin-user-list"))
+        self.assertEqual(res.status_code, 200)
+        self.assertGreaterEqual(len(res.data.get("results", res.data)), 3)
+
+        res_filtered = self.client.get(reverse("api-admin-user-list") + "?q=Regular")
+        self.assertEqual(res_filtered.status_code, 200)
+        results = res_filtered.data.get("results", res_filtered.data)
+        self.assertTrue(any(u["id"] == self.regular_user.id for u in results))
+
+    def test_admin_suspend_user_api(self) -> None:
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.post(
+            reverse("api-admin-user-suspend", args=[self.regular_user.pk]),
+            {"reason": "Terms violation"},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data.get("account_status"), "suspended")
+
+        self.regular_user.refresh_from_db()
+        self.assertEqual(
+            self.regular_user.account_status, User.AccountStatusChoices.SUSPENDED
+        )
+
+    def test_admin_reinstate_user_api(self) -> None:
+        self.regular_user.account_status = User.AccountStatusChoices.SUSPENDED
+        self.regular_user.save()
+
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.post(
+            reverse("api-admin-user-reinstate", args=[self.regular_user.pk]),
+            {"reason": "Resolved"},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data.get("account_status"), "active")
+
+        self.regular_user.refresh_from_db()
+        self.assertEqual(
+            self.regular_user.account_status, User.AccountStatusChoices.ACTIVE
+        )
+
+    def test_admin_reinstate_banned_user_rejected(self) -> None:
+        """Admin cannot reinstate a permanently banned user (BE-BUG-4004 / CP-1101)."""
+        self.regular_user.account_status = User.AccountStatusChoices.BANNED
+        self.regular_user.save()
+
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.post(
+            reverse("api-admin-user-reinstate", args=[self.regular_user.pk]),
+            {"reason": "Attempt reinstatement"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(
+            res.data.get("detail"),
+            "Permanently banned user accounts cannot be reinstated.",
+        )
+
+        self.regular_user.refresh_from_db()
+        self.assertEqual(
+            self.regular_user.account_status, User.AccountStatusChoices.BANNED
+        )
+
+    def test_admin_ban_user_api(self) -> None:
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.post(
+            reverse("api-admin-user-ban", args=[self.regular_user.pk]),
+            {"reason": "Permanent ban"},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data.get("account_status"), "banned")
+
+        self.regular_user.refresh_from_db()
+        self.assertEqual(
+            self.regular_user.account_status, User.AccountStatusChoices.BANNED
+        )
+
+    def test_admin_cannot_suspend_self_or_superuser(self) -> None:
+        self.client.force_authenticate(user=self.admin)
+        res_self = self.client.post(
+            reverse("api-admin-user-suspend", args=[self.admin.pk])
+        )
+        self.assertEqual(res_self.status_code, 400)
+
+        res_super = self.client.post(
+            reverse("api-admin-user-suspend", args=[self.superadmin.pk])
+        )
+        self.assertEqual(res_super.status_code, 400)
+
+    def test_suspended_or_banned_user_cannot_refresh_token(self) -> None:
+        """Suspended or banned users are rejected by the token refresh endpoint (CP-1101)."""
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        refresh_str = str(RefreshToken.for_user(self.regular_user))
+        self.regular_user.account_status = User.AccountStatusChoices.SUSPENDED
+        self.regular_user.save(update_fields=["account_status"])
+
+        res = self.client.post(
+            reverse("auth-token-refresh"),
+            {"refresh": refresh_str},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 401)
+
+    def test_admin_ban_deactivates_listings_and_cancels_pending_orders(self) -> None:
+        """Banning a user deactivates their active listings and cancels/declines pending requested orders."""
+        from datetime import date
+        from decimal import Decimal
+
+        from apps.listings.models import (
+            Listing,
+            ListingCategory,
+            ListingStatus,
+            PickupLocation,
+        )
+        from apps.orders.models import Order, OrderStatus
+
+        self.regular_user.lender_status = User.LenderStatusChoices.ACTIVE
+        self.regular_user.save(update_fields=["lender_status"])
+
+        cat, _ = ListingCategory.objects.get_or_create(name="Tools")
+        loc, _ = PickupLocation.objects.get_or_create(
+            name="Gym", defaults={"description": "Front"}
+        )
+        active_st, _ = ListingStatus.objects.get_or_create(name="active")
+        listing = Listing.objects.create(
+            lender=self.regular_user,
+            category=cat,
+            pickup_location=loc,
+            status=active_st,
+            title="Soldering Iron",
+            description="60W iron",
+            condition="good",
+            rate_per_day=Decimal("15.00"),
+            is_ownership_confirmed=True,
+        )
+
+        other_borrower = make_user(
+            "other-borrower-ban@iskolarngbayan.pup.edu.ph",
+            full_name="Other Borrower",
+        )
+        req_status, _ = OrderStatus.objects.get_or_create(name="requested")
+        pending_order = Order.objects.create(
+            listing=listing,
+            borrower=other_borrower,
+            start_date=date(2026, 11, 20),
+            end_date=date(2026, 11, 22),
+            status=req_status,
+        )
+
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.post(
+            reverse("api-admin-user-ban", args=[self.regular_user.pk]),
+            {"reason": "Fraudulent activity"},
+        )
+        self.assertEqual(res.status_code, 200)
+
+        listing.refresh_from_db()
+        self.assertEqual(listing.status.name, "deactivated")
+
+        pending_order.refresh_from_db()
+        self.assertEqual(pending_order.status.name, "declined")
+
+    def test_admin_search_flagged_filter_and_reinstate_clears_flags(self) -> None:
+        """Admin search filters by flagged state and reinstate clears moderation flags."""
+        self.regular_user.is_flagged = True
+        self.regular_user.is_flag_confirmed = True
+        self.regular_user.account_status = User.AccountStatusChoices.SUSPENDED
+        self.regular_user.save()
+
+        self.client.force_authenticate(user=self.admin)
+        flagged_res = self.client.get(
+            reverse("api-admin-user-list") + "?flagged=confirmed"
+        )
+        self.assertEqual(flagged_res.status_code, 200)
+        results = flagged_res.data.get("results", flagged_res.data)
+        self.assertTrue(any(u["id"] == self.regular_user.id for u in results))
+
+        reinstate_res = self.client.post(
+            reverse("api-admin-user-reinstate", args=[self.regular_user.pk]),
+            {"reason": "Cleared and reinstated"},
+        )
+        self.assertEqual(reinstate_res.status_code, 200)
+        self.assertFalse(reinstate_res.data["is_flagged"])
+        self.assertFalse(reinstate_res.data["is_flag_confirmed"])

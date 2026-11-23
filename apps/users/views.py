@@ -16,9 +16,12 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from apps.audit.services import log_admin_document_access
 
 from .encryption import decrypt_document_data, detect_document_content_type
-from .models import IdentityDocument, User
-from .selectors import get_lender_profile, search_lenders
+from .models import IdentityDocument, LenderRevocation, User
+from .selectors import get_lender_profile, search_admin_users, search_lenders
 from .serializers import (
+    AdminLenderRevocationSerializer,
+    AdminUserActionSerializer,
+    AdminUserListSerializer,
     DeactivateAccountSerializer,
     EmailChangeConfirmSerializer,
     EmailChangeSerializer,
@@ -45,16 +48,22 @@ from .services import (
     LenderApplicationError,
     apply_for_lender_role,
     apply_new_password,
+    ban_user,
     confirm_email_change,
+    confirm_user_flag,
     deactivate_account,
     deactivation_blockers,
+    dismiss_user_flag,
     password_reset_token_generator,
     register_user,
+    reinstate_user,
     request_password_reset,
     resend_email_verification,
     review_identity_document,
+    revoke_lender_role,
     send_email_change,
     send_email_verification,
+    suspend_user,
     verify_user_email,
 )
 
@@ -240,7 +249,7 @@ class ApplyLenderView(APIView):
 
     def post(self, request: Request) -> Response:
         try:
-            apply_for_lender_role(request.user)
+            user = apply_for_lender_role(request.user)
         except LenderApplicationError as exc:
             return Response(
                 {"detail": exc.message},
@@ -250,8 +259,43 @@ class ApplyLenderView(APIView):
         return Response(
             {
                 "message": "Your lender application was approved. You can now list items.",
-                "user": UserResponseSerializer(request.user).data,
+                "user": UserResponseSerializer(user).data,
             },
+            status=status.HTTP_200_OK,
+        )
+
+
+class SelfRevokeLenderView(APIView):
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request: Request) -> Response:
+        result = revoke_lender_role(
+            user=request.user, actor=request.user, source=LenderRevocation.Source.SELF
+        )
+        request.user.refresh_from_db()
+        return Response(
+            {"user": UserResponseSerializer(request.user).data, **result},
+            status=status.HTTP_200_OK,
+        )
+
+
+class AdminRevokeLenderView(APIView):
+    authentication_classes = (JWTAuthentication, SessionAuthentication)
+    permission_classes = (permissions.IsAdminUser,)
+
+    def post(self, request: Request, pk: int) -> Response:
+        user = get_object_or_404(User, pk=pk)
+        serializer = AdminLenderRevocationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        result = revoke_lender_role(
+            user=user,
+            actor=request.user,
+            source=LenderRevocation.Source.ADMIN,
+            **serializer.validated_data,
+        )
+        user.refresh_from_db()
+        return Response(
+            {"user": UserResponseSerializer(user).data, **result},
             status=status.HTTP_200_OK,
         )
 
@@ -471,6 +515,7 @@ class DeactivateAccountView(APIView):
             # should stay JSON numbers the client can render directly.
             return Response(
                 {
+                    "code": "has_unsettled_orders",
                     "detail": (
                         "Your account cannot be deactivated while you have "
                         "open orders or unresolved unreturned-item cases. "
@@ -747,3 +792,148 @@ class LenderProfileView(APIView):
 
         serializer = LenderProfileSerializer(lender, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class AdminUserListView(generics.ListAPIView):
+    """
+    Search and filter users for admin moderation (CP-1101).
+    GET /api/v1/admin/users/
+    """
+
+    authentication_classes = (JWTAuthentication, SessionAuthentication)
+    permission_classes = (permissions.IsAdminUser,)
+    serializer_class = AdminUserListSerializer
+
+    def get_queryset(self):
+        q = self.request.query_params.get("q")
+        account_status = self.request.query_params.get("account_status")
+        affiliation = self.request.query_params.get("affiliation")
+        lender_status = self.request.query_params.get("lender_status")
+        flagged = self.request.query_params.get("flagged")
+        return search_admin_users(
+            q=q,
+            account_status=account_status,
+            affiliation=affiliation,
+            lender_status=lender_status,
+            flagged=flagged,
+        )
+
+
+class AdminSuspendUserView(APIView):
+    """
+    Suspend a user account (CP-1101, TC-103).
+    POST /api/v1/admin/users/<int:pk>/suspend/
+    """
+
+    authentication_classes = (JWTAuthentication, SessionAuthentication)
+    permission_classes = (permissions.IsAdminUser,)
+
+    def post(self, request: Request, pk: int) -> Response:
+        user = get_object_or_404(User, pk=pk)
+        serializer = AdminUserActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        updated_user = suspend_user(
+            user=user,
+            actor=request.user,
+            reason=serializer.validated_data.get("reason", ""),
+        )
+        return Response(
+            AdminUserListSerializer(updated_user, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
+
+
+class AdminReinstateUserView(APIView):
+    """
+    Reinstate a suspended user account (CP-1101, TC-104).
+    POST /api/v1/admin/users/<int:pk>/reinstate/
+    """
+
+    authentication_classes = (JWTAuthentication, SessionAuthentication)
+    permission_classes = (permissions.IsAdminUser,)
+
+    def post(self, request: Request, pk: int) -> Response:
+        user = get_object_or_404(User, pk=pk)
+        serializer = AdminUserActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        updated_user = reinstate_user(
+            user=user,
+            actor=request.user,
+            reason=serializer.validated_data.get("reason", ""),
+        )
+        return Response(
+            AdminUserListSerializer(updated_user, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
+
+
+class AdminBanUserView(APIView):
+    """
+    Ban a user account (CP-1101, TC-105).
+    POST /api/v1/admin/users/<int:pk>/ban/
+    """
+
+    authentication_classes = (JWTAuthentication, SessionAuthentication)
+    permission_classes = (permissions.IsAdminUser,)
+
+    def post(self, request: Request, pk: int) -> Response:
+        user = get_object_or_404(User, pk=pk)
+        serializer = AdminUserActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        updated_user = ban_user(
+            user=user,
+            actor=request.user,
+            reason=serializer.validated_data.get("reason", ""),
+        )
+        return Response(
+            AdminUserListSerializer(updated_user, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
+
+
+class AdminConfirmUserFlagView(APIView):
+    """
+    Confirm an auto-flagged user's moderation flag (CP-902).
+    POST /api/v1/admin/users/<int:pk>/confirm-flag/
+    """
+
+    authentication_classes = (JWTAuthentication, SessionAuthentication)
+    permission_classes = (permissions.IsAdminUser,)
+
+    def post(self, request: Request, pk: int) -> Response:
+        user = get_object_or_404(User, pk=pk)
+        serializer = AdminUserActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        updated_user = confirm_user_flag(
+            user=user,
+            actor=request.user,
+            reason=serializer.validated_data.get("reason", ""),
+        )
+        return Response(
+            AdminUserListSerializer(updated_user, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
+
+
+class AdminDismissUserFlagView(APIView):
+    """
+    Dismiss/clear a user's moderation flag (CP-902).
+    POST /api/v1/admin/users/<int:pk>/dismiss-flag/
+    """
+
+    authentication_classes = (JWTAuthentication, SessionAuthentication)
+    permission_classes = (permissions.IsAdminUser,)
+
+    def post(self, request: Request, pk: int) -> Response:
+        user = get_object_or_404(User, pk=pk)
+        serializer = AdminUserActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        updated_user = dismiss_user_flag(
+            user=user,
+            actor=request.user,
+            reason=serializer.validated_data.get("reason", ""),
+        )
+        return Response(
+            AdminUserListSerializer(updated_user, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )

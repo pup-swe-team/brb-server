@@ -23,8 +23,9 @@ from django.contrib import messages
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.forms import AuthenticationForm
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.paginator import Paginator
-from django.db.models import Count, Min
+from django.db.models import Count, Min, Q
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -40,6 +41,7 @@ from apps.reports.models import (
     ReviewReport,
     UserReport,
 )
+from apps.reviews.models import Review
 
 from .constants import (
     IDENTITY_DOCUMENT_STATUS_PENDING,
@@ -47,7 +49,7 @@ from .constants import (
     PUP_ID_NUMBER_REGEX,
 )
 from .encryption import decrypt_document_data, detect_document_content_type
-from .models import IdentityDocument, IdentityDocumentStatus, User
+from .models import IdentityDocument, IdentityDocumentStatus, LenderRevocation, User
 from .services import review_identity_document
 
 # Display labels for the two accepted document types (CP-105 lookup rows).
@@ -95,13 +97,15 @@ def format_user_address(user: User) -> str:
 
 
 def day_or_time_label(timestamp) -> str:
-    """'h:mm AM/PM' for today, 'Jan. 30' otherwise -- mirrors the design."""
+    """Format timestamp using local timezone (Asia/Manila / UTC+8)."""
+    if not timestamp:
+        return ""
     local = timezone.localtime(timestamp)
+    hour = local.hour % 12 or 12
+    ampm = "AM" if local.hour < 12 else "PM"
     if local.date() == timezone.localdate():
-        hour = local.hour % 12 or 12
-        ampm = "AM" if local.hour < 12 else "PM"
-        return f"{hour}:{local.minute:02d} {ampm}"
-    return DateFormat(local).format("M. j, Y")
+        return f"Today, {hour}:{local.minute:02d} {ampm}"
+    return f"{DateFormat(local).format('M. j, Y')}, {hour}:{local.minute:02d} {ampm}"
 
 
 def staff_login_required(view):
@@ -199,6 +203,12 @@ def _recent_activity() -> list[dict[str, str]]:
     return [
         {
             "time": day_or_time_label(stamp),
+            "iso_time": timezone.localtime(stamp).isoformat() if stamp else "",
+            "full_time": (
+                timezone.localtime(stamp).strftime("%b. %d, %Y, %I:%M %p")
+                if stamp
+                else ""
+            ),
             "kind": kind,
             "title": title,
             "detail": detail,
@@ -298,6 +308,7 @@ def dashboard(request):
         "stats": stats,
         "orders_by_status_rows": order_rows,
         "activity": _recent_activity(),
+        "current_time": timezone.localtime(timezone.now()),
         "nav_verification_count": stats["pending_verifications"],
         "nav_reports_count": stats["open_reports"],
     }
@@ -799,3 +810,543 @@ def listing_category_delete(request, pk: int):
     category.delete()
     messages.success(request, f"Category “{name}” removed.")
     return redirect(reverse("portal-listing-categories"))
+
+
+# --- Listings & Reviews Moderation (CP-1110 / CP-1102) ---
+
+
+@staff_login_required
+def listings_reviews(request):
+    """
+    Moderation workspace for listings and reviews (CP-1110, mirroring CP-1102).
+    Allows staff to browse, search, and remove rule-violating listings and reviews.
+    """
+    tab = request.GET.get("tab", "listings").strip().lower()
+    if tab not in ("listings", "reviews"):
+        tab = "listings"
+
+    query = request.GET.get("q", "").strip()
+    filter_status = request.GET.get("status", "all").strip().lower()
+
+    active_status = ListingStatus.objects.filter(name="active").first()
+    deleted_status = ListingStatus.objects.filter(name="deleted").first()
+
+    total_listings = Listing.objects.count()
+    active_listings_count = (
+        Listing.objects.filter(status=active_status).count() if active_status else 0
+    )
+    total_reviews = Review.objects.count()
+    active_reviews_count = Review.objects.filter(deleted_at__isnull=True).count()
+
+    if tab == "listings":
+        listings_qs = Listing.objects.select_related(
+            "lender", "category", "status"
+        ).order_by("-created_at", "-id")
+        if filter_status == "active" and active_status:
+            listings_qs = listings_qs.filter(status=active_status)
+        elif filter_status == "deleted" and deleted_status:
+            listings_qs = listings_qs.filter(status=deleted_status)
+        elif filter_status == "deactivated":
+            listings_qs = listings_qs.filter(status__name="deactivated")
+
+        if query:
+            listings_qs = listings_qs.filter(
+                Q(title__icontains=query)
+                | Q(description__icontains=query)
+                | Q(lender__full_name__icontains=query)
+                | Q(lender__email__icontains=query)
+            )
+
+        paginator = Paginator(listings_qs, 20)
+        page_num = request.GET.get("page", 1)
+        page = paginator.get_page(page_num)
+    else:
+        reviews_qs = Review.objects.select_related(
+            "reviewer", "order", "order__borrower", "order__listing__lender"
+        ).order_by("-created_at", "-id")
+        if filter_status == "active":
+            reviews_qs = reviews_qs.filter(deleted_at__isnull=True)
+        elif filter_status == "deleted":
+            reviews_qs = reviews_qs.filter(deleted_at__isnull=False)
+
+        if query:
+            reviews_qs = reviews_qs.filter(
+                Q(comment__icontains=query)
+                | Q(reviewer__full_name__icontains=query)
+                | Q(reviewer__email__icontains=query)
+            )
+
+        paginator = Paginator(reviews_qs, 20)
+        page_num = request.GET.get("page", 1)
+        page = paginator.get_page(page_num)
+
+    context = {
+        "page_title": "Listings & Reviews Moderation",
+        "active_nav": "listings_reviews",
+        "tab": tab,
+        "query": query,
+        "filter_status": filter_status,
+        "page": page,
+        "paginator": paginator,
+        "start_index": page.start_index() or 0,
+        "end_index": page.end_index() or paginator.count,
+        "total_listings": total_listings,
+        "active_listings_count": active_listings_count,
+        "total_reviews": total_reviews,
+        "active_reviews_count": active_reviews_count,
+        "nav_verification_count": _identity_document_tab_counts()["pending"],
+        "nav_reports_count": _open_reports_count(),
+    }
+    return render(request, "admin_portal/listings_reviews.html", context)
+
+
+@require_POST
+@staff_login_required
+def listing_remove(request, pk: int):
+    """Admin removes a listing from the portal (CP-1110 / CP-1102)."""
+    listing = get_object_or_404(Listing, pk=pk)
+    from apps.listings.services import admin_remove_listing
+
+    admin_remove_listing(listing_id=pk)
+    messages.success(request, f"Listing “{listing.title}” has been removed.")
+    return redirect(f"{reverse('portal-listings-reviews')}?tab=listings")
+
+
+@require_POST
+@staff_login_required
+def review_remove(request, pk: int):
+    """Admin removes a review from the portal (CP-1110 / CP-1102)."""
+    review = get_object_or_404(Review, pk=pk)
+    from apps.reviews.services import admin_remove_review
+
+    admin_remove_review(review_id=review.pk)
+    messages.success(request, f"Review #{review.pk} has been removed.")
+    return redirect(f"{reverse('portal-listings-reviews')}?tab=reviews")
+
+
+@staff_login_required
+def users_roles(request):
+    """
+    Search and moderate users and their roles (CP-1109 / CP-1101).
+    """
+    from apps.users.selectors import search_admin_users
+
+    query = request.GET.get("q", "").strip()
+    filter_status = request.GET.get("status", "all")
+    filter_role = request.GET.get("role", "all")
+    filter_lender = request.GET.get("lender", "all")
+
+    users_qs = search_admin_users(
+        q=query if query else None,
+        account_status=filter_status if filter_status != "all" else None,
+        affiliation=filter_role if filter_role != "all" else None,
+        lender_status=filter_lender if filter_lender != "all" else None,
+    )
+
+    total_users = User.objects.count()
+    active_users_count = User.objects.filter(
+        account_status=User.AccountStatusChoices.ACTIVE
+    ).count()
+    suspended_users_count = User.objects.filter(
+        account_status=User.AccountStatusChoices.SUSPENDED
+    ).count()
+    banned_users_count = User.objects.filter(
+        account_status=User.AccountStatusChoices.BANNED
+    ).count()
+    active_lenders_count = User.objects.filter(
+        lender_status=User.LenderStatusChoices.ACTIVE
+    ).count()
+
+    paginator = Paginator(users_qs, 20)
+    page_num = request.GET.get("page", 1)
+    page = paginator.get_page(page_num)
+
+    context = {
+        "page_title": "Users & Roles Moderation",
+        "active_nav": "users_roles",
+        "query": query,
+        "filter_status": filter_status,
+        "filter_role": filter_role,
+        "filter_lender": filter_lender,
+        "page": page,
+        "paginator": paginator,
+        "start_index": page.start_index() or 0,
+        "end_index": page.end_index() or paginator.count,
+        "total_users": total_users,
+        "active_users_count": active_users_count,
+        "suspended_users_count": suspended_users_count,
+        "banned_users_count": banned_users_count,
+        "active_lenders_count": active_lenders_count,
+        "nav_verification_count": _identity_document_tab_counts()["pending"],
+        "nav_reports_count": _open_reports_count(),
+        "revocation_reasons": LenderRevocation.Reason.choices,
+    }
+    return render(request, "admin_portal/users_roles.html", context)
+
+
+@require_POST
+@staff_login_required
+def user_suspend(request, pk: int):
+    """Admin suspends a user from the portal (CP-1109 / CP-1101 / TC-103)."""
+    user = get_object_or_404(User, pk=pk)
+    reason = request.POST.get("reason", "").strip()
+
+    if user.pk == request.user.pk:
+        messages.error(request, "You cannot suspend your own account.")
+    elif user.is_superuser:
+        messages.error(request, "Superuser accounts cannot be suspended.")
+    else:
+        from apps.users.services import suspend_user
+
+        suspend_user(user=user, actor=request.user, reason=reason)
+        messages.success(
+            request, f"User “{user.full_name or user.email}” has been suspended."
+        )
+    return redirect(reverse("portal-users"))
+
+
+@require_POST
+@staff_login_required
+def user_reinstate(request, pk: int):
+    """Admin reinstates a suspended user from the portal (CP-1109 / CP-1101 / TC-104)."""
+    user = get_object_or_404(User, pk=pk)
+    reason = request.POST.get("reason", "").strip()
+
+    from rest_framework.exceptions import ValidationError
+
+    from apps.users.services import reinstate_user
+
+    try:
+        reinstate_user(user=user, actor=request.user, reason=reason)
+        messages.success(
+            request, f"User “{user.full_name or user.email}” has been reinstated."
+        )
+    except ValidationError as exc:
+        msg = (
+            exc.detail.get("detail", str(exc))
+            if isinstance(exc.detail, dict)
+            else str(exc.detail)
+        )
+        messages.error(request, msg)
+    return redirect(reverse("portal-users"))
+
+
+@require_POST
+@staff_login_required
+def user_ban(request, pk: int):
+    """Admin permanently bans a user from the portal (CP-1109 / CP-1101 / TC-105)."""
+    user = get_object_or_404(User, pk=pk)
+    reason = request.POST.get("reason", "").strip()
+
+    if user.pk == request.user.pk:
+        messages.error(request, "You cannot ban your own account.")
+    elif user.is_superuser:
+        messages.error(request, "Superuser accounts cannot be banned.")
+    else:
+        from apps.users.services import ban_user
+
+        ban_user(user=user, actor=request.user, reason=reason)
+        messages.success(
+            request,
+            f"User “{user.full_name or user.email}” has been permanently banned.",
+        )
+    return redirect(reverse("portal-users"))
+
+
+@require_POST
+@staff_login_required
+def user_revoke_lender(request, pk: int):
+    """Admin revokes lender role for a user from the portal (CP-1109 / CP-206)."""
+    user = get_object_or_404(User, pk=pk)
+    reason = request.POST.get("reason", "").strip() or LenderRevocation.Reason.POLICY
+    detail = request.POST.get("detail", "").strip()
+
+    from apps.users.services import revoke_lender_role
+
+    try:
+        revoke_lender_role(
+            user=user,
+            actor=request.user,
+            source=LenderRevocation.Source.ADMIN,
+            reason=reason,
+            detail=detail,
+        )
+        messages.success(
+            request, f"Lender status revoked for “{user.full_name or user.email}”."
+        )
+    except (ValidationError, PermissionDenied, Exception) as exc:  # noqa: BLE001
+        messages.error(request, f"Could not revoke lender role: {exc}")
+    return redirect(reverse("portal-users"))
+
+
+@require_POST
+@staff_login_required
+def user_confirm_flag(request, pk: int):
+    """Admin confirms an auto-flagged user's moderation flag from the portal (CP-902)."""
+    user = get_object_or_404(User, pk=pk)
+    reason = request.POST.get("reason", "").strip()
+
+    if user.pk == request.user.pk:
+        messages.error(request, "You cannot flag your own account.")
+    elif user.is_superuser:
+        messages.error(request, "Superuser accounts cannot be flagged.")
+    else:
+        from apps.users.services import confirm_user_flag
+
+        confirm_user_flag(user=user, actor=request.user, reason=reason)
+        messages.success(
+            request,
+            f"Moderation flag confirmed for “{user.full_name or user.email}”. Listing and borrow creation restricted.",
+        )
+    next_url = request.POST.get("next") or reverse("portal-users")
+    return redirect(next_url)
+
+
+@require_POST
+@staff_login_required
+def user_dismiss_flag(request, pk: int):
+    """Admin dismisses/clears a user's moderation flag from the portal (CP-902)."""
+    user = get_object_or_404(User, pk=pk)
+    reason = request.POST.get("reason", "").strip()
+
+    from apps.users.services import dismiss_user_flag
+
+    dismiss_user_flag(user=user, actor=request.user, reason=reason)
+    messages.success(
+        request,
+        f"Moderation flag dismissed for “{user.full_name or user.email}”.",
+    )
+    next_url = request.POST.get("next") or reverse("portal-users")
+    return redirect(next_url)
+
+
+@require_POST
+@staff_login_required
+def user_clear_lender_hold(request, pk: int):
+    """Admin clears lender reapplication hold for a revoked user from the portal (CP-206 / CP-1109)."""
+    user = get_object_or_404(User, pk=pk)
+    from apps.users.services import clear_lender_reapplication_hold
+
+    try:
+        if clear_lender_reapplication_hold(user=user, actor=request.user):
+            messages.success(
+                request,
+                f"Lender application hold cleared for “{user.full_name or user.email}”. They can now reapply as a Lender.",
+            )
+        else:
+            messages.error(
+                request,
+                f"Could not clear hold for “{user.full_name or user.email}” (user not on reapplication hold).",
+            )
+    except Exception as exc:  # noqa: BLE001
+        messages.error(request, f"Could not clear lender hold: {exc}")
+    return redirect(reverse("portal-users"))
+
+
+@staff_login_required
+def reports_queue(request):
+    """
+    Review queue for submitted reports (CP-1111 / CP-1103 / TC-109).
+    Lists open and resolved reports for Users, Listings, Reviews, and Messages.
+    """
+    tab = request.GET.get("type", "all").strip().lower()
+    status_filter = request.GET.get("status", "open").strip().lower()
+
+    items = []
+
+    # 1. User Reports
+    if tab in ("all", "user"):
+        qs = UserReport.objects.select_related(
+            "reporter", "target_user", "category"
+        ).order_by("-created_at")
+        if status_filter != "all":
+            qs = qs.filter(status=status_filter)
+        for r in qs[:100]:
+            items.append(
+                {
+                    "id": r.pk,
+                    "type": "user",
+                    "type_label": "User Report",
+                    "reporter": r.reporter,
+                    "target_display": r.target_user.full_name or r.target_user.email,
+                    "target_meta": f"Target User ID #{r.target_user.pk}",
+                    "category": r.category.name if r.category else "Uncategorized",
+                    "description": r.description,
+                    "status": r.status,
+                    "created_at": r.created_at,
+                }
+            )
+
+    # 2. Listing Reports
+    if tab in ("all", "listing"):
+        qs = ListingReport.objects.select_related(
+            "reporter", "target_listing", "target_listing__lender", "category"
+        ).order_by("-created_at")
+        if status_filter != "all":
+            qs = qs.filter(status=status_filter)
+        for r in qs[:100]:
+            items.append(
+                {
+                    "id": r.pk,
+                    "type": "listing",
+                    "type_label": "Listing Report",
+                    "reporter": r.reporter,
+                    "target_display": r.target_listing.title,
+                    "target_meta": f"Listing #{r.target_listing.pk} · Lender: {r.target_listing.lender.full_name or r.target_listing.lender.email}",
+                    "category": r.category.name if r.category else "Uncategorized",
+                    "description": r.description,
+                    "status": r.status,
+                    "created_at": r.created_at,
+                }
+            )
+
+    # 3. Review Reports
+    if tab in ("all", "review"):
+        qs = ReviewReport.objects.select_related(
+            "reporter", "target_review", "target_review__reviewer", "category"
+        ).order_by("-created_at")
+        if status_filter != "all":
+            qs = qs.filter(status=status_filter)
+        for r in qs[:100]:
+            items.append(
+                {
+                    "id": r.pk,
+                    "type": "review",
+                    "type_label": "Review Report",
+                    "reporter": r.reporter,
+                    "target_display": f"Review #{r.target_review.pk} ({r.target_review.rating}★)",
+                    "target_meta": f"Reviewer: {r.target_review.reviewer.full_name or r.target_review.reviewer.email}",
+                    "category": r.category.name if r.category else "Uncategorized",
+                    "description": r.description,
+                    "status": r.status,
+                    "created_at": r.created_at,
+                }
+            )
+
+    # 4. Message Reports
+    if tab in ("all", "message"):
+        qs = MessageReport.objects.select_related(
+            "reporter", "target_message", "target_message__sender", "category"
+        ).order_by("-created_at")
+        if status_filter != "all":
+            qs = qs.filter(status=status_filter)
+        for r in qs[:100]:
+            snippet = (
+                r.target_message.content[:40] + "..."
+                if len(r.target_message.content) > 40
+                else r.target_message.content
+            )
+            items.append(
+                {
+                    "id": r.pk,
+                    "type": "message",
+                    "type_label": "Message Report",
+                    "reporter": r.reporter,
+                    "target_display": f"“{snippet}”",
+                    "target_meta": f"Sender: {r.target_message.sender.full_name or r.target_message.sender.email}",
+                    "category": r.category.name if r.category else "Uncategorized",
+                    "description": r.description,
+                    "status": r.status,
+                    "created_at": r.created_at,
+                }
+            )
+
+    # 5. Flagged User Accounts (CP-902 / TC-103)
+    flagged_users_qs = User.objects.filter(
+        Q(is_flagged=True) | Q(account_status=User.AccountStatusChoices.PENDING_REVIEW)
+    ).order_by("-flagged_at", "-updated_at")
+    flagged_users_count = flagged_users_qs.count()
+
+    if tab in ("all", "flagged"):
+        for u in flagged_users_qs[:50]:
+            if status_filter == "open" and u.is_flag_confirmed:
+                continue
+            if status_filter == "resolved" and not u.is_flag_confirmed:
+                continue
+            items.append(
+                {
+                    "id": u.pk,
+                    "type": "flagged_user",
+                    "type_label": "Flagged User",
+                    "reporter": u.flag_confirmed_by,
+                    "reporter_name": (
+                        "Automated (30-day threshold)"
+                        if (u.is_flagged and not u.flag_confirmed_by)
+                        else (
+                            u.flag_confirmed_by.full_name
+                            if u.flag_confirmed_by
+                            else "System"
+                        )
+                    ),
+                    "target_display": u.full_name or u.email,
+                    "target_meta": f"User ID #{u.pk} · {u.get_account_status_display()}",
+                    "category": (
+                        "Auto-Flagged (CP-902)" if u.is_flagged else "Pending Review"
+                    ),
+                    "description": (
+                        f"Account flagged for administrative review on {u.flagged_at.strftime('%b. %d, %Y') if u.flagged_at else 'recently'}. Action required."
+                    ),
+                    "status": "open" if not u.is_flag_confirmed else "resolved",
+                    "created_at": u.flagged_at or u.updated_at,
+                    "is_flagged_user": True,
+                    "user_pk": u.pk,
+                    "is_flag_confirmed": u.is_flag_confirmed,
+                }
+            )
+
+    items.sort(key=lambda x: x["created_at"], reverse=True)
+
+    user_open_count = UserReport.objects.filter(status="open").count()
+    listing_open_count = ListingReport.objects.filter(status="open").count()
+    review_open_count = ReviewReport.objects.filter(status="open").count()
+    message_open_count = MessageReport.objects.filter(status="open").count()
+    total_open_count = (
+        user_open_count
+        + listing_open_count
+        + review_open_count
+        + message_open_count
+        + flagged_users_count
+    )
+
+    context = {
+        "page_title": "Reports & Flags",
+        "active_nav": "reports",
+        "tab": tab,
+        "status_filter": status_filter,
+        "items": items,
+        "flagged_users_count": flagged_users_count,
+        "user_open_count": user_open_count,
+        "listing_open_count": listing_open_count,
+        "review_open_count": review_open_count,
+        "message_open_count": message_open_count,
+        "total_open_count": total_open_count,
+        "nav_verification_count": _identity_document_tab_counts()["pending"],
+        "nav_reports_count": total_open_count,
+    }
+    return render(request, "admin_portal/reports.html", context)
+
+
+@require_POST
+@staff_login_required
+def report_resolve(request, report_type: str, pk: int):
+    """Admin marks a report as resolved (CP-1111 / CP-1103 / TC-109)."""
+    model_map = {
+        "user": UserReport,
+        "listing": ListingReport,
+        "review": ReviewReport,
+        "message": MessageReport,
+    }
+    model = model_map.get(report_type.lower())
+    if not model:
+        messages.error(request, "Invalid report type.")
+        return redirect(reverse("portal-reports-queue"))
+
+    report = get_object_or_404(model, pk=pk)
+    report.status = "resolved"
+    report.save(update_fields=["status"])
+    messages.success(
+        request, f"{report_type.title()} Report #{pk} has been marked as Resolved."
+    )
+    return redirect(
+        reverse("portal-reports-queue") + f"?type={report_type}&status=open"
+    )

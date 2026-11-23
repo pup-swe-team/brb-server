@@ -1,5 +1,8 @@
 from django.urls import path
 
+from apps.notifications.views import NotificationPreferencesView
+
+from .dashboards import BorrowerDashboardView, LenderDashboardView
 from .views import (
     ApplyLenderView,
     DeactivateAccountView,
@@ -16,6 +19,7 @@ from .views import (
     RefreshView,
     RegisterView,
     ResendVerificationView,
+    SelfRevokeLenderView,
 )
 
 urlpatterns = [
@@ -30,6 +34,7 @@ urlpatterns = [
     path("me/", MeView.as_view(), name="auth-me"),
     # CP-1003 -- apply for the Lender role.
     path("apply-lender/", ApplyLenderView.as_view(), name="auth-apply-lender"),
+    path("revoke-lender/", SelfRevokeLenderView.as_view(), name="auth-revoke-lender"),
     path("token/refresh/", RefreshView.as_view(), name="auth-token-refresh"),
     path("logout/", LogoutView.as_view(), name="auth-logout"),
     # CP-104 -- password recovery.
@@ -65,10 +70,41 @@ urlpatterns = [
         EmailChangeConfirmView.as_view(),
         name="auth-email-change-confirm",
     ),
+    path(
+        "change-email/",
+        EmailChangeView.as_view(),
+        name="auth-change-email",
+    ),
+    path(
+        "change-email/confirm/",
+        EmailChangeConfirmView.as_view(),
+        name="auth-change-email-confirm",
+    ),
     # CP-1004 -- self-service account closure.
     path(
         "deactivate/",
         DeactivateAccountView.as_view(),
         name="auth-deactivate",
     ),
+    # CP-801/802 -- notification preferences
+    path(
+        "notification-preferences/",
+        NotificationPreferencesView.as_view(),
+        name="auth-notification-preferences",
+    ),
+    # CP-201/203/204 -- dashboards
+    path(
+        "dashboard/borrower/",
+        BorrowerDashboardView.as_view(),
+        name="auth-dashboard-borrower",
+    ),
+    path(
+        "dashboard/lender/", LenderDashboardView.as_view(), name="auth-dashboard-lender"
+    ),
+    path(
+        "borrower/dashboard/",
+        BorrowerDashboardView.as_view(),
+        name="borrower-dashboard",
+    ),
+    path("lender/dashboard/", LenderDashboardView.as_view(), name="lender-dashboard"),
 ]

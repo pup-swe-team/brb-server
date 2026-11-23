@@ -62,4 +62,72 @@ urlpatterns = [
         portal.listing_category_delete,
         name="portal-listing-category-delete",
     ),
+    # Listings & reviews moderation (CP-1110, mirror of CP-1102).
+    path(
+        "listings-reviews/",
+        portal.listings_reviews,
+        name="portal-listings-reviews",
+    ),
+    path(
+        "listings/<int:pk>/remove/",
+        portal.listing_remove,
+        name="portal-listing-remove",
+    ),
+    path(
+        "reviews/<int:pk>/remove/",
+        portal.review_remove,
+        name="portal-review-remove",
+    ),
+    # Users & roles moderation (CP-1109, mirror of CP-1101).
+    path(
+        "users/",
+        portal.users_roles,
+        name="portal-users",
+    ),
+    path(
+        "users/<int:pk>/suspend/",
+        portal.user_suspend,
+        name="portal-user-suspend",
+    ),
+    path(
+        "users/<int:pk>/reinstate/",
+        portal.user_reinstate,
+        name="portal-user-reinstate",
+    ),
+    path(
+        "users/<int:pk>/ban/",
+        portal.user_ban,
+        name="portal-user-ban",
+    ),
+    path(
+        "users/<int:pk>/revoke-lender/",
+        portal.user_revoke_lender,
+        name="portal-user-revoke-lender",
+    ),
+    path(
+        "users/<int:pk>/clear-lender-hold/",
+        portal.user_clear_lender_hold,
+        name="portal-user-clear-lender-hold",
+    ),
+    path(
+        "users/<int:pk>/confirm-flag/",
+        portal.user_confirm_flag,
+        name="portal-user-confirm-flag",
+    ),
+    path(
+        "users/<int:pk>/dismiss-flag/",
+        portal.user_dismiss_flag,
+        name="portal-user-dismiss-flag",
+    ),
+    # Reports & flags moderation (CP-1111 / CP-1103 / TC-109).
+    path(
+        "reports/",
+        portal.reports_queue,
+        name="portal-reports-queue",
+    ),
+    path(
+        "reports/<str:report_type>/<int:pk>/resolve/",
+        portal.report_resolve,
+        name="portal-report-resolve",
+    ),
 ]

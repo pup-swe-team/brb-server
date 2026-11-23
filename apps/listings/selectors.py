@@ -58,6 +58,7 @@ def search_listings(
     min_price: Decimal | None = None,
     max_price: Decimal | None = None,
     free_only: bool = False,
+    min_rating: float | None = None,
     available_from: date | None = None,
     available_to: date | None = None,
     sort: str | None = None,
@@ -69,6 +70,7 @@ def search_listings(
     - Excludes deactivated, deleted, or non-active listings
     - Excludes listings from suspended, banned, or inactive user accounts
     - Excludes listings from revoked lenders
+    - Excludes listings involved in active unreturned orders (FE-BUG-4008)
     """
     qs = (
         Listing.objects.filter(
@@ -76,6 +78,7 @@ def search_listings(
             lender__account_status=User.AccountStatusChoices.ACTIVE,
             lender__lender_status=User.LenderStatusChoices.ACTIVE,
         )
+        .exclude(orders__status__name="unreturned")
         .select_related(
             "lender",
             "category",
@@ -85,6 +88,23 @@ def search_listings(
         .prefetch_related(
             "photos",
         )
+        .annotate(
+            product_rating_avg=Avg(
+                "orders__reviews__rating",
+                filter=Q(
+                    orders__reviews__deleted_at__isnull=True,
+                    orders__reviews__reviewer=F("orders__borrower"),
+                ),
+            ),
+            product_review_count=Count(
+                "orders__reviews__id",
+                filter=Q(
+                    orders__reviews__deleted_at__isnull=True,
+                    orders__reviews__reviewer=F("orders__borrower"),
+                ),
+                distinct=True,
+            ),
+        )
     )
 
     if q:
@@ -93,6 +113,17 @@ def search_listings(
             qs = qs.filter(
                 Q(title__icontains=cleaned_q) | Q(description__icontains=cleaned_q)
             )
+
+    if min_rating is not None:
+        qs = qs.annotate(
+            lender_avg_rating=Avg(
+                "lender__listings__orders__reviews__rating",
+                filter=Q(
+                    lender__listings__orders__reviews__deleted_at__isnull=True,
+                )
+                & ~Q(lender__listings__orders__reviews__reviewer=F("lender_id")),
+            )
+        ).filter(lender_avg_rating__gte=min_rating)
 
     if category is not None:
         qs = qs.filter(category_id=category)
@@ -119,19 +150,40 @@ def search_listings(
             start_date__lte=available_to,
             end_date__gte=available_from,
         ).values_list("listing_id", flat=True)
-        qs = qs.exclude(id__in=blocked_listing_ids)
+        from apps.orders.models import Order
+
+        booked_listing_ids = Order.objects.filter(
+            status__name__in=("confirmed", "active", "overdue"),
+            start_date__lte=available_to,
+            end_date__gte=available_from,
+        ).values_list("listing_id", flat=True)
+        qs = qs.exclude(id__in=blocked_listing_ids).exclude(id__in=booked_listing_ids)
     elif available_from:
         blocked_listing_ids = BlockedDateRange.objects.filter(
             start_date__lte=available_from,
             end_date__gte=available_from,
         ).values_list("listing_id", flat=True)
-        qs = qs.exclude(id__in=blocked_listing_ids)
+        from apps.orders.models import Order
+
+        booked_listing_ids = Order.objects.filter(
+            status__name__in=("confirmed", "active", "overdue"),
+            start_date__lte=available_from,
+            end_date__gte=available_from,
+        ).values_list("listing_id", flat=True)
+        qs = qs.exclude(id__in=blocked_listing_ids).exclude(id__in=booked_listing_ids)
     elif available_to:
         blocked_listing_ids = BlockedDateRange.objects.filter(
             start_date__lte=available_to,
             end_date__gte=available_to,
         ).values_list("listing_id", flat=True)
-        qs = qs.exclude(id__in=blocked_listing_ids)
+        from apps.orders.models import Order
+
+        booked_listing_ids = Order.objects.filter(
+            status__name__in=("confirmed", "active", "overdue"),
+            start_date__lte=available_to,
+            end_date__gte=available_to,
+        ).values_list("listing_id", flat=True)
+        qs = qs.exclude(id__in=blocked_listing_ids).exclude(id__in=booked_listing_ids)
 
     allowed_sorts = {
         "created_at": "created_at",

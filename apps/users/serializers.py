@@ -1,10 +1,14 @@
+import base64
+import binascii
 import math
+import uuid
 from datetime import timedelta
 from typing import Any
 
 from django.conf import settings
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.files.base import ContentFile
 from django.db.models import F
 from django.utils import timezone
 from django.utils.http import urlsafe_base64_decode
@@ -37,10 +41,12 @@ from .models import (
     IdentityDocument,
     IdentityDocumentStatus,
     IdentityDocumentType,
+    LenderRevocation,
     User,
 )
 from .services import (
     email_change_token_generator,
+    email_verification_expiry_days,
     email_verification_token_generator,
     password_reset_token_generator,
 )
@@ -54,6 +60,11 @@ def login_lockout_threshold() -> int:
 def login_lockout_minutes() -> int:
     """How long a CP-103 lockout lasts, Admin-configurable."""
     return get_int_config(LOGIN_LOCKOUT_MINUTES, DEFAULT_LOGIN_LOCKOUT_MINUTES)
+
+
+class AdminLenderRevocationSerializer(serializers.Serializer):
+    reason = serializers.ChoiceField(choices=LenderRevocation.Reason.choices)
+    detail = serializers.CharField(required=False, allow_blank=True, default="")
 
 
 def pup_webmail_domains() -> tuple[str, str]:
@@ -71,6 +82,13 @@ class UserResponseSerializer(serializers.ModelSerializer):
     """Serializer for exposing user data in API responses (FR1, FR2)."""
 
     photo_url = serializers.SerializerMethodField()
+    home_address = serializers.CharField(source="street_address", read_only=True)
+    average_rating = serializers.SerializerMethodField()
+    review_count = serializers.SerializerMethodField()
+    account_status = serializers.SerializerMethodField()
+    is_flagged = serializers.SerializerMethodField()
+    is_flag_confirmed = serializers.BooleanField(read_only=True)
+    flagged_reason = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -82,11 +100,52 @@ class UserResponseSerializer(serializers.ModelSerializer):
             "affiliation",
             "account_status",
             "lender_status",
+            "is_flagged",
+            "is_flag_confirmed",
+            "flagged_reason",
             "email_verified_at",
             "created_at",
             "photo_url",
+            "bio",
+            "street_address",
+            "home_address",
+            "average_rating",
+            "review_count",
         )
         read_only_fields = fields
+
+    def get_account_status(self, obj: User) -> str:
+        if (
+            getattr(obj, "is_flag_confirmed", False)
+            or getattr(obj, "account_status", "") == "flagged"
+        ):
+            return "flagged"
+        return obj.account_status
+
+    def get_is_flagged(self, obj: User) -> bool:
+        return bool(
+            getattr(obj, "is_flag_confirmed", False)
+            or getattr(obj, "account_status", "") in ("flagged", "suspended", "banned")
+            or getattr(obj, "lender_status", "") == "flagged"
+        )
+
+    def get_flagged_reason(self, obj: User) -> str | None:
+        if self.get_is_flagged(obj):
+            return (
+                "Your account has been flagged. You are currently restricted from "
+                "creating new listings. Please contact BRB support."
+            )
+        return None
+
+    def get_average_rating(self, obj: User) -> float | None:
+        from apps.reviews.selectors import get_user_rating_stats
+
+        return get_user_rating_stats(obj.pk)["average_rating"]
+
+    def get_review_count(self, obj: User) -> int:
+        from apps.reviews.selectors import get_user_rating_stats
+
+        return get_user_rating_stats(obj.pk)["review_count"]
 
     def get_photo_url(self, obj):
         request = self.context.get("request")
@@ -447,6 +506,18 @@ class EmailVerificationSerializer(serializers.Serializer):
                 {"detail": self.error_messages["invalid_link"]}
             )
 
+        cutoff = timezone.now() - timedelta(days=email_verification_expiry_days())
+        if user.email_verified_at is None and user.created_at <= cutoff:
+            user.delete()
+            raise serializers.ValidationError(
+                {
+                    "detail": (
+                        "This account was not verified within 7 days and has been "
+                        "deactivated. Please register again."
+                    )
+                }
+            )
+
         if not email_verification_token_generator().check_token(user, attrs["token"]):
             raise serializers.ValidationError(
                 {"detail": self.error_messages["invalid_link"]}
@@ -544,6 +615,13 @@ class LoginSerializer(serializers.Serializer):
         if user.account_status == User.AccountStatusChoices.BANNED:
             raise AuthenticationFailed(self.error_messages["banned"], code="banned")
         if not user.is_email_verified:
+            cutoff = timezone.now() - timedelta(days=email_verification_expiry_days())
+            if user.created_at <= cutoff:
+                user.delete()
+                raise AuthenticationFailed(
+                    "This account was not verified within 7 days and has been deactivated. Please register again.",
+                    code="unverified_expired",
+                )
             raise AuthenticationFailed(
                 self.error_messages["unverified_email"], code="unverified_email"
             )
@@ -626,7 +704,16 @@ class RefreshSerializer(serializers.Serializer):
         if user_id:
             user = User.objects.filter(pk=user_id).first()
 
-        if user is None or not user.is_active:
+        if (
+            user is None
+            or not user.is_active
+            or user.account_status
+            in (
+                User.AccountStatusChoices.SUSPENDED,
+                User.AccountStatusChoices.BANNED,
+                User.AccountStatusChoices.DEACTIVATED,
+            )
+        ):
             raise AuthenticationFailed(
                 self.error_messages["no_active_account"], code="no_active_account"
             )
@@ -746,6 +833,43 @@ class PasswordResetValidateSerializer(serializers.Serializer):
     token = serializers.CharField()
 
 
+class ProfilePhotoField(serializers.ImageField):
+    """
+    ImageField that gracefully handles:
+    1. Standard uploaded file from multipart/form-data.
+    2. Base64 data URI (data:image/jpeg;base64,...).
+    3. Existing photo URL string or serialization artifacts (e.g. '[object Object]'),
+       which are safely ignored to preserve the existing photo.
+    """
+
+    def to_internal_value(self, data):
+        if isinstance(data, str):
+            if "data:" in data and ";base64," in data:
+                try:
+                    header, base64_data = data.split(";base64,")
+                    ext = header.split("/")[-1].split(";")[0].split("+")[0]
+                    if ext == "jpeg":
+                        ext = "jpg"
+                    file_name = f"profile_{uuid.uuid4().hex[:8]}.{ext}"
+                    decoded_file = base64.b64decode(base64_data)
+                    data = ContentFile(decoded_file, name=file_name)
+                except (ValueError, binascii.Error):
+                    raise serializers.ValidationError("Invalid image data.")
+            elif (
+                not data
+                or data == "[object Object]"
+                or data.startswith("http")
+                or "/media/" in data
+            ):
+                return None
+            else:
+                raise serializers.ValidationError(
+                    "The submitted data was not a valid image file."
+                )
+
+        return super().to_internal_value(data)
+
+
 class ProfileUpdateSerializer(serializers.ModelSerializer):
     """
     Persist profile field updates (CP-1001).
@@ -756,7 +880,7 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
     endpoint that proves the current password first.
     """
 
-    photo = serializers.ImageField(required=False, allow_null=True)
+    photo = ProfilePhotoField(required=False, allow_null=True)
 
     class Meta:
         model = User
@@ -785,6 +909,33 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
                 "Enter a valid Philippine mobile number (e.g., 09123456789 or +639123456789)."
             )
         return cleaned_number
+
+    def to_internal_value(self, data):
+        if (hasattr(data, "_mutable") and not data._mutable) or (
+            not hasattr(data, "_mutable") and isinstance(data, dict)
+        ):
+            data = data.copy()
+
+        if "home_address" in data and "street_address" not in data:
+            data["street_address"] = data["home_address"]
+
+        return super().to_internal_value(data)
+
+    def update(self, instance, validated_data):
+        raw_photo = self.initial_data.get("photo")
+        if (
+            "photo" in validated_data
+            and validated_data["photo"] is None
+            and isinstance(raw_photo, str)
+            and (
+                raw_photo.startswith("http")
+                or "/media/" in raw_photo
+                or raw_photo == "[object Object]"
+                or raw_photo == ""
+            )
+        ):
+            validated_data.pop("photo")
+        return super().update(instance, validated_data)
 
 
 class PasswordChangeSerializer(serializers.Serializer):
@@ -972,6 +1123,8 @@ class LenderSearchResultSerializer(serializers.ModelSerializer):
     """
 
     active_listing_count = serializers.IntegerField(read_only=True)
+    average_rating = serializers.SerializerMethodField()
+    review_count = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -982,8 +1135,24 @@ class LenderSearchResultSerializer(serializers.ModelSerializer):
             "photo",
             "bio",
             "active_listing_count",
+            "average_rating",
+            "review_count",
         )
         read_only_fields = fields
+
+    def get_average_rating(self, obj: User) -> float | None:
+        if hasattr(obj, "average_rating") and obj.average_rating is not None:
+            return round(float(obj.average_rating), 1)
+        from apps.reviews.selectors import get_user_rating_stats
+
+        return get_user_rating_stats(obj.pk)["average_rating"]
+
+    def get_review_count(self, obj: User) -> int:
+        if hasattr(obj, "review_count") and obj.review_count is not None:
+            return int(obj.review_count)
+        from apps.reviews.selectors import get_user_rating_stats
+
+        return get_user_rating_stats(obj.pk)["review_count"]
 
 
 class LenderProfileSerializer(serializers.ModelSerializer):
@@ -996,6 +1165,31 @@ class LenderProfileSerializer(serializers.ModelSerializer):
     average_rating = serializers.FloatField(read_only=True)
     review_count = serializers.IntegerField(read_only=True)
     active_listings = serializers.SerializerMethodField()
+    reviews = serializers.SerializerMethodField()
+    date_joined = serializers.DateTimeField(read_only=True)
+
+    def get_reviews(self, obj: User) -> list[dict]:
+        from apps.reviews.models import Review
+        from apps.reviews.serializers import ReviewResponseSerializer
+
+        reviews_qs = (
+            Review.objects.filter(
+                order__listing__lender_id=obj.pk,
+                deleted_at__isnull=True,
+            )
+            .exclude(reviewer_id=obj.pk)
+            .select_related(
+                "reviewer",
+                "order",
+                "order__listing",
+                "order__listing__lender",
+                "order__borrower",
+            )
+            .order_by("-created_at")[:15]
+        )
+        return ReviewResponseSerializer(
+            reviews_qs, many=True, context=self.context
+        ).data
 
     def get_active_listings(self, obj: User) -> list[dict]:
         from apps.listings.serializers import ListingSearchResultSerializer
@@ -1023,5 +1217,70 @@ class LenderProfileSerializer(serializers.ModelSerializer):
             "average_rating",
             "review_count",
             "active_listings",
+            "reviews",
+            "date_joined",
         )
         read_only_fields = fields
+
+
+class AdminUserActionSerializer(serializers.Serializer):
+    """Payload for administrative user status actions (suspend, ban, reinstate)."""
+
+    reason = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class AdminUserListSerializer(serializers.ModelSerializer):
+    """Detailed user serializer for admin moderation endpoints (CP-1101, CP-902)."""
+
+    photo_url = serializers.SerializerMethodField()
+    has_verified_identity = serializers.SerializerMethodField()
+    recent_report_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = (
+            "id",
+            "email",
+            "full_name",
+            "contact_number",
+            "affiliation",
+            "account_status",
+            "lender_status",
+            "lender_reapplication_hold",
+            "is_flagged",
+            "flagged_at",
+            "is_flag_confirmed",
+            "flag_confirmed_at",
+            "recent_report_count",
+            "is_staff",
+            "is_superuser",
+            "is_active",
+            "email_verified_at",
+            "created_at",
+            "date_joined",
+            "photo_url",
+            "bio",
+            "has_verified_identity",
+        )
+        read_only_fields = fields
+
+    def get_photo_url(self, obj: User) -> str | None:
+        request = self.context.get("request")
+        photo = getattr(obj, "photo", None)
+        if not photo:
+            return None
+        try:
+            url = photo.url
+        except (AttributeError, ValueError, OSError):
+            return None
+        if request is not None:
+            return request.build_absolute_uri(url)
+        return url
+
+    def get_has_verified_identity(self, obj: User) -> bool:
+        return obj.has_verified_identity()
+
+    def get_recent_report_count(self, obj: User) -> int:
+        from apps.reports.services import get_user_rolling_report_count
+
+        return get_user_rolling_report_count(user_id=obj.pk)

@@ -1,11 +1,15 @@
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import generics, status
+from rest_framework.authentication import SessionAuthentication
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.authentication import JWTAuthentication
 
+from apps.users.models import User
 from apps.users.permissions import IsIdentityVerified
 
 from .models import Listing, ListingCategory, PickupLocation
@@ -20,7 +24,12 @@ from .serializers import (
     ListingUpdateSerializer,
     PickupLocationSerializer,
 )
-from .services import deactivate_listing, delete_listing, reactivate_listing
+from .services import (
+    admin_remove_listing,
+    deactivate_listing,
+    delete_listing,
+    reactivate_listing,
+)
 
 
 class ListingCollectionView(generics.ListCreateAPIView):
@@ -46,6 +55,19 @@ class ListingCollectionView(generics.ListCreateAPIView):
     def get_queryset(self):
         if self.request.method != "GET":
             return Listing.objects.all()
+        if (
+            self.request.query_params.get("mine") == "true"
+            or self.request.query_params.get("lender") == "me"
+        ):
+            return (
+                Listing.objects.filter(lender=self.request.user)
+                .exclude(status__name="deleted")
+                .select_related("category", "pickup_location", "status")
+                .prefetch_related(
+                    "photos", "orders", "orders__status", "availability_windows"
+                )
+                .order_by("-created_at")
+            )
         query_serializer = ListingSearchQuerySerializer(data=self.request.query_params)
         query_serializer.is_valid(raise_exception=True)
         return search_listings(**query_serializer.validated_data)
@@ -57,6 +79,29 @@ class ListingCollectionView(generics.ListCreateAPIView):
         response_data = ListingSerializer(listing, context={"request": request}).data
         headers = self.get_success_headers(response_data)
         return Response(response_data, status=status.HTTP_201_CREATED, headers=headers)
+
+
+class MyListingsView(generics.ListAPIView):
+    """
+    Listings owned by the authenticated lender (CP-402, CP-403).
+    Returns both active and deactivated listings so the lender can manage them.
+    Excludes soft-deleted listings.
+    """
+
+    serializer_class = ListingSearchResultSerializer
+    permission_classes = (IsAuthenticated,)
+    pagination_class = None
+
+    def get_queryset(self):
+        return (
+            Listing.objects.filter(lender=self.request.user)
+            .exclude(status__name="deleted")
+            .select_related("category", "pickup_location", "status")
+            .prefetch_related(
+                "photos", "orders", "orders__status", "availability_windows"
+            )
+            .order_by("-created_at")
+        )
 
 
 class ListingCategoryListView(generics.ListAPIView):
@@ -86,6 +131,19 @@ class ListingDetailView(generics.RetrieveUpdateDestroyAPIView):
         "blocked_dates",
     )
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.request.method in ("GET", "HEAD"):
+            return qs.filter(
+                Q(lender=self.request.user)
+                | Q(
+                    status__name="active",
+                    lender__lender_status=User.LenderStatusChoices.ACTIVE,
+                    lender__account_status=User.AccountStatusChoices.ACTIVE,
+                )
+            )
+        return qs
+
     def get_serializer_class(self):
         if self.request.method in ("PUT", "PATCH"):
             return ListingUpdateSerializer
@@ -105,6 +163,15 @@ class ListingDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def perform_destroy(self, instance):
         delete_listing(listing=instance)
+
+
+class AdminRemoveListingView(APIView):
+    authentication_classes = (JWTAuthentication, SessionAuthentication)
+    permission_classes = (IsAdminUser,)
+
+    def delete(self, request, pk: int):
+        admin_remove_listing(listing_id=pk)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ListingDeactivateView(APIView):
