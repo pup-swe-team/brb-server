@@ -84,8 +84,8 @@ def get_lender_profile(user_id: int) -> User | None:
 
     lender.prefetched_active_listings = list(
         lender.listings.filter(status__name="active")
-        .select_related("category", "pickup_location", "status")
-        .prefetch_related("photos")
+        .select_related("lender", "category", "pickup_location", "status")
+        .prefetch_related("photos", "availability_windows", "orders__status")
         .order_by("-created_at")
     )
 

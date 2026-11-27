@@ -71,6 +71,9 @@ class Listing(models.Model):
     rate_per_day = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True
     )  # Null if offered for free
+    max_duration_days = models.PositiveIntegerField(
+        null=True, blank=True
+    )  # Optional max borrowing days set by the lender (FE-BUG-5001)
     is_ownership_confirmed = models.BooleanField(default=False)
     status = models.ForeignKey(
         ListingStatus,

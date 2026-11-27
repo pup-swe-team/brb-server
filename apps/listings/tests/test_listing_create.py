@@ -676,3 +676,40 @@ class ListingCreateViewTests(BaseListingTestCase):
         response = self.client.post(self.create_url, data=payload, format="multipart")
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertIsNone(response.data["rate_per_day"])
+
+    def test_create_and_update_listing_with_max_duration_days(self):
+        """FE-BUG-5001: max_duration_days and client duration strings round-trip cleanly."""
+        self.client.force_authenticate(user=self.owner)
+        payload = self._valid_payload(self._create_test_image())
+        payload["max_duration_days"] = 5
+
+        response = self.client.post(self.create_url, data=payload, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["max_duration_days"], 5)
+        self.assertIsNotNone(response.data["available_from"])
+        self.assertIsNotNone(response.data["available_to"])
+
+        detail_url = reverse("listing-detail", kwargs={"pk": response.data["id"]})
+        patch_alias = self.client.patch(
+            detail_url,
+            data={"max_borrowing_days": "7 days"},
+            format="json",
+        )
+        self.assertEqual(patch_alias.status_code, status.HTTP_200_OK)
+        self.assertEqual(patch_alias.data["max_duration_days"], 7)
+
+        patch_clear = self.client.patch(
+            detail_url,
+            data={"max_duration_days": "unlimited"},
+            format="json",
+        )
+        self.assertEqual(patch_clear.status_code, status.HTTP_200_OK)
+        self.assertIsNone(patch_clear.data["max_duration_days"])
+
+        patch_bad = self.client.patch(
+            detail_url,
+            data={"max_duration_days": 0},
+            format="json",
+        )
+        self.assertEqual(patch_bad.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("max_duration_days", patch_bad.data)

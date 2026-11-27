@@ -43,6 +43,7 @@ def create_listing(
     is_ownership_confirmed: bool,
     photos: list[UploadedFile],
     availability_windows: list[dict[str, Any]],
+    max_duration_days: int | None = None,
     status: ListingStatus | None = None,
 ) -> Listing:
     """Create a new resource listing along with photos and availability calendar windows."""
@@ -68,6 +69,7 @@ def create_listing(
         condition=condition,
         pickup_location=pickup_location,
         rate_per_day=rate_per_day,
+        max_duration_days=max_duration_days,
         is_ownership_confirmed=is_ownership_confirmed,
         status=status,
     )

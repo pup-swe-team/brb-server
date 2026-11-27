@@ -8,6 +8,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.listings.models import (
+    AvailabilityWindow,
     BlockedDateRange,
     Listing,
     ListingCategory,
@@ -342,3 +343,28 @@ class ListingSearchTests(APITestCase):
         res_bad_date = self.client.get(self.search_url, {"available_from": "tomorrow"})
         self.assertEqual(res_bad_date.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("available_from", res_bad_date.data)
+
+    def test_search_exposes_top_level_availability_and_lender_metadata(self) -> None:
+        """FE-BUG-5001/5002: search returns max_duration_days, available_from/to, and lender info."""
+        self.listing_calc.max_duration_days = 4
+        self.listing_calc.save(update_fields=["max_duration_days"])
+        AvailabilityWindow.objects.create(
+            listing=self.listing_calc,
+            start_date=date(2026, 11, 20),
+            end_date=date(2026, 12, 20),
+        )
+
+        self.client.force_authenticate(user=self.borrower)
+        response = self.client.get(self.search_url, {"sort": "-created_at"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        calc_item = next(
+            row for row in response.data["results"] if row["id"] == self.listing_calc.id
+        )
+        self.assertEqual(calc_item["max_duration_days"], 4)
+        self.assertEqual(calc_item["available_from"], "2026-11-20")
+        self.assertEqual(calc_item["available_to"], "2026-12-20")
+        self.assertEqual(
+            calc_item["lender"]["affiliation"], User.AffiliationChoices.STUDENT
+        )
+        self.assertIn("verified", calc_item["lender"])

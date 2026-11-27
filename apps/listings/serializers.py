@@ -28,6 +28,37 @@ from .models import (
 from .selectors import get_lender_rating_stats, get_listing_reviews
 from .services import create_listing, update_listing
 
+_MAX_DURATION_ALIASES = (
+    "max_duration_days",
+    "max_duration",
+    "max_borrowing_days",
+    "max_borrow_days",
+    "max_rental_days",
+    "max_days",
+)
+
+
+def _normalize_max_duration_days(data: Any) -> None:
+    """Normalize client max-duration aliases and strings like '5 days' into an integer or None."""
+    if "max_duration_days" not in data:
+        for alias in _MAX_DURATION_ALIASES[1:]:
+            if alias in data and data.get(alias) not in (None, ""):
+                data["max_duration_days"] = data[alias]
+                break
+
+    if "max_duration_days" not in data:
+        return
+
+    val = data.get("max_duration_days")
+    if isinstance(val, str):
+        cleaned = val.strip().lower()
+        if cleaned in ("", "none", "null", "unlimited"):
+            data["max_duration_days"] = None
+            return
+        match = re.search(r"-?\d+", cleaned)
+        if match:
+            data["max_duration_days"] = int(match.group(0))
+
 
 def _sniff_photo_content_type(head: bytes) -> str:
     """Infer the image type from file bytes; "" when no supported signature matches."""
@@ -164,6 +195,27 @@ class ListingReviewSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class _ListingAvailabilitySummaryMixin(serializers.Serializer):
+    """Expose top-level available_from/available_to derived from the first window."""
+
+    available_from = serializers.SerializerMethodField()
+    available_to = serializers.SerializerMethodField()
+
+    def _get_first_window(self, obj: Listing) -> AvailabilityWindow | None:
+        if not hasattr(obj, "_cached_first_window"):
+            windows = list(obj.availability_windows.all())
+            obj._cached_first_window = windows[0] if windows else None
+        return obj._cached_first_window
+
+    def get_available_from(self, obj: Listing) -> str | None:
+        win = self._get_first_window(obj)
+        return win.start_date.isoformat() if win else None
+
+    def get_available_to(self, obj: Listing) -> str | None:
+        win = self._get_first_window(obj)
+        return win.end_date.isoformat() if win else None
+
+
 class LenderSummarySerializer(serializers.ModelSerializer):
     """Lender profile summary with aggregated reputation stats (CP-303, CP-304)."""
 
@@ -201,7 +253,7 @@ class BlockedDateRangeSerializer(serializers.ModelSerializer):
         fields = ["id", "start_date", "end_date", "reason", "created_at"]
 
 
-class ListingSerializer(serializers.ModelSerializer):
+class ListingSerializer(_ListingAvailabilitySummaryMixin, serializers.ModelSerializer):
     category = ListingCategorySerializer(read_only=True)
     status = ListingStatusSerializer(read_only=True)
     pickup_location = PickupLocationSerializer(read_only=True)
@@ -278,6 +330,9 @@ class ListingSerializer(serializers.ModelSerializer):
             "description",
             "condition",
             "rate_per_day",
+            "max_duration_days",
+            "available_from",
+            "available_to",
             "is_ownership_confirmed",
             "lender",
             "category",
@@ -320,7 +375,9 @@ class ListingSearchQuerySerializer(serializers.Serializer):
     )
 
 
-class ListingSearchResultSerializer(serializers.ModelSerializer):
+class ListingSearchResultSerializer(
+    _ListingAvailabilitySummaryMixin, serializers.ModelSerializer
+):
     category = ListingCategorySerializer(read_only=True)
     pickup_location = PickupLocationSerializer(read_only=True)
     status = ListingStatusSerializer(read_only=True)
@@ -366,27 +423,54 @@ class ListingSearchResultSerializer(serializers.ModelSerializer):
     def get_lender(self, obj: Listing) -> dict:
         from apps.listings.selectors import get_lender_rating_stats
 
-        stats = get_lender_rating_stats(obj.lender)
+        cache = getattr(self, "_lender_stats_cache", None)
+        if cache is None:
+            cache = {}
+            self._lender_stats_cache = cache
+        if obj.lender_id not in cache:
+            cache[obj.lender_id] = get_lender_rating_stats(obj.lender)
+        stats = cache[obj.lender_id]
+
+        verified_attr = getattr(obj, "lender_identity_verified", None)
+        if verified_attr is not None:
+            verified = bool(verified_attr)
+        else:
+            verified_cache = getattr(self, "_lender_verified_cache", None)
+            if verified_cache is None:
+                verified_cache = {}
+                self._lender_verified_cache = verified_cache
+            if obj.lender_id not in verified_cache:
+                verified_cache[obj.lender_id] = obj.lender.has_verified_identity()
+            verified = verified_cache[obj.lender_id]
+
         return {
             "id": obj.lender_id,
             "full_name": obj.lender.full_name,
             "photo": obj.lender.photo.url if obj.lender.photo else None,
+            "affiliation": obj.lender.affiliation,
+            "verified": verified,
             "rating": stats["rating_average"],
             "rating_average": stats["rating_average"],
             "review_count": stats["total_reviews"],
         }
 
     def get_active_orders(self, obj: Listing) -> int:
-        return obj.orders.filter(
-            status__name__in=[
-                "requested",
-                "confirmed",
-                "active",
-                "overdue",
-                "unreturned",
-                "disputed",
-            ]
-        ).count()
+        active_statuses = {
+            "requested",
+            "confirmed",
+            "active",
+            "overdue",
+            "unreturned",
+            "disputed",
+        }
+        prefetched = getattr(obj, "_prefetched_objects_cache", {})
+        if "orders" in prefetched:
+            return sum(
+                1
+                for order in prefetched["orders"]
+                if getattr(order.status, "name", "") in active_statuses
+            )
+        return obj.orders.filter(status__name__in=active_statuses).count()
 
     class Meta:
         model = Listing
@@ -396,6 +480,9 @@ class ListingSearchResultSerializer(serializers.ModelSerializer):
             "description",
             "condition",
             "rate_per_day",
+            "max_duration_days",
+            "available_from",
+            "available_to",
             "is_ownership_confirmed",
             "lender",
             "category",
@@ -432,6 +519,12 @@ class ListingCreateSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True,
     )
+    max_duration_days = serializers.IntegerField(
+        min_value=1,
+        max_value=365,
+        required=False,
+        allow_null=True,
+    )
     is_ownership_confirmed = serializers.BooleanField(required=True)
 
     class Meta:
@@ -441,6 +534,7 @@ class ListingCreateSerializer(serializers.ModelSerializer):
             "description",
             "condition",
             "rate_per_day",
+            "max_duration_days",
             "is_ownership_confirmed",
             "category",
             "pickup_location",
@@ -569,6 +663,7 @@ class ListingCreateSerializer(serializers.ModelSerializer):
             data["start_date"] = data["available_from"]
         if "available_to" in data and "end_date" not in data:
             data["end_date"] = data["available_to"]
+        _normalize_max_duration_days(data)
 
     def validate_is_ownership_confirmed(self, value: bool) -> bool:
         if not value:
@@ -696,6 +791,7 @@ class ListingCreateSerializer(serializers.ModelSerializer):
             condition=validated_data["condition"],
             pickup_location=validated_data["pickup_location"],
             rate_per_day=validated_data.get("rate_per_day"),
+            max_duration_days=validated_data.get("max_duration_days"),
             is_ownership_confirmed=validated_data["is_ownership_confirmed"],
             photos=validated_data.get("photos", []),
             availability_windows=validated_data.get("availability_windows", []),
@@ -711,6 +807,12 @@ class ListingUpdateSerializer(serializers.ModelSerializer):
     rate_per_day = serializers.DecimalField(
         max_digits=10,
         decimal_places=2,
+        required=False,
+        allow_null=True,
+    )
+    max_duration_days = serializers.IntegerField(
+        min_value=1,
+        max_value=365,
         required=False,
         allow_null=True,
     )
@@ -730,6 +832,7 @@ class ListingUpdateSerializer(serializers.ModelSerializer):
             "description",
             "condition",
             "rate_per_day",
+            "max_duration_days",
             "category",
             "pickup_location",
         ]
@@ -833,6 +936,8 @@ class ListingUpdateSerializer(serializers.ModelSerializer):
                         data["rate_per_day"] = None
                 else:
                     data["rate_per_day"] = cleaned
+
+        _normalize_max_duration_days(data)
 
     def _parse_date(self, val: Any) -> date:
         if isinstance(val, date):

@@ -139,10 +139,10 @@ class ReviewCreateView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def get(self, request: Request) -> Response:
-        from django.db.models import Q
-
-        target_user_param = request.query_params.get("target_user")
-        role_param = (request.query_params.get("role") or "").strip().lower()
+        target_user_param = request.query_params.get(
+            "target_user"
+        ) or request.query_params.get("reviewee")
+        role_param = (request.query_params.get("role") or "").strip().lower() or None
 
         user_id = None
         if target_user_param:
@@ -153,26 +153,7 @@ class ReviewCreateView(APIView):
         if user_id is None:
             user_id = request.user.pk
 
-        qs = Review.objects.filter(deleted_at__isnull=True).select_related(
-            "reviewer",
-            "order",
-            "order__listing",
-            "order__listing__lender",
-            "order__borrower",
-        )
-
-        if role_param == "borrower":
-            qs = qs.filter(order__borrower_id=user_id).exclude(reviewer_id=user_id)
-        elif role_param == "lender":
-            qs = qs.filter(order__listing__lender_id=user_id).exclude(
-                reviewer_id=user_id
-            )
-        else:
-            qs = qs.filter(
-                Q(order__listing__lender_id=user_id) | Q(order__borrower_id=user_id)
-            ).exclude(reviewer_id=user_id)
-
-        qs = qs.order_by("-created_at")
+        qs = get_user_received_reviews(user_id, role=role_param)
         serializer = ReviewResponseSerializer(
             qs,
             many=True,
@@ -230,8 +211,9 @@ class UserReviewListView(APIView):
 
     def get(self, request: Request, user_id: int) -> Response:
         user = get_object_or_404(User, pk=user_id)
-        stats = get_user_rating_stats(user)
-        reviews = get_user_received_reviews(user.pk)
+        role_param = (request.query_params.get("role") or "").strip().lower() or None
+        stats = get_user_rating_stats(user, role=role_param)
+        reviews = get_user_received_reviews(user.pk, role=role_param)
         serializer = ReviewResponseSerializer(
             reviews,
             many=True,

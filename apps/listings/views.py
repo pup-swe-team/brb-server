@@ -62,7 +62,7 @@ class ListingCollectionView(generics.ListCreateAPIView):
             return (
                 Listing.objects.filter(lender=self.request.user)
                 .exclude(status__name="deleted")
-                .select_related("category", "pickup_location", "status")
+                .select_related("lender", "category", "pickup_location", "status")
                 .prefetch_related(
                     "photos", "orders", "orders__status", "availability_windows"
                 )
@@ -96,7 +96,7 @@ class MyListingsView(generics.ListAPIView):
         return (
             Listing.objects.filter(lender=self.request.user)
             .exclude(status__name="deleted")
-            .select_related("category", "pickup_location", "status")
+            .select_related("lender", "category", "pickup_location", "status")
             .prefetch_related(
                 "photos", "orders", "orders__status", "availability_windows"
             )

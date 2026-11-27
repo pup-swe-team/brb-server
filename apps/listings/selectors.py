@@ -4,10 +4,10 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from django.db.models import Avg, Count, F, Q, QuerySet
+from django.db.models import Avg, Count, Exists, F, OuterRef, Q, QuerySet
 
 from apps.reviews.models import Review
-from apps.users.models import User
+from apps.users.models import IdentityDocument, User
 
 from .models import BlockedDateRange, Listing
 
@@ -87,8 +87,16 @@ def search_listings(
         )
         .prefetch_related(
             "photos",
+            "availability_windows",
+            "orders__status",
         )
         .annotate(
+            lender_identity_verified=Exists(
+                IdentityDocument.objects.filter(
+                    user_id=OuterRef("lender_id"),
+                    status__name="approved",
+                )
+            ),
             product_rating_avg=Avg(
                 "orders__reviews__rating",
                 filter=Q(
