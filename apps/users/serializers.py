@@ -1169,10 +1169,24 @@ class LenderProfileSerializer(serializers.ModelSerializer):
     date_joined = serializers.DateTimeField(read_only=True)
 
     def get_reviews(self, obj: User) -> list[dict]:
-        from apps.reviews.selectors import get_user_received_reviews
+        from apps.reviews.models import Review
         from apps.reviews.serializers import ReviewResponseSerializer
 
-        reviews_qs = get_user_received_reviews(obj.pk)[:15]
+        reviews_qs = (
+            Review.objects.filter(
+                order__listing__lender_id=obj.pk,
+                deleted_at__isnull=True,
+            )
+            .exclude(reviewer_id=obj.pk)
+            .select_related(
+                "reviewer",
+                "order",
+                "order__listing",
+                "order__listing__lender",
+                "order__borrower",
+            )
+            .order_by("-created_at")[:15]
+        )
         return ReviewResponseSerializer(
             reviews_qs, many=True, context=self.context
         ).data
