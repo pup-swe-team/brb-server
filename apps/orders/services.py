@@ -32,7 +32,12 @@ from .constants import (
     CALENDAR_BLOCKING_ORDER_STATUSES,
     CALENDAR_RELEASING_ORDER_STATUSES,
     CLOSING_UNRETURNED_CASE_STATUSES,
+    DISPUTE_ELIGIBLE_ORDER_STATUSES,
+    FILE_TYPE_PHOTO,
+    FILE_TYPE_VIDEO,
     ORDER_STATUS_ACTIVE,
+    ORDER_STATUS_COMPLETED,
+    ORDER_STATUS_DISPUTED,
     ORDER_STATUS_OVERDUE,
     ORDER_STATUS_RETURNED,
     ORDER_STATUS_UNRETURNED,
@@ -762,3 +767,237 @@ def override_order_status(
         override_record.pk,
     )
     return order, override_record
+
+
+# ---------------------------------------------------------------------------
+# CP-903 -- Damage / Missing-Item Disputes
+# ---------------------------------------------------------------------------
+
+
+@transaction.atomic
+def submit_damage_report(
+    *,
+    actor: User,
+    order_id: int,
+    description: str,
+    evidence_files: list | None = None,
+) -> Dispute:
+    """
+    Document item damage or missing parts on an eligible order (CP-903).
+
+    - Transitions eligible orders (`active`, `overdue`, `returned`) to `disputed`
+      and releases blocked listing dates.
+    - Creates a new open `Dispute` if none is open; if the borrower posts on an
+      existing open dispute raised by the lender, records `borrower_response`
+      without overwriting the lender's original `description`.
+    - Persists uploaded photo/video `DisputeEvidence` rows and notifies the
+      counterparty.
+    """
+    order = get_object_or_404(
+        Order.objects.select_for_update().select_related("listing", "status"),
+        pk=order_id,
+    )
+    if actor.pk not in (order.borrower_id, order.listing.lender_id):
+        raise PermissionDenied("Only the order parties can submit a damage report.")
+
+    cleaned_description = (description or "").strip()
+    if not cleaned_description:
+        raise ValidationError(
+            {"description": ["A description of the damage is required."]}
+        )
+
+    if order.status.name not in DISPUTE_ELIGIBLE_ORDER_STATUSES:
+        raise OrderCaseConflictError(
+            f"Cannot submit a damage dispute for an order with status '{order.status.name}'."
+        )
+
+    dispute = (
+        Dispute.objects.select_for_update()
+        .filter(order=order, status=Dispute.StatusChoices.OPEN)
+        .order_by("-created_at")
+        .first()
+    )
+    is_borrower_response = (
+        dispute is not None
+        and actor.pk == order.borrower_id
+        and dispute.raised_by_id != actor.pk
+    )
+    resolved_uploads = [
+        (uploaded_file, _infer_evidence_file_type(uploaded_file))
+        for uploaded_file in (evidence_files or [])
+    ]
+    if not is_borrower_response:
+        existing_types = (
+            set(dispute.evidences.values_list("file_type__name", flat=True))
+            if dispute is not None
+            else set()
+        )
+        combined_types = existing_types | {ft.name for _, ft in resolved_uploads}
+        missing: list[str] = []
+        if FILE_TYPE_PHOTO not in combined_types:
+            missing.append("At least one photo is required.")
+        if FILE_TYPE_VIDEO not in combined_types:
+            missing.append("At least one video is required.")
+        if missing:
+            raise ValidationError({"evidence": missing})
+
+    if order.status.name != ORDER_STATUS_DISPUTED:
+        _set_order_status(order, ORDER_STATUS_DISPUTED)
+        release_dates_for_order(order)
+
+    if dispute is None:
+        dispute = Dispute.objects.create(
+            order=order,
+            raised_by=actor,
+            description=cleaned_description,
+            status=Dispute.StatusChoices.OPEN,
+        )
+    elif is_borrower_response:
+        dispute.borrower_response = cleaned_description
+        dispute.save(update_fields=["borrower_response", "updated_at"])
+    else:
+        dispute.description = cleaned_description
+        dispute.save(update_fields=["description", "updated_at"])
+
+    for uploaded_file, file_type_model in resolved_uploads:
+        DisputeEvidence.objects.create(
+            dispute=dispute,
+            submitted_by=actor,
+            file_reference=uploaded_file,
+            file_type=file_type_model,
+        )
+
+    if actor.pk == order.borrower_id:
+        _notify_lender(order, NOTIFICATION_TYPE_REPORT_UPDATES)
+    else:
+        _notify_borrower(order, NOTIFICATION_TYPE_REPORT_UPDATES)
+
+    logger.info(
+        "CP-903: User #%d updated/opened Dispute #%d on Order #%d",
+        actor.pk,
+        dispute.pk,
+        order.pk,
+    )
+    return dispute
+
+
+@transaction.atomic
+def resolve_dispute(
+    *,
+    dispute_id: int,
+    admin: User,
+    resolution_notes: str = "",
+) -> Dispute:
+    """
+    Admin resolves a damage/missing-item dispute to Completed (CP-903, FR14):
+      - Rejects already-resolved disputes with 409 Conflict.
+      - Sets dispute status to 'resolved', records `resolved_by` and `resolution_notes`.
+      - Transitions the order to 'completed' (stamping `completed_at`), releases
+        calendar dates, records an immutable `OrderStatusOverride`, and notifies
+        both Borrower and Lender.
+    """
+    dispute = get_object_or_404(
+        Dispute.objects.select_for_update().select_related(
+            "order", "order__listing", "order__status"
+        ),
+        pk=dispute_id,
+    )
+    if dispute.status == Dispute.StatusChoices.RESOLVED:
+        raise OrderCaseConflictError("This dispute has already been resolved.")
+
+    cleaned_notes = (resolution_notes or "").strip() or "Resolved by admin"
+    dispute.status = Dispute.StatusChoices.RESOLVED
+    dispute.resolved_by = admin
+    dispute.resolution_notes = cleaned_notes
+    dispute.save(
+        update_fields=["status", "resolved_by", "resolution_notes", "updated_at"]
+    )
+
+    order = (
+        Order.objects.select_for_update()
+        .select_related("listing", "status")
+        .get(pk=dispute.order_id)
+    )
+    previous_status_name = order.status.name
+    completed_status, _ = OrderStatus.objects.get_or_create(name=ORDER_STATUS_COMPLETED)
+    order.status = completed_status
+    order.save(update_fields=["status", "updated_at"])
+    release_dates_for_order(order)
+
+    OrderStatusOverride.objects.create(
+        order=order,
+        admin=admin,
+        previous_status=previous_status_name,
+        new_status=ORDER_STATUS_COMPLETED,
+        reason=cleaned_notes,
+    )
+
+    _notify_both_parties(order, NOTIFICATION_TYPE_REPORT_UPDATES)
+    logger.info(
+        "CP-903: Admin #%d resolved Dispute #%d on Order #%d -> completed",
+        admin.pk,
+        dispute.pk,
+        order.pk,
+    )
+    return dispute
+
+
+@transaction.atomic
+def escalate_dispute(
+    *,
+    dispute_id: int,
+    admin: User,
+    resolution_notes: str = "",
+    evidence_files: list | None = None,
+) -> Dispute:
+    """
+    Admin escalates a damage/missing-item dispute to PUP OSS / Campus Security (CP-903):
+      - Rejects already-resolved disputes with 409 Conflict.
+      - Sets dispute status to 'escalated', records `resolved_by` (escalating admin)
+        and `resolution_notes`, keeps order in 'disputed' status (never 'completed').
+      - Persists any optional escalation evidence files and notifies both parties.
+    """
+    dispute = get_object_or_404(
+        Dispute.objects.select_for_update().select_related(
+            "order", "order__listing", "order__status"
+        ),
+        pk=dispute_id,
+    )
+    if dispute.status == Dispute.StatusChoices.RESOLVED:
+        raise OrderCaseConflictError("Cannot escalate an already resolved dispute.")
+
+    cleaned_notes = (
+        resolution_notes or ""
+    ).strip() or "Escalated to PUP OSS for administrative review"
+    dispute.status = Dispute.StatusChoices.ESCALATED
+    dispute.resolved_by = admin
+    dispute.resolution_notes = cleaned_notes
+    dispute.save(
+        update_fields=["status", "resolved_by", "resolution_notes", "updated_at"]
+    )
+
+    order = (
+        Order.objects.select_for_update()
+        .select_related("listing", "status")
+        .get(pk=dispute.order_id)
+    )
+    if order.status.name != ORDER_STATUS_DISPUTED:
+        _set_order_status(order, ORDER_STATUS_DISPUTED)
+
+    for uploaded_file in evidence_files or []:
+        file_type_model = _infer_evidence_file_type(uploaded_file)
+        DisputeEvidence.objects.create(
+            dispute=dispute,
+            submitted_by=admin,
+            file_reference=uploaded_file,
+            file_type=file_type_model,
+        )
+
+    _notify_both_parties(order, NOTIFICATION_TYPE_REPORT_UPDATES)
+    logger.info(
+        "CP-903: Admin #%d escalated Dispute #%d on Order #%d to PUP OSS",
+        admin.pk,
+        dispute.pk,
+        order.pk,
+    )
+    return dispute

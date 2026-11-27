@@ -130,6 +130,12 @@ urlpatterns = [
         portal.report_resolve,
         name="portal-report-resolve",
     ),
+    # Retained chat conversation evidence viewer (CP-703).
+    path(
+        "conversations/<int:pk>/",
+        portal.conversation_detail,
+        name="portal-conversation-detail",
+    ),
     # System parameters configuration (CP-1112 / CP-1104 / TC-111 / TC-112).
     path(
         "system-parameters/",
@@ -157,5 +163,63 @@ urlpatterns = [
         "unreturned/<int:pk>/escalate/",
         portal.unreturned_case_escalate,
         name="portal-unreturned-escalate",
+    ),
+    # Damage / missing-item disputes (CP-903).
+    path(
+        "disputes/",
+        portal.disputes_queue,
+        name="portal-disputes-queue",
+    ),
+    path(
+        "disputes/<int:pk>/",
+        portal.dispute_detail,
+        name="portal-dispute-detail",
+    ),
+    path(
+        "disputes/<int:pk>/resolve/",
+        portal.dispute_resolve,
+        name="portal-dispute-resolve",
+    ),
+    path(
+        "disputes/<int:pk>/escalate/",
+        portal.dispute_escalate,
+        name="portal-dispute-escalate",
+    ),
+    # Orders moderation & manual status override (CP-506 / TC-074).
+    path(
+        "orders/",
+        portal.orders_queue,
+        name="portal-orders",
+    ),
+    path(
+        "orders/<int:pk>/",
+        portal.order_detail,
+        name="portal-order-detail",
+    ),
+    path(
+        "orders/<int:pk>/override/",
+        portal.order_status_override,
+        name="portal-order-override",
+    ),
+    # Unreturned cases moderation (CP-1103 / CP-506 / CP-1111).
+    path(
+        "unreturned-cases/",
+        portal.unreturned_cases_queue,
+        name="portal-unreturned-cases",
+    ),
+    path(
+        "unreturned-cases/<int:pk>/",
+        portal.unreturned_case_detail,
+        name="portal-unreturned-case-detail",
+    ),
+    path(
+        "unreturned-cases/<int:pk>/escalate/",
+        portal.unreturned_case_escalate,
+        name="portal-unreturned-case-escalate",
+    ),
+    path(
+        "unreturned-cases/<int:pk>/close/",
+        portal.unreturned_case_close,
+        name="portal-unreturned-case-close",
     ),
 ]

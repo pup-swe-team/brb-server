@@ -60,6 +60,26 @@ urlpatterns = [
         name="unreturned-case-close",
     ),
     path(
+        "admin/unreturned-cases/",
+        UnreturnedCaseListView.as_view(),
+        name="api-admin-unreturned-case-list",
+    ),
+    path(
+        "admin/unreturned-cases/<int:pk>/",
+        UnreturnedCaseDetailView.as_view(),
+        name="api-admin-unreturned-case-detail",
+    ),
+    path(
+        "admin/unreturned-cases/<int:pk>/escalate/",
+        EscalateUnreturnedCaseView.as_view(),
+        name="api-admin-unreturned-case-escalate",
+    ),
+    path(
+        "admin/unreturned-cases/<int:pk>/close/",
+        CloseUnreturnedCaseView.as_view(),
+        name="api-admin-unreturned-case-close",
+    ),
+    path(
         "orders/<int:order_id>/damage-report/",
         DamageReportView.as_view(),
         name="order-damage-report",
@@ -68,6 +88,11 @@ urlpatterns = [
         "orders/<int:order_id>/dispute/",
         DamageReportView.as_view(),
         name="order-dispute",
+    ),
+    path(
+        "orders/<int:order_id>/dispute-response/",
+        DamageReportView.as_view(),
+        name="order-dispute-response",
     ),
     path(
         "disputes/",
@@ -88,5 +113,25 @@ urlpatterns = [
         "disputes/<int:pk>/escalate/",
         AdminDisputeEscalateView.as_view(),
         name="admin-dispute-escalate",
+    ),
+    path(
+        "admin/disputes/",
+        AdminDisputeListView.as_view(),
+        name="api-admin-dispute-list",
+    ),
+    path(
+        "admin/disputes/<int:pk>/",
+        AdminDisputeDetailView.as_view(),
+        name="api-admin-dispute-detail",
+    ),
+    path(
+        "admin/disputes/<int:pk>/resolve/",
+        AdminDisputeResolveView.as_view(),
+        name="api-admin-dispute-resolve",
+    ),
+    path(
+        "admin/disputes/<int:pk>/escalate/",
+        AdminDisputeEscalateView.as_view(),
+        name="api-admin-dispute-escalate",
     ),
 ]

@@ -160,12 +160,17 @@
             {{ r.description }}
           </td>
           <td data-label="Resolution">
-            <form method="post" action="{% url 'portal-report-resolve' r.type r.pk %}" style="display: inline;">
-              {% csrf_token %}
-              <button type="submit" class="btn btn-primary" style="padding: 4px 12px; font-size: 12px; background: #0284c7; border-color: #0284c7;">
-                Mark Resolved
-              </button>
-            </form>
+            <div style="display: inline-flex; gap: 6px; align-items: center;">
+              {% if r.conversation_id %}
+                <a href="{% url 'portal-conversation-detail' r.conversation_id %}" class="btn btn-outline" style="padding: 4px 10px; font-size: 12px; color: #0284c7; border-color: #bae6fd;">View Chat</a>
+              {% endif %}
+              <form method="post" action="{% url 'portal-report-resolve' r.type r.pk %}" style="display: inline;">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-primary" style="padding: 4px 12px; font-size: 12px; background: #0284c7; border-color: #0284c7;">
+                  Mark Resolved
+                </button>
+              </form>
+            </div>
           </td>
         </tr>
         {% empty %}

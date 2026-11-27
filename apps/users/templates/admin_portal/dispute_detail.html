@@ -1,0 +1,97 @@
+{% extends "admin_portal/shell.html" %}
+{% block title %}Dispute #{{ dossier.case.id }} &middot; CoPUPAdmin{% endblock %}
+{% block content %}
+<nav class="crumbs" aria-label="Breadcrumb">
+  <span>Moderation</span> / <a href="{% url 'portal-disputes-queue' %}">Disputes</a> / <span>Dispute #{{ dossier.case.id }}</span>
+</nav>
+
+<div class="page-heading">
+  <h1>Dispute #{{ dossier.case.id }} &mdash; Order #{{ dossier.order.id }}</h1>
+  <span class="badge {% if dossier.case.status == 'resolved' %}badge-approved{% elif dossier.case.status == 'escalated' %}badge-rejected{% else %}badge-pending{% endif %}">
+    {{ dossier.case.status|title }}
+  </span>
+</div>
+
+<div class="dash-grid" style="margin-bottom: 16px;">
+  <section class="card dash-card">
+    <h2>Dispute Details</h2>
+    <p><strong>Listing:</strong> {{ dossier.listing.title }} ({{ dossier.listing.category }})</p>
+    <p><strong>Order Status:</strong> {{ dossier.order.status|title }} ({{ dossier.order.start_date }} to {{ dossier.order.end_date }})</p>
+    <p><strong>Raised By:</strong> {{ dossier.case.raised_by_name }}</p>
+    <p><strong>Description:</strong> {{ dossier.case.description }}</p>
+    {% if dossier.case.borrower_response %}
+      <p><strong>Borrower Response:</strong> {{ dossier.case.borrower_response }}</p>
+    {% endif %}
+    {% if dossier.case.resolution_notes %}
+      <p><strong>Admin Notes:</strong> {{ dossier.case.resolution_notes }}</p>
+    {% endif %}
+  </section>
+
+  <section class="card dash-card">
+    <h2>Parties (Contact Access Audited)</h2>
+    <p><strong>Lender:</strong> {{ dossier.lender.full_name }} &middot; {{ dossier.lender.email }} &middot; {{ dossier.lender.contact_number }}</p>
+    <p><strong>Borrower:</strong> {{ dossier.borrower.full_name }} &middot; {{ dossier.borrower.email }} &middot; {{ dossier.borrower.contact_number }}</p>
+    {% if dossier.case.status != 'resolved' %}
+    <hr style="margin: 14px 0; border: 0; border-top: 1px solid var(--border);">
+    <form method="post" action="{% url 'portal-dispute-resolve' dossier.case.id %}" style="margin-bottom: 12px;">
+      {% csrf_token %}
+      <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">Resolution Notes (marks Order Completed)</label>
+      <textarea name="resolution_notes" rows="2" class="field-input" placeholder="e.g. Parties settled replacement cost"></textarea>
+      <button type="submit" class="btn btn-primary" style="margin-top: 8px;">Resolve to Completed</button>
+    </form>
+    <form method="post" action="{% url 'portal-dispute-escalate' dossier.case.id %}" enctype="multipart/form-data">
+      {% csrf_token %}
+      <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">OSS Escalation Notes</label>
+      <textarea name="resolution_notes" rows="2" class="field-input" placeholder="e.g. Escalated to PUP OSS with dossier"></textarea>
+      <button type="submit" class="btn btn-outline" style="margin-top: 8px; color: #b91c1c; border-color: #fca5a5;">Escalate to PUP OSS</button>
+    </form>
+    {% endif %}
+  </section>
+</div>
+
+<div class="dash-grid">
+  <section class="card dash-card">
+    <h2>Evidence Photos &amp; Videos ({{ dossier.evidences|length }})</h2>
+    {% if dossier.evidences %}
+      <ul>
+        {% for ev in dossier.evidences %}
+          <li><a class="link" href="{{ ev.file_url }}" target="_blank" rel="noopener">{{ ev.file_type|title }} #{{ ev.id }}</a> &mdash; {{ ev.submitted_by_name }}</li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="empty-note">No evidence files uploaded.</p>
+    {% endif %}
+
+    <h2 style="margin-top: 18px;">Linked Reports ({{ dossier.reports|length }})</h2>
+    {% if dossier.reports %}
+      <ul>
+        {% for rep in dossier.reports %}
+          <li><strong>{{ rep.type|title }} Report #{{ rep.id }}</strong> ({{ rep.category }}, {{ rep.status }}): {{ rep.description }}</li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="empty-note">No linked reports.</p>
+    {% endif %}
+  </section>
+
+  <section class="card dash-card">
+    <h2>Linked Chat History</h2>
+    {% if dossier.chat %}
+      {% for conv in dossier.chat %}
+        <div style="margin-bottom: 10px;">
+          <strong>Conversation #{{ conv.conversation_id }}</strong>
+          {% for msg in conv.messages %}
+            <div style="font-size: 12px; margin-top: 4px;">
+              <strong>{{ msg.sender_name }}:</strong> {{ msg.content }}
+            </div>
+          {% empty %}
+            <p class="empty-note">No messages in this conversation.</p>
+          {% endfor %}
+        </div>
+      {% endfor %}
+    {% else %}
+      <p class="empty-note">No linked chat conversations.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

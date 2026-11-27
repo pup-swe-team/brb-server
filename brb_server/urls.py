@@ -17,6 +17,14 @@ from apps.core.views import (
 )
 from apps.listings.views import AdminRemoveListingView
 from apps.reviews.views import AdminRemoveReviewView
+from apps.users.admin_views import (
+    AdminMetricsView,
+    AdminReportListView,
+    AdminReportResolveView,
+    AdminReviewQueueActionView,
+    AdminReviewQueueListView,
+    AdminVerificationListView,
+)
 from apps.users.dashboards import BorrowerDashboardView, LenderDashboardView
 from apps.users.views import (
     AdminBanUserView,
@@ -61,6 +69,7 @@ urlpatterns = [
     path("api/v1/", include("apps.audit.urls")),
     path("api/v1/", include("apps.codes.urls")),
     path("api/v1/", include("apps.orders.urls")),
+    path("api/v1/", include("apps.chat.urls")),
     path("api/v1/", include("apps.listings.urls")),
     path("api/v1/", include("apps.reviews.urls")),
     path("api/v1/", include("apps.reports.urls")),
@@ -112,6 +121,41 @@ urlpatterns = [
         "api/v1/users/me/lender-dashboard/",
         LenderDashboardView.as_view(),
         name="api-users-me-lender-dashboard",
+    ),
+    path(
+        "api/v1/admin/metrics/",
+        AdminMetricsView.as_view(),
+        name="api-admin-metrics",
+    ),
+    path(
+        "api/v1/admin/dashboard/metrics/",
+        AdminMetricsView.as_view(),
+        name="api-admin-dashboard-metrics",
+    ),
+    path(
+        "api/v1/admin/review-queues/",
+        AdminReviewQueueListView.as_view(),
+        name="api-admin-review-queues",
+    ),
+    path(
+        "api/v1/admin/review-queues/<str:queue_type>/<int:pk>/action/",
+        AdminReviewQueueActionView.as_view(),
+        name="api-admin-review-queue-action",
+    ),
+    path(
+        "api/v1/admin/verifications/",
+        AdminVerificationListView.as_view(),
+        name="api-admin-verifications",
+    ),
+    path(
+        "api/v1/admin/reports/",
+        AdminReportListView.as_view(),
+        name="api-admin-reports",
+    ),
+    path(
+        "api/v1/admin/reports/<str:report_type>/<int:pk>/resolve/",
+        AdminReportResolveView.as_view(),
+        name="api-admin-report-resolve",
     ),
     path(
         "api/v1/admin/users/",

@@ -33,6 +33,14 @@ RETURN_ELIGIBLE_ORDER_STATUSES = (
     ORDER_STATUS_OVERDUE,
 )
 
+# Orders eligible to raise or update a damage/missing-item dispute (CP-903)
+DISPUTE_ELIGIBLE_ORDER_STATUSES = (
+    ORDER_STATUS_ACTIVE,
+    ORDER_STATUS_OVERDUE,
+    ORDER_STATUS_RETURNED,
+    ORDER_STATUS_DISPUTED,
+)
+
 # Statuses that hold a calendar date block on the listing (CP-403)
 CALENDAR_BLOCKING_ORDER_STATUSES = (
     ORDER_STATUS_CONFIRMED,

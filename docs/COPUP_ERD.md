@@ -342,12 +342,17 @@ erDiagram
     }
 
     CONVERSATIONS {
-        int id PK
+        int conversation_id PK
         int user_a_id FK
         int user_b_id FK
         int listing_id FK "nullable"
         int order_id FK "nullable"
         bool is_blocked
+        int blocked_by_id FK "nullable (CP-702)"
+        datetime user_a_deleted_at "nullable (CP-703 per-user soft delete)"
+        datetime user_b_deleted_at "nullable (CP-703 per-user soft delete)"
+        datetime created_at
+        datetime updated_at
     }
 
     MESSAGES {
@@ -359,12 +364,22 @@ erDiagram
         datetime read_at
     }
 
+    USER_BLOCKS {
+        int id PK
+        int blocker_id FK "CP-702; disabled while an order between users is in progress"
+        int blocked_id FK
+        datetime created_at
+    }
+
     USERS ||--o{ CONVERSATIONS : "participates as (user_a_id)"
     USERS ||--o{ CONVERSATIONS : "participates as (user_b_id)"
+    USERS ||--o{ CONVERSATIONS : "blocks via (blocked_by_id)"
     LISTINGS ||--o{ CONVERSATIONS : "may start from"
     ORDERS ||--o{ CONVERSATIONS : "may start from"
     CONVERSATIONS ||--o{ MESSAGES : contains
     USERS ||--o{ MESSAGES : sends
+    USERS ||--o{ USER_BLOCKS : "initiates (blocker_id)"
+    USERS ||--o{ USER_BLOCKS : "receives (blocked_id)"
 ```
 
 ---
@@ -429,6 +444,9 @@ erDiagram
         int category_id FK
         text description
         string status "enum: open, resolved"
+        int resolved_by FK "nullable (CP-1103)"
+        datetime resolved_at "nullable (CP-1103)"
+        text resolution_notes "CP-1103"
         datetime created_at
     }
 
@@ -442,8 +460,12 @@ erDiagram
         int reporter_id FK
         int target_user_id FK
         int category_id FK
+        int order_id FK "nullable"
         text description
         string status "enum: open, resolved"
+        int resolved_by FK "nullable (CP-1103)"
+        datetime resolved_at "nullable (CP-1103)"
+        text resolution_notes "CP-1103"
         datetime created_at
     }
 
@@ -459,6 +481,9 @@ erDiagram
         int category_id FK
         text description
         string status "enum: open, resolved"
+        int resolved_by FK "nullable (CP-1103)"
+        datetime resolved_at "nullable (CP-1103)"
+        text resolution_notes "CP-1103"
         datetime created_at
     }
 
@@ -474,6 +499,9 @@ erDiagram
         int category_id FK
         text description
         string status "enum: open, resolved"
+        int resolved_by FK "nullable (CP-1103)"
+        datetime resolved_at "nullable (CP-1103)"
+        text resolution_notes "CP-1103"
         datetime created_at
     }
 
@@ -513,7 +541,15 @@ erDiagram
         datetime created_at
     }
 
+    NOTIFICATION_PREFERENCES {
+        int id PK
+        int user_id FK "unique (1:1 per user, CP-802)"
+        json preferences "4 email categories + 6-group {push, email} channels"
+        datetime updated_at
+    }
+
     USERS ||--o{ NOTIFICATIONS : receives
+    USERS ||--o| NOTIFICATION_PREFERENCES : configures
 ```
 
 ---

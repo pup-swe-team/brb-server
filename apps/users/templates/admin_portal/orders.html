@@ -1,0 +1,89 @@
+{% extends "admin_portal/shell.html" %}
+{% block title %}Orders &middot; CoPUPAdmin{% endblock %}
+{% block content %}
+<nav class="crumbs" aria-label="Breadcrumb">
+  <span>Moderation</span> / <a href="{% url 'portal-orders' %}">Orders</a>
+</nav>
+
+<div class="page-heading">
+  <h1>Orders &amp; Status Corrections</h1>
+</div>
+
+<div class="tabs" role="tablist" aria-label="Order status filter tabs">
+  <a class="tab {% if status_filter == 'all' %}is-active{% endif %}" href="?status=all{% if search_query %}&q={{ search_query|urlencode }}{% endif %}">
+    All ({{ counts.all }})
+  </a>
+  {% for st_tab in status_tabs %}
+  <a class="tab {% if status_filter == st_tab.name %}is-active{% endif %}" href="?status={{ st_tab.name }}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}">
+    {{ st_tab.name|title }} ({{ st_tab.count }})
+  </a>
+  {% endfor %}
+</div>
+
+<div class="card" style="margin-bottom: 16px; padding: 14px;">
+  <form method="get" style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+    <input type="hidden" name="status" value="{{ status_filter }}">
+    <input
+      type="search"
+      name="q"
+      value="{{ search_query }}"
+      class="field-input"
+      placeholder="Search by order ID, item title, or borrower/lender name/email..."
+      style="flex: 1; min-width: 240px;"
+    >
+    <button type="submit" class="btn btn-primary">Search</button>
+    {% if search_query %}
+      <a class="btn btn-outline" href="?status={{ status_filter }}">Clear</a>
+    {% endif %}
+  </form>
+</div>
+
+<div class="card">
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Order</th>
+          <th>Listing</th>
+          <th>Borrower</th>
+          <th>Lender</th>
+          <th>Dates</th>
+          <th>Status</th>
+          <th style="text-align: right;">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for order in page %}
+        <tr>
+          <td data-label="Order"><strong>#{{ order.pk }}</strong></td>
+          <td data-label="Listing">{{ order.listing.title }}</td>
+          <td data-label="Borrower">
+            <div>{{ order.borrower.full_name }}</div>
+            <div style="font-size: 11px; color: var(--muted);">{{ order.borrower.email }}</div>
+          </td>
+          <td data-label="Lender">
+            <div>{{ order.listing.lender.full_name }}</div>
+            <div style="font-size: 11px; color: var(--muted);">{{ order.listing.lender.email }}</div>
+          </td>
+          <td data-label="Dates">{{ order.start_date }} &rarr; {{ order.end_date }}</td>
+          <td data-label="Status">
+            {% if order.status.name == 'completed' or order.status.name == 'returned' %}
+              <span class="badge badge-approved">{{ order.status.name|title }}</span>
+            {% elif order.status.name == 'disputed' or order.status.name == 'unreturned' or order.status.name == 'overdue' %}
+              <span class="badge badge-rejected">{{ order.status.name|title }}</span>
+            {% else %}
+              <span class="badge badge-pending">{{ order.status.name|title }}</span>
+            {% endif %}
+          </td>
+          <td data-label="Action" style="text-align: right;">
+            <a class="link" href="{% url 'portal-order-detail' order.pk %}">Inspect &amp; Override</a>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="7" class="table-empty">No matching orders found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

@@ -496,3 +496,27 @@ class DisputeDetailSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+
+class DisputeActionSerializer(serializers.Serializer):
+    """Input payload for resolving or escalating a damage dispute (CP-903)."""
+
+    resolution_notes = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+        trim_whitespace=True,
+    )
+    notes = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+        trim_whitespace=True,
+        write_only=True,
+    )
+
+    def validate(self, attrs: dict) -> dict:
+        attrs["resolution_notes"] = (
+            attrs.get("resolution_notes") or attrs.get("notes") or ""
+        ).strip()
+        return attrs

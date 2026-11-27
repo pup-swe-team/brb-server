@@ -131,12 +131,22 @@
                 <a href="{% url 'portal-users' %}?q={{ report.target_display }}" class="btn btn-outline" style="padding: 3px 8px; font-size: 11px; color: #0284c7; border-color: #bae6fd;">View User</a>
               </div>
             {% elif report.status == 'open' %}
-              <form method="post" action="{% url 'portal-report-resolve' report.type report.id %}" onsubmit="return confirm('Mark {{ report.type_label }} #{{ report.id }} as Resolved?');" style="margin: 0; display: inline-block;">
-                {% csrf_token %}
-                <button type="submit" class="btn btn-outline" style="padding: 4px 10px; font-size: 12px; color: #15803d; border-color: #bbf7d0;">Resolve</button>
-              </form>
+              <div style="display: inline-flex; gap: 6px; align-items: center; justify-content: flex-end;">
+                {% if report.conversation_id %}
+                  <a href="{% url 'portal-conversation-detail' report.conversation_id %}" class="btn btn-outline" style="padding: 4px 10px; font-size: 12px; color: #0284c7; border-color: #bae6fd;">View Chat</a>
+                {% endif %}
+                <form method="post" action="{% url 'portal-report-resolve' report.type report.id %}" onsubmit="return confirm('Mark {{ report.type_label }} #{{ report.id }} as Resolved?');" style="margin: 0; display: inline-block;">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn-outline" style="padding: 4px 10px; font-size: 12px; color: #15803d; border-color: #bbf7d0;">Resolve</button>
+                </form>
+              </div>
             {% else %}
-              <span style="color: var(--muted); font-size: 12px;">Resolved</span>
+              <div style="display: inline-flex; gap: 6px; align-items: center; justify-content: flex-end;">
+                {% if report.conversation_id %}
+                  <a href="{% url 'portal-conversation-detail' report.conversation_id %}" class="btn btn-outline" style="padding: 4px 10px; font-size: 12px; color: #0284c7; border-color: #bae6fd;">View Chat</a>
+                {% endif %}
+                <span style="color: var(--muted); font-size: 12px;">Resolved</span>
+              </div>
             {% endif %}
           </td>
         </tr>

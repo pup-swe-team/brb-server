@@ -1,0 +1,87 @@
+{% extends "admin_portal/shell.html" %}
+{% block title %}Unreturned Case #{{ dossier.id }} &middot; CoPUPAdmin{% endblock %}
+{% block content %}
+<nav class="crumbs" aria-label="Breadcrumb">
+  <span>Moderation</span> / <a href="{% url 'portal-unreturned-cases' %}">Unreturned Cases</a> / <span>Case #{{ dossier.id }}</span>
+</nav>
+
+<div class="page-heading">
+  <h1>Unreturned Case #{{ dossier.id }} &mdash; Order #{{ dossier.order.id }}</h1>
+  <span class="badge {% if dossier.status == 'returned' %}badge-approved{% elif dossier.status == 'escalated' %}badge-rejected{% else %}badge-pending{% endif %}">
+    {{ dossier.status|title }}
+  </span>
+</div>
+
+<div class="dash-grid" style="margin-bottom: 16px;">
+  <section class="card dash-card">
+    <h2>Order Details</h2>
+    <p><strong>Listing:</strong> {{ dossier.order.listing.title }} ({{ dossier.order.listing.category }})</p>
+    <p><strong>Order Status:</strong> {{ dossier.order.status|title }} ({{ dossier.order.start_date }} to {{ dossier.order.end_date }})</p>
+    {% if dossier.resolution_notes %}
+      <p><strong>Admin Notes:</strong> {{ dossier.resolution_notes }}</p>
+    {% endif %}
+  </section>
+
+  <section class="card dash-card">
+    <h2>Parties (Contact Access Audited)</h2>
+    <p><strong>Borrower:</strong> {{ dossier.borrower.full_name }} &middot; {{ dossier.borrower.email }} &middot; {{ dossier.borrower.contact_number }}</p>
+    <p><strong>Lender:</strong> {{ dossier.lender.full_name }} &middot; {{ dossier.lender.email }} &middot; {{ dossier.lender.contact_number }}</p>
+    {% if dossier.status == 'open' or dossier.status == 'escalated' %}
+    <hr style="margin: 14px 0; border: 0; border-top: 1px solid var(--border);">
+    <form method="post" action="{% url 'portal-unreturned-case-escalate' dossier.id %}" enctype="multipart/form-data" style="margin-bottom: 12px;">
+      {% csrf_token %}
+      <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">OSS / Campus Security Escalation Notes</label>
+      <textarea name="resolution_notes" rows="2" class="field-input" placeholder="e.g. Escalated to PUP OSS with borrower identity dossier"></textarea>
+      <label style="display: block; font-size: 12px; font-weight: 600; margin: 8px 0 4px;">Supporting Evidence (Optional)</label>
+      <input type="file" name="evidence" multiple class="field-input" style="font-size: 12px;">
+      <button type="submit" class="btn btn-outline" style="margin-top: 8px; color: #b91c1c; border-color: #fca5a5;">Escalate to OSS</button>
+    </form>
+    <form method="post" action="{% url 'portal-unreturned-case-close' dossier.id %}">
+      {% csrf_token %}
+      <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">Close Case</label>
+      <select name="status" class="field-input" style="margin-bottom: 6px;">
+        <option value="returned">Returned (reinstates borrower if no other open cases)</option>
+        <option value="unresolved">Unresolved (keeps borrower suspended)</option>
+      </select>
+      <textarea name="resolution_notes" rows="2" class="field-input" placeholder="Resolution notes"></textarea>
+      <button type="submit" class="btn btn-primary" style="margin-top: 8px;">Close Case</button>
+    </form>
+    {% endif %}
+  </section>
+</div>
+
+<div class="dash-grid">
+  <section class="card dash-card">
+    <h2>Linked Chat History</h2>
+    {% if dossier.chat %}
+      {% for conv in dossier.chat %}
+        <div style="margin-bottom: 10px;">
+          <strong>Conversation #{{ conv.conversation_id }}</strong>
+          {% for msg in conv.messages %}
+            <div style="font-size: 12px; margin-top: 4px;">
+              <strong>{{ msg.sender_name }}:</strong> {{ msg.content }}
+            </div>
+          {% empty %}
+            <p class="empty-note">No messages in this conversation.</p>
+          {% endfor %}
+        </div>
+      {% endfor %}
+    {% else %}
+      <p class="empty-note">No linked chat conversations.</p>
+    {% endif %}
+  </section>
+
+  <section class="card dash-card">
+    <h2>Auth Codes &amp; Evidence ({{ dossier.evidences|length }} files)</h2>
+    {% if dossier.codes %}
+      <ul>
+        {% for code in dossier.codes %}
+          <li><strong>{{ code.code_type|title }}</strong> ({{ code.auth_status }}) &mdash; {{ code.attempts|length }} attempt(s)</li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="empty-note">No authentication codes recorded.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

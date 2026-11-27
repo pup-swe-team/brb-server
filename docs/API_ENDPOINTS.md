@@ -244,19 +244,98 @@ users can reapply through `/api/v1/auth/apply-lender/` after identity verificati
 | POST | `/api/v1/admin/users/<id>/confirm-flag/` | admin | `{reason?}` | `200` confirms flag & restricts new listing/borrow creation |
 | POST | `/api/v1/admin/users/<id>/dismiss-flag/` | admin | `{reason?}` | `200` clears flag & lifts restrictions |
 
+## Admin Dashboard Summary Metrics (`apps/users/` — CP-1107)
+
+| Method | Path | Auth | Query | Success |
+|---|---|---|---|---|
+| GET | `/api/v1/admin/metrics/` | admin | — | `200` aggregated metrics: `total_users`, `active_listings`, `orders_by_status` (all 11 statuses), `open_reports` (all 4 report tables), `pending_verifications`, `open_disputes`, `open_unreturned_cases`, and structured breakdowns |
+| GET | `/api/v1/admin/dashboard/metrics/` | admin | — | `200` alias of `/api/v1/admin/metrics/` |
+
+## Damage & Missing-Item Disputes (`apps/orders/`, `apps/codes/` — CP-903)
+
+| Method | Path | Auth | Request body / query | Success |
+|---|---|---|---|---|
+| GET | `/api/v1/orders/<order_id>/damage-report/` | order party or admin | — | `200` latest dispute & evidence (`404` if none) |
+| POST | `/api/v1/orders/<order_id>/damage-report/` | order party | multipart/JSON `{description, evidence?[]}` | `201` transitions eligible order (`active`/`overdue`/`returned`) to `disputed`, releases dates, creates/updates `Dispute` (lender submissions require at least 1 photo + 1 video per CP-903; borrower responses populate `borrower_response` with optional evidence) (`409` for ineligible order status) (aliases: `/orders/<order_id>/dispute/`, `/orders/<order_id>/dispute-response/`) |
+| GET/POST | `/api/v1/orders/<order_id>/dispute/` | order party / admin | same as `damage-report/` | alias of `/api/v1/orders/<order_id>/damage-report/` |
+| POST | `/api/v1/orders/<order_id>/dispute-response/` | borrower / order party | multipart/JSON `{description, evidence?[]}` | `201` borrower counter-statement & evidence submission alias |
+| GET | `/api/v1/disputes/` | admin | `?status=open\|escalated\|resolved` | `200` list of damage/missing-item disputes (alias: `/api/v1/admin/disputes/`) |
+| GET | `/api/v1/disputes/<id>/` | admin | — | `200` full investigation dossier linking order, status overrides, photos/videos, linked reports, linked chat history, auth codes, and audited party contact/identity metadata (`AdminAccessLog(action='contact_release')`) (alias: `/api/v1/admin/disputes/<id>/`) |
+| GET | `/api/v1/disputes/<id>/conversation/` | admin | — | `200` retained chronological message timeline (`[{id, sender: "borrower"|"lender", text, sentAt}]`) with `AdminAccessLog(action="view_conversation")` |
+| POST | `/api/v1/disputes/<id>/resolve/` | admin | `{resolution_notes?}` | `200` marks dispute `resolved`, sets order to `completed` (stamping `completed_at`), releases dates, creates `OrderStatusOverride`, notifies both parties (`409` if already resolved) (alias: `/api/v1/admin/disputes/<id>/resolve/`) |
+| POST | `/api/v1/disputes/<id>/escalate/` | admin | multipart/JSON `{resolution_notes?, evidence?[]}` | `200` marks dispute `escalated` for PUP OSS, keeps order `disputed`, attaches optional evidence, notifies both parties (`409` if already resolved) (alias: `/api/v1/admin/disputes/<id>/escalate/`) |
+
+## Chat, Blocking & Evidence Retention (`apps/chat/` — CP-701, CP-702, CP-703)
+
+| Method | Path | Auth | Request body / query | Success |
+|---|---|---|---|---|
+| GET | `/api/v1/conversations/` | user | `?page=&page_size=` | `200` paginated threads (`unread_count`, `has_unread`, `can_block`, `is_blocked`, `is_retained`, `participant_affiliation`, plus client fields) (alias: `/api/v1/chats/`) |
+| POST | `/api/v1/conversations/` | user | `{participant_id?, listing_id?, order_id?, initial_message?}` | `201` (new) or `200` (existing) conversation (alias: `/api/v1/chats/`) |
+| POST | `/api/v1/listings/<listing_id>/chat/` | user | `{initial_message?}` | `201` (new) or `200` (existing) listing-scoped conversation |
+| POST | `/api/v1/orders/<order_id>/chat/` | order party | `{initial_message?}` | `201` (new) or `200` (existing) order-scoped conversation (`404` for outsiders) |
+| GET | `/api/v1/conversations/unread-count/` | user | — | `200` `{unread_count, unread_conversations_count}` |
+| GET | `/api/v1/conversations/<id>/` | participant | — | `200` conversation metadata (`404` for outsiders) (alias: `/api/v1/chats/<id>/`) |
+| DELETE | `/api/v1/conversations/<id>/` | participant | — | `200` hides for caller; purges only if both delete AND not retained |
+| GET | `/api/v1/conversations/<id>/messages/` | participant | `?after_id=&since=&mark_read=true&page=&page_size=` | `200` chronological messages (alias: `/api/v1/chats/<id>/messages/`) |
+| POST | `/api/v1/conversations/<id>/messages/` | participant | `{content}` or `{text}` | `201` persisted message (`403 conversation_blocked` if blocked) (alias: `/api/v1/chats/<id>/messages/`) |
+| POST | `/api/v1/conversations/<id>/read/` | participant | — | `200` marks incoming unread messages & matching `new_message` notifications read (alias: `/api/v1/chats/<id>/read/`) |
+| POST | `/api/v1/conversations/<id>/block/` | participant | — | `200` blocks counterparty (`409 active_order_in_progress` if active order exists) (alias: `/api/v1/chats/<id>/block/`) |
+| POST | `/api/v1/conversations/<id>/unblock/` | blocker | — | `200` unblocks counterparty (`403 not_blocker` if called by blocked user) (alias: `/api/v1/chats/<id>/unblock/`) |
+| GET | `/api/v1/chat/blocks/` | user | — | `200` list of users blocked by caller |
+| GET/POST/DELETE | `/api/v1/users/<user_id>/block/` | user | — | `200` block status / block user (`409` if order in progress) / `204` unblock |
+| POST | `/api/v1/users/<user_id>/unblock/` | blocker | — | `200` unblocks user (`403 not_blocker` if called by blocked user) |
+| GET | `/api/v1/admin/conversations/` | admin | `?retained=&order_id=&listing_id=&user_id=&is_blocked=` | `200` all conversations including blocked/user-deleted retained threads |
+| GET | `/api/v1/admin/conversations/<id>/` | admin | — | `200` full retained conversation + messages; logs `AdminAccessLog(action="view_conversation")` |
+
+## Notifications & Email Preferences (`apps/notifications/` — CP-801, CP-802)
+
+| Method | Path | Auth | Request body / query | Success |
+|---|---|---|---|---|
+| GET | `/api/v1/notifications/` | user | `?is_read=true\|false&page=&page_size=` | `200` paginated in-app notifications + `unread_count` |
+| GET | `/api/v1/notifications/unread-count/` | user | — | `200` `{unread_count}` |
+| POST | `/api/v1/notifications/<id>/read/` | user | — | `200` marks single notification read + updated `unread_count` |
+| POST | `/api/v1/notifications/read-all/` | user | — | `200` marks all user notifications read |
+| GET/PUT/PATCH | `/api/v1/notifications/preferences/` | user | `{order_updates?, messages?, reviews?, account_verification?}` or `{requests?, handover?, overdue?, messages?, reviews?, security?}` | `200` canonical booleans, `categories`, and 6-group `channels` `{push, email}` map |
+| GET/PUT/PATCH | `/api/v1/auth/notification-preferences/` | user | Same as `/api/v1/notifications/preferences/` | `200` alias for user settings screen |
+
+## Admin Review Queues (`apps/users/`, `apps/reports/`, `apps/orders/` — CP-1103)
+
+| Method | Path | Auth | Request body / query | Success |
+|---|---|---|---|---|
+| GET | `/api/v1/admin/review-queues/` | admin | `?type=all\|verification\|reports\|unreturned_cases&status=open\|closed\|all` | `200` `{counts, filter, items}` aggregating Verification, Reports (all 4 tables), and Unreturned Cases |
+| POST | `/api/v1/admin/review-queues/<queue_type>/<id>/action/` | admin | `{action, ...}` (`approve`/`reject` for `verification`; `resolve`/`dismiss` for `report`/`report_<subtype>`; `escalate`/`close` for `unreturned_case`) | `200` persists decision via the domain's canonical service and returns updated item (`409` on repeat action) |
+| GET | `/api/v1/admin/verifications/` | admin | `?status=pending\|approved\|rejected\|all` | `200` list of identity verification submissions |
+| GET | `/api/v1/admin/reports/` | admin | `?type=all\|user\|listing\|review\|message&status=open\|resolved\|all` | `200` normalized report queue |
+| POST | `/api/v1/admin/reports/<report_type>/<id>/resolve/` | admin | `{resolution_notes?}` | `200` persists `status='resolved'`, `resolved_by`, `resolved_at`, `resolution_notes`, notifies reporter (`409` if already resolved) |
+| GET/POST | `/api/v1/admin/unreturned-cases/...` | admin | same as `/api/v1/unreturned-cases/...` | aliases for list, detail dossier, `escalate/`, and `close/` |
+
 ## Admin portal (HTML, session login) — `/portal/`
 
 | Method | Path |
 |---|---|
 | GET/POST | `/portal/login/` |
-| GET | `/portal/logout/` |
-| GET | `/portal/` (dashboard) |
+| POST | `/portal/logout/` |
+| GET | `/portal/` (dashboard — CP-1107) |
 | GET | `/portal/verification/` (queue) |
 | GET | `/portal/verification/<id>/` (review page) |
-| GET/POST | `/portal/verification/<id>/review/` (submit decision) |
+| POST | `/portal/verification/<id>/review/` (submit decision) |
 | GET | `/portal/users/` (users & roles moderation) |
 | POST | `/portal/users/<id>/suspend/` |
 | POST | `/portal/users/<id>/reinstate/` |
 | POST | `/portal/users/<id>/ban/` |
 | POST | `/portal/users/<id>/confirm-flag/` |
 | POST | `/portal/users/<id>/dismiss-flag/` |
+| GET | `/portal/reports/` (reports & flags queue — CP-1103) |
+| POST | `/portal/reports/<report_type>/<id>/resolve/` (resolve report via shared service) |
+| GET | `/portal/disputes/` (damage/missing-item disputes queue — CP-903) |
+| GET | `/portal/disputes/<id>/` (dispute dossier) |
+| POST | `/portal/disputes/<id>/resolve/` (resolve dispute to Completed) |
+| POST | `/portal/disputes/<id>/escalate/` (escalate dispute to PUP OSS) |
+| GET | `/portal/orders/` | orders moderation queue (`CP-506` / `TC-074`) |
+| GET | `/portal/orders/<id>/` | order dossier & manual status correction form |
+| POST | `/portal/orders/<id>/override/` | submit manual order status correction (`reason` required) |
+| GET | `/portal/unreturned-cases/` (unreturned cases queue — CP-1103 / CP-506) |
+| GET | `/portal/unreturned-cases/<id>/` (unreturned case dossier) |
+| POST | `/portal/unreturned-cases/<id>/escalate/` (escalate case to PUP OSS) |
+| POST | `/portal/unreturned-cases/<id>/close/` (close case as `returned` or `unresolved`) |
+| GET | `/portal/conversations/<id>/` (retained chat evidence viewer — CP-703) |

@@ -32,13 +32,19 @@
       <a class="nav-item {% if active_nav == 'listings_reviews' %}is-active{% endif %}" href="{% url 'portal-listings-reviews' %}">
         <svg class="nav-icon"><use href="#icon-moderation"/></svg><span>Listings &amp; Reviews</span>
       </a>
-      <a class="nav-item {% if active_nav == 'unreturned' %}is-active{% endif %}" href="{% url 'portal-review-queues' %}?tab=unreturned">
+      <a class="nav-item {% if active_nav == 'orders' %}is-active{% endif %}" href="{% url 'portal-orders' %}">
+        <svg class="nav-icon"><use href="#icon-reports"/></svg><span>Orders</span>
+      </a>
+      <a class="nav-item {% if active_nav == 'queues' %}is-active{% endif %}" href="{% url 'portal-review-queues' %}">
+        <svg class="nav-icon"><use href="#icon-reports"/></svg><span>Review Queues</span>
+      </a>
+      <a class="nav-item {% if active_nav == 'unreturned_cases' or active_nav == 'unreturned' %}is-active{% endif %}" href="{% url 'portal-unreturned-cases' %}">
         <svg class="nav-icon"><use href="#icon-unreturned"/></svg><span>Unreturned Cases</span>
         {% if nav_unreturned_count %}<span class="nav-badge">{{ nav_unreturned_count }}</span>{% endif %}
       </a>
-      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="CP-903 lands in Sprint 5">
+      <a class="nav-item {% if active_nav == 'disputes' %}is-active{% endif %}" href="{% url 'portal-disputes-queue' %}">
         <svg class="nav-icon"><use href="#icon-disputes"/></svg><span>Disputes</span>
-        <span class="nav-tag">CP-903</span>
+        {% if nav_disputes_count %}<span class="nav-badge">{{ nav_disputes_count }}</span>{% endif %}
       </a>
       <p class="nav-group">System <span class="nav-group-tag">Sprint 5</span></p>
       <a class="nav-item {% if active_nav == 'system_parameters' %}is-active{% endif %}" href="{% url 'portal-system-parameters' %}">

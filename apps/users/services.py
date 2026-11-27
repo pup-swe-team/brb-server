@@ -759,11 +759,15 @@ def review_identity_document(
         notification_type, _ = NotificationType.objects.get_or_create(
             name=NOTIFICATION_TYPE_VERIFICATION_RESULT
         )
-        Notification.objects.create(
+        notif = Notification(
             user=document.user,
             type=notification_type,
             reference_id=str(document.id),
         )
+        # Dedicated CP-106 email with tailored approval/rejection details is gated
+        # and sent below; skip the generic Notification post_save email to avoid duplicates.
+        notif._skip_email_dispatch = True
+        notif.save()
 
         from apps.audit.services import log_admin_document_access
 
@@ -774,13 +778,19 @@ def review_identity_document(
             request=request,
         )
 
-    try:
-        send_identity_review_email(document)
-    except Exception:
-        logger.exception(
-            "CP-106: failed to send identity review notification email to %s",
-            document.user.email,
-        )
+    from apps.notifications.services import should_send_email_for_event
+
+    if should_send_email_for_event(
+        user=document.user,
+        event_name=NOTIFICATION_TYPE_VERIFICATION_RESULT,
+    ):
+        try:
+            send_identity_review_email(document)
+        except Exception:
+            logger.exception(
+                "CP-106: failed to send identity review notification email to %s",
+                document.user.email,
+            )
 
     return document
 

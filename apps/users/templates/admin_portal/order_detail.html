@@ -1,0 +1,89 @@
+{% extends "admin_portal/shell.html" %}
+{% block title %}Order #{{ order.pk }} &middot; CoPUPAdmin{% endblock %}
+{% block content %}
+<nav class="crumbs" aria-label="Breadcrumb">
+  <span>Moderation</span> / <a href="{% url 'portal-orders' %}">Orders</a> / <span>Order #{{ order.pk }}</span>
+</nav>
+
+<div class="page-heading">
+  <h1>Order #{{ order.pk }} &mdash; {{ order.listing.title }}</h1>
+  <span class="badge {% if order.status.name == 'completed' or order.status.name == 'returned' %}badge-approved{% elif order.status.name == 'disputed' or order.status.name == 'unreturned' or order.status.name == 'overdue' %}badge-rejected{% else %}badge-pending{% endif %}">
+    {{ order.status.name|title }}
+  </span>
+</div>
+
+<div class="dash-grid" style="margin-bottom: 16px;">
+  <section class="card dash-card">
+    <h2>Order Summary</h2>
+    <p><strong>Listing:</strong> {{ order.listing.title }} ({{ order.listing.category.name }})</p>
+    <p><strong>Pickup Location:</strong> {{ order.listing.pickup_location.name }}</p>
+    <p><strong>Current Status:</strong> {{ order.status.name|title }}</p>
+    <p><strong>Borrow Period:</strong> {{ order.start_date }} to {{ order.end_date }}</p>
+    <p><strong>Borrower:</strong> {{ order.borrower.full_name }} ({{ order.borrower.email }})</p>
+    <p><strong>Lender:</strong> {{ order.listing.lender.full_name }} ({{ order.listing.lender.email }})</p>
+    {% if order.completed_at %}
+      <p><strong>Completed At:</strong> {{ order.completed_at|date:"M. j, Y, h:i A" }}</p>
+    {% endif %}
+  </section>
+
+  <section class="card dash-card">
+    <h2>Manual Order Status Correction (CP-506)</h2>
+    <p style="font-size: 13px; color: var(--muted); margin-bottom: 12px;">
+      Use when an order is stuck mid-handover or mid-return. Every override requires a reason and writes an immutable entry to the status override &amp; audit logs.
+    </p>
+    <form method="post" action="{% url 'portal-order-override' order.pk %}">
+      {% csrf_token %}
+      <label for="new_status" style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">Corrected Status</label>
+      <select id="new_status" name="new_status" class="field-input" style="margin-bottom: 10px;" required>
+        {% for st_name in all_statuses %}
+          <option value="{{ st_name }}" {% if st_name == order.status.name %}selected{% endif %}>{{ st_name|title }}</option>
+        {% endfor %}
+      </select>
+
+      <label for="reason" style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">Reason (Required)</label>
+      <textarea
+        id="reason"
+        name="reason"
+        rows="3"
+        class="field-input"
+        placeholder="Explain why the order status is being manually corrected..."
+        required
+      ></textarea>
+
+      <button type="submit" class="btn btn-primary" style="margin-top: 10px;">Confirm Status Override</button>
+    </form>
+  </section>
+</div>
+
+<section class="card dash-card">
+  <h2>Status Override History ({{ overrides|length }})</h2>
+  {% if overrides %}
+    <div class="table-scroll" style="margin-top: 8px;">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>Admin</th>
+            <th>Transition</th>
+            <th>Reason</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for ov in overrides %}
+          <tr>
+            <td data-label="Timestamp">{{ ov.overridden_at|date:"M. j, Y, h:i A" }}</td>
+            <td data-label="Admin">{{ ov.admin.full_name }} ({{ ov.admin.email }})</td>
+            <td data-label="Transition">
+              <strong>{{ ov.previous_status|title }}</strong> &rarr; <strong>{{ ov.new_status|title }}</strong>
+            </td>
+            <td data-label="Reason">{{ ov.reason }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="empty-note">No manual status overrides recorded for this order.</p>
+  {% endif %}
+</section>
+{% endblock %}
