@@ -270,3 +270,32 @@ class BorrowRequestTests(APITestCase):
         self.assertEqual(list_res.status_code, 200)
         active_order.refresh_from_db()
         self.assertEqual(active_order.status.name, "overdue")
+
+    def test_borrow_request_enforces_listing_max_duration_days(self):
+        """FE-BUG-5001: Inclusive duration exceeding max_duration_days is rejected."""
+        self.listing.max_duration_days = 3
+        self.listing.save(update_fields=["max_duration_days"])
+        self.client.force_authenticate(user=self.borrower)
+
+        # 4 inclusive days (start to start+3) > 3 max -> rejected
+        too_long = self.client.post(
+            self.url,
+            self.payload(
+                start_date=self.start.isoformat(),
+                end_date=(self.start + timedelta(days=3)).isoformat(),
+            ),
+            format="json",
+        )
+        self.assertEqual(too_long.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(too_long.data.get("code"), "max_duration_exceeded")
+
+        # 3 inclusive days (start to start+2) <= 3 max -> accepted
+        allowed = self.client.post(
+            self.url,
+            self.payload(
+                start_date=self.start.isoformat(),
+                end_date=(self.start + timedelta(days=2)).isoformat(),
+            ),
+            format="json",
+        )
+        self.assertEqual(allowed.status_code, status.HTTP_201_CREATED)

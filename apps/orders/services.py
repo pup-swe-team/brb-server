@@ -206,6 +206,19 @@ def request_borrow(
             code="borrowing_limit_reached",
         )
 
+    if listing.max_duration_days is not None:
+        requested_days = (end_date - start_date).days + 1
+        if requested_days > listing.max_duration_days:
+            raise ValidationError(
+                {
+                    "end_date": (
+                        f"Borrowing period ({requested_days} days) exceeds the lender's "
+                        f"maximum of {listing.max_duration_days} day(s)."
+                    )
+                },
+                code="max_duration_exceeded",
+            )
+
     if not _is_range_available(listing=listing, start=start_date, end=end_date):
         raise ValidationError(
             {

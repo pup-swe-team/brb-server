@@ -434,3 +434,24 @@ class ReviewSubmissionTests(TestCase):
         item_data = results[0]
         self.assertEqual(item_data["rating"], 5.0)
         self.assertEqual(item_data["review_count"], 1)
+
+        # 7. Alt fallback params (?reviewee=&role=, /users/<id>/reviews/?role=) respect role
+        reviewee_resp = self.client.get(
+            f"/api/v1/reviews/?reviewee={self.borrower.pk}&role=lender"
+        )
+        self.assertEqual(reviewee_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(reviewee_resp.data), 0)
+
+        user_role_resp = self.client.get(
+            f"/api/v1/users/{self.borrower.pk}/reviews/?role=lender"
+        )
+        self.assertEqual(user_role_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(user_role_resp.data["review_count"], 0)
+        self.assertEqual(len(user_role_resp.data["results"]), 0)
+
+        user_borrower_resp = self.client.get(
+            f"/api/v1/users/{self.borrower.pk}/reviews/?role=borrower"
+        )
+        self.assertEqual(user_borrower_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(user_borrower_resp.data["review_count"], 1)
+        self.assertEqual(len(user_borrower_resp.data["results"]), 1)
