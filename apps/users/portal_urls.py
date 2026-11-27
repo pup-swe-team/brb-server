@@ -130,4 +130,46 @@ urlpatterns = [
         portal.report_resolve,
         name="portal-report-resolve",
     ),
+    # Damage / missing-item disputes (CP-903).
+    path(
+        "disputes/",
+        portal.disputes_queue,
+        name="portal-disputes-queue",
+    ),
+    path(
+        "disputes/<int:pk>/",
+        portal.dispute_detail,
+        name="portal-dispute-detail",
+    ),
+    path(
+        "disputes/<int:pk>/resolve/",
+        portal.dispute_resolve,
+        name="portal-dispute-resolve",
+    ),
+    path(
+        "disputes/<int:pk>/escalate/",
+        portal.dispute_escalate,
+        name="portal-dispute-escalate",
+    ),
+    # Unreturned cases moderation (CP-1103 / CP-506 / CP-1111).
+    path(
+        "unreturned-cases/",
+        portal.unreturned_cases_queue,
+        name="portal-unreturned-cases",
+    ),
+    path(
+        "unreturned-cases/<int:pk>/",
+        portal.unreturned_case_detail,
+        name="portal-unreturned-case-detail",
+    ),
+    path(
+        "unreturned-cases/<int:pk>/escalate/",
+        portal.unreturned_case_escalate,
+        name="portal-unreturned-case-escalate",
+    ),
+    path(
+        "unreturned-cases/<int:pk>/close/",
+        portal.unreturned_case_close,
+        name="portal-unreturned-case-close",
+    ),
 ]

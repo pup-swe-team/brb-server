@@ -24,18 +24,28 @@
   <section class="card stat-card">
     <span class="stat-label">Open Reports</span>
     <span class="stat-value">{{ stats.open_reports|intcomma }}</span>
-    <span class="stat-note">Awaiting review</span>
+    <span class="stat-note">Awaiting review{% if stats.flagged_users_pending %} &middot; {{ stats.flagged_users_pending }} flagged user{{ stats.flagged_users_pending|pluralize }}{% endif %}</span>
   </section>
   <section class="card stat-card">
     <span class="stat-label">Pending Verifications</span>
     <span class="stat-value">{{ stats.pending_verifications|intcomma }}</span>
     <span class="stat-note">{% if stats.pending_days is None %}Nothing waiting{% else %}Oldest waiting {{ stats.pending_days }} day{{ stats.pending_days|pluralize }}{% endif %}</span>
   </section>
+  <section class="card stat-card">
+    <span class="stat-label">Open Disputes</span>
+    <span class="stat-value">{{ stats.open_disputes|intcomma }}</span>
+    <span class="stat-note">Damage &amp; missing-item cases</span>
+  </section>
+  <section class="card stat-card">
+    <span class="stat-label">Unreturned Cases</span>
+    <span class="stat-value">{{ stats.open_unreturned_cases|intcomma }}</span>
+    <span class="stat-note">Open &amp; escalated traces</span>
+  </section>
 </div>
 
 <div class="dash-grid">
   <section class="card dash-card">
-    <h2>Orders by Status</h2>
+    <h2>Orders by Status ({{ stats.total_orders|intcomma }} Total)</h2>
     <div class="orders-list">
       {% for row in orders_by_status_rows %}
       <div class="order-row">

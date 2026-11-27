@@ -11,7 +11,7 @@ from django.db import IntegrityError, transaction
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import APIException, ValidationError
 
 from apps.chat.models import Message
 from apps.core.constants import (
@@ -23,6 +23,8 @@ from apps.core.constants import (
 from apps.core.selectors import get_int_config
 from apps.listings.constants import LISTING_STATUS_DELETED
 from apps.listings.models import Listing
+from apps.notifications.constants import NOTIFICATION_TYPE_REPORT_UPDATES
+from apps.notifications.models import Notification, NotificationType
 from apps.orders.models import Order
 from apps.reviews.models import Review
 from apps.users.models import User
@@ -33,6 +35,7 @@ from .constants import (
     DEFAULT_REVIEW_REPORT_CATEGORIES,
     DEFAULT_USER_REPORT_CATEGORIES,
     REPORT_STATUS_OPEN,
+    REPORT_STATUS_RESOLVED,
     REPORT_TARGET_LISTING,
     REPORT_TARGET_MESSAGE,
     REPORT_TARGET_REVIEW,
@@ -619,3 +622,213 @@ def auto_flag_repeatedly_reported_users(
         "window_days": window_days,
         "executed_at": current_time.isoformat(),
     }
+
+
+# ---------------------------------------------------------------------------
+# CP-1103 -- Admin Report Queue Listing & Resolution Persistence
+# ---------------------------------------------------------------------------
+
+
+class ReportStateConflictError(APIException):
+    """Raised when an Admin attempts to resolve an already-resolved report."""
+
+    status_code = 409
+    default_detail = "This report has already been resolved."
+    default_code = "report_state_conflict"
+
+
+REPORT_MODEL_BY_TYPE: dict[str, type[Any]] = {
+    REPORT_TARGET_USER: UserReport,
+    REPORT_TARGET_LISTING: ListingReport,
+    REPORT_TARGET_REVIEW: ReviewReport,
+    REPORT_TARGET_MESSAGE: MessageReport,
+}
+
+
+def _normalize_report_row(
+    report: UserReport | ListingReport | ReviewReport | MessageReport,
+    report_type: str,
+) -> dict[str, Any]:
+    if isinstance(report, UserReport):
+        target_id = report.target_user_id
+        target_display = report.target_user.full_name or report.target_user.email
+        subject_user_id = report.target_user_id
+        subject_user_name = target_display
+    elif isinstance(report, ListingReport):
+        target_id = report.target_listing_id
+        target_display = report.target_listing.title
+        subject_user_id = report.target_listing.lender_id
+        subject_user_name = (
+            report.target_listing.lender.full_name or report.target_listing.lender.email
+        )
+    elif isinstance(report, ReviewReport):
+        target_id = report.target_review_id
+        target_display = f"Review #{report.target_review_id}"
+        subject_user_id = report.target_review.reviewer_id
+        subject_user_name = (
+            report.target_review.reviewer.full_name
+            or report.target_review.reviewer.email
+        )
+    else:
+        target_id = report.target_message_id
+        snippet = (
+            report.target_message.content[:60] + "..."
+            if len(report.target_message.content) > 60
+            else report.target_message.content
+        )
+        target_display = snippet
+        subject_user_id = report.target_message.sender_id
+        subject_user_name = (
+            report.target_message.sender.full_name or report.target_message.sender.email
+        )
+
+    return {
+        "id": report.pk,
+        "report_type": report_type,
+        "reporter_id": report.reporter_id,
+        "reporter_name": report.reporter.full_name or report.reporter.email,
+        "target_id": target_id,
+        "target_display": target_display,
+        "subject_user_id": subject_user_id,
+        "subject_user_name": subject_user_name,
+        "category": report.category.name if report.category else "",
+        "description": report.description,
+        "status": report.status,
+        "resolved_by_id": report.resolved_by_id,
+        "resolved_by_name": (
+            report.resolved_by.full_name if report.resolved_by else None
+        ),
+        "resolved_at": report.resolved_at.isoformat() if report.resolved_at else None,
+        "resolution_notes": report.resolution_notes or "",
+        "created_at": report.created_at.isoformat() if report.created_at else None,
+        "_sort_ts": report.created_at,
+    }
+
+
+def list_reports(
+    *,
+    report_type: str = "all",
+    status_filter: str = REPORT_STATUS_OPEN,
+    limit_per_type: int = 100,
+) -> list[dict[str, Any]]:
+    """Return normalized Admin report queue items across the four report models (CP-1103)."""
+    normalized_type = (report_type or "all").strip().lower()
+    normalized_status = (status_filter or REPORT_STATUS_OPEN).strip().lower()
+
+    types_to_query = (
+        (
+            REPORT_TARGET_USER,
+            REPORT_TARGET_LISTING,
+            REPORT_TARGET_REVIEW,
+            REPORT_TARGET_MESSAGE,
+        )
+        if normalized_type == "all"
+        else (normalized_type,)
+    )
+
+    items: list[dict[str, Any]] = []
+    for rtype in types_to_query:
+        if rtype == REPORT_TARGET_USER:
+            qs = UserReport.objects.select_related(
+                "reporter", "target_user", "category", "resolved_by"
+            )
+        elif rtype == REPORT_TARGET_LISTING:
+            qs = ListingReport.objects.select_related(
+                "reporter",
+                "target_listing",
+                "target_listing__lender",
+                "category",
+                "resolved_by",
+            )
+        elif rtype == REPORT_TARGET_REVIEW:
+            qs = ReviewReport.objects.select_related(
+                "reporter",
+                "target_review",
+                "target_review__reviewer",
+                "category",
+                "resolved_by",
+            )
+        elif rtype == REPORT_TARGET_MESSAGE:
+            qs = MessageReport.objects.select_related(
+                "reporter",
+                "target_message",
+                "target_message__sender",
+                "category",
+                "resolved_by",
+            )
+        else:
+            raise ValidationError(
+                {
+                    "type": (
+                        f"Invalid report type '{report_type}'. Must be one of: "
+                        "all, user, listing, review, message."
+                    )
+                }
+            )
+
+        if normalized_status != "all":
+            qs = qs.filter(status=normalized_status)
+
+        for row in qs.order_by("-created_at", "-pk")[:limit_per_type]:
+            items.append(_normalize_report_row(row, rtype))
+
+    items.sort(key=lambda entry: entry["_sort_ts"], reverse=True)
+    for entry in items:
+        entry.pop("_sort_ts", None)
+    return items
+
+
+@transaction.atomic
+def resolve_report(
+    *,
+    report_type: str,
+    report_id: int,
+    admin: User,
+    resolution_notes: str = "",
+) -> UserReport | ListingReport | ReviewReport | MessageReport:
+    """
+    Persist Admin resolution of a report across any of the 4 report tables (CP-1103, FR14).
+
+    - Locks the report row and rejects double-resolution with 409 Conflict.
+    - Records `status='resolved'`, `resolved_by`, `resolved_at`, and `resolution_notes`.
+    - Sends an in-app `report_updates` notification to the reporter.
+    """
+    normalized_type = (report_type or "").strip().lower()
+    model = REPORT_MODEL_BY_TYPE.get(normalized_type)
+    if model is None:
+        raise ValidationError(
+            {
+                "report_type": (
+                    f"Invalid report type '{report_type}'. Must be one of: "
+                    "user, listing, review, message."
+                )
+            }
+        )
+
+    report = get_object_or_404(model.objects.select_for_update(), pk=report_id)
+    if report.status == REPORT_STATUS_RESOLVED:
+        raise ReportStateConflictError()
+
+    cleaned_notes = (resolution_notes or "").strip()
+    report.status = REPORT_STATUS_RESOLVED
+    report.resolved_by = admin
+    report.resolved_at = timezone.now()
+    report.resolution_notes = cleaned_notes
+    report.save(
+        update_fields=[
+            "status",
+            "resolved_by",
+            "resolved_at",
+            "resolution_notes",
+        ]
+    )
+
+    notification_type, _ = NotificationType.objects.get_or_create(
+        name=NOTIFICATION_TYPE_REPORT_UPDATES
+    )
+    Notification.objects.create(
+        user_id=report.reporter_id,
+        type=notification_type,
+        reference_id=str(report.pk),
+    )
+    return report

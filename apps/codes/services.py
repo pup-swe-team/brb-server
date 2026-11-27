@@ -626,12 +626,22 @@ def verify_return_code(
             cleaned_desc = (dispute_description or "").strip() or (
                 "Item flagged for damage or missing parts upon return."
             )
-            dispute = Dispute.objects.create(
-                order=locked_order,
-                raised_by=actor,
-                description=cleaned_desc,
-                status=Dispute.StatusChoices.OPEN,
+            dispute = (
+                Dispute.objects.select_for_update()
+                .filter(order=locked_order, status=Dispute.StatusChoices.OPEN)
+                .order_by("-created_at")
+                .first()
             )
+            if dispute is None:
+                dispute = Dispute.objects.create(
+                    order=locked_order,
+                    raised_by=actor,
+                    description=cleaned_desc,
+                    status=Dispute.StatusChoices.OPEN,
+                )
+            elif (dispute_description or "").strip():
+                dispute.description = cleaned_desc
+                dispute.save(update_fields=["description", "updated_at"])
             for evidence_file in evidence_files or []:
                 DisputeEvidence.objects.create(
                     dispute=dispute,

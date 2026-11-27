@@ -117,8 +117,30 @@ class PortalDashboardTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Total Users")
         self.assertContains(response, "Pending Verifications")
+        self.assertContains(response, "Open Disputes")
+        self.assertContains(response, "Unreturned Cases")
         self.assertContains(response, "Orders by Status")
         self.assertContains(response, "Ash Reyes")
+
+    def test_dashboard_stats_match_metrics_api_endpoint(self) -> None:
+        portal_res = self.client.get(reverse("portal-dashboard"))
+        api_res = self.client.get(reverse("api-admin-metrics"))
+        self.assertEqual(portal_res.status_code, 200)
+        self.assertEqual(api_res.status_code, 200)
+
+        api_data = api_res.json()
+        stats = portal_res.context["stats"]
+        self.assertEqual(stats["total_users"], api_data["total_users"])
+        self.assertEqual(stats["active_listings"], api_data["active_listings"])
+        self.assertEqual(stats["open_reports"], api_data["open_reports"])
+        self.assertEqual(
+            stats["pending_verifications"], api_data["pending_verifications"]
+        )
+        self.assertEqual(stats["open_disputes"], api_data["open_disputes"])
+        self.assertEqual(
+            stats["open_unreturned_cases"], api_data["open_unreturned_cases"]
+        )
+        self.assertEqual(stats["total_orders"], api_data["total_orders"])
 
 
 class PortalVerificationQueueTests(TestCase):
@@ -638,11 +660,13 @@ class PortalSidebarTests(TestCase):
         self.assertContains(response, reverse("portal-listings-reviews"))
         self.assertContains(response, reverse("portal-users"))
         self.assertContains(response, reverse("portal-reports-queue"))
+        self.assertContains(response, reverse("portal-disputes-queue"))
+        self.assertContains(response, reverse("portal-unreturned-cases"))
 
     def test_locked_sections_carry_their_ticket(self) -> None:
         response = self.client.get(reverse("portal-dashboard"))
 
-        for ticket in ("CP-1111", "CP-1112", "CP-1113", "CP-903"):
+        for ticket in ("CP-1112", "CP-1113"):
             self.assertContains(response, ticket)
 
     def test_locked_sections_are_not_links(self) -> None:
@@ -1096,3 +1120,167 @@ class AdminPortalReportsQueueTests(TestCase):
         self.assertEqual(res.status_code, 302)
         self.report.refresh_from_db()
         self.assertEqual(self.report.status, "resolved")
+
+
+class AdminPortalDisputesTests(TestCase):
+    """Admin Portal CP-903 damage & missing-item disputes queue and dossier actions."""
+
+    def setUp(self) -> None:
+        from datetime import timedelta
+
+        from apps.orders.models import Dispute, Order, OrderStatus
+
+        self.admin = make_user(
+            "admin-disputes@iskolarngbayan.pup.edu.ph",
+            is_staff=True,
+            full_name="Dispute Admin",
+        )
+        self.lender = make_user(
+            "dispute-lender@iskolarngbayan.pup.edu.ph",
+            full_name="Lender One",
+        )
+        self.borrower = make_user(
+            "dispute-borrower@iskolarngbayan.pup.edu.ph",
+            full_name="Borrower Two",
+        )
+        cat = ListingCategory.objects.create(name="Electronics")
+        loc = PickupLocation.objects.create(name="North Wing")
+        active_st, _ = ListingStatus.objects.get_or_create(name="active")
+        listing = Listing.objects.create(
+            lender=self.lender,
+            title="Graphing Calculator",
+            description="Working",
+            category=cat,
+            pickup_location=loc,
+            status=active_st,
+        )
+        disputed_st, _ = OrderStatus.objects.get_or_create(name="disputed")
+        today = timezone.localdate()
+        self.order = Order.objects.create(
+            listing=listing,
+            borrower=self.borrower,
+            start_date=today - timedelta(days=3),
+            end_date=today - timedelta(days=1),
+            status=disputed_st,
+        )
+        self.dispute = Dispute.objects.create(
+            order=self.order,
+            raised_by=self.lender,
+            description="Missing battery cover",
+            status=Dispute.StatusChoices.OPEN,
+        )
+
+    def test_disputes_queue_and_dossier_render(self) -> None:
+        self.client.force_login(self.admin)
+        queue_res = self.client.get(reverse("portal-disputes-queue"))
+        self.assertEqual(queue_res.status_code, 200)
+        self.assertContains(queue_res, "Graphing Calculator")
+
+        detail_res = self.client.get(
+            reverse("portal-dispute-detail", args=[self.dispute.pk])
+        )
+        self.assertEqual(detail_res.status_code, 200)
+        self.assertContains(detail_res, "Missing battery cover")
+
+    def test_portal_dispute_escalate_and_resolve(self) -> None:
+        self.client.force_login(self.admin)
+        esc_res = self.client.post(
+            reverse("portal-dispute-escalate", args=[self.dispute.pk]),
+            {"resolution_notes": "Sent to PUP OSS"},
+        )
+        self.assertEqual(esc_res.status_code, 302)
+        self.dispute.refresh_from_db()
+        self.order.refresh_from_db()
+        self.assertEqual(self.dispute.status, "escalated")
+        self.assertEqual(self.order.status.name, "disputed")
+
+        res_res = self.client.post(
+            reverse("portal-dispute-resolve", args=[self.dispute.pk]),
+            {"resolution_notes": "Cover replaced"},
+        )
+        self.assertEqual(res_res.status_code, 302)
+        self.dispute.refresh_from_db()
+        self.order.refresh_from_db()
+        self.assertEqual(self.dispute.status, "resolved")
+        self.assertEqual(self.order.status.name, "completed")
+
+
+class AdminPortalUnreturnedCasesTests(TestCase):
+    """Admin Portal CP-1103 / CP-506 unreturned cases queue and dossier actions."""
+
+    def setUp(self) -> None:
+        from datetime import timedelta
+
+        from apps.orders.models import (
+            Order,
+            OrderStatus,
+            UnreturnedCase,
+            UnreturnedCaseStatus,
+        )
+
+        self.admin = make_user(
+            "admin-unret@iskolarngbayan.pup.edu.ph",
+            is_staff=True,
+            full_name="Unreturned Admin",
+        )
+        self.lender = make_user(
+            "unret-lender@iskolarngbayan.pup.edu.ph",
+            full_name="Lender Unret",
+        )
+        self.borrower = make_user(
+            "unret-borrower@iskolarngbayan.pup.edu.ph",
+            full_name="Borrower Unret",
+            account_status="suspended",
+        )
+        cat = ListingCategory.objects.create(name="Tools")
+        loc = PickupLocation.objects.create(name="West Gate")
+        active_st, _ = ListingStatus.objects.get_or_create(name="active")
+        listing = Listing.objects.create(
+            lender=self.lender,
+            title="Soldering Iron",
+            description="Good",
+            category=cat,
+            pickup_location=loc,
+            status=active_st,
+        )
+        unret_order_st, _ = OrderStatus.objects.get_or_create(name="unreturned")
+        today = timezone.localdate()
+        self.order = Order.objects.create(
+            listing=listing,
+            borrower=self.borrower,
+            start_date=today - timedelta(days=15),
+            end_date=today - timedelta(days=10),
+            status=unret_order_st,
+        )
+        open_uc_st, _ = UnreturnedCaseStatus.objects.get_or_create(name="open")
+        self.case = UnreturnedCase.objects.create(order=self.order, status=open_uc_st)
+
+    def test_unreturned_cases_queue_dossier_and_actions(self) -> None:
+        self.client.force_login(self.admin)
+        queue_res = self.client.get(reverse("portal-unreturned-cases"))
+        self.assertEqual(queue_res.status_code, 200)
+        self.assertContains(queue_res, "Soldering Iron")
+
+        detail_res = self.client.get(
+            reverse("portal-unreturned-case-detail", args=[self.case.pk])
+        )
+        self.assertEqual(detail_res.status_code, 200)
+        self.assertContains(detail_res, "Borrower Unret")
+
+        esc_res = self.client.post(
+            reverse("portal-unreturned-case-escalate", args=[self.case.pk]),
+            {"resolution_notes": "Sent to PUP OSS"},
+        )
+        self.assertEqual(esc_res.status_code, 302)
+        self.case.refresh_from_db()
+        self.assertEqual(self.case.status.name, "escalated")
+
+        close_res = self.client.post(
+            reverse("portal-unreturned-case-close", args=[self.case.pk]),
+            {"status": "returned", "resolution_notes": "Recovered item"},
+        )
+        self.assertEqual(close_res.status_code, 302)
+        self.case.refresh_from_db()
+        self.borrower.refresh_from_db()
+        self.assertEqual(self.case.status.name, "returned")
+        self.assertEqual(self.borrower.account_status, "active")

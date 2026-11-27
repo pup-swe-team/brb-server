@@ -192,6 +192,9 @@ def serialize_report(
         "category": report.category.name,
         "description": report.description,
         "status": report.status,
+        "resolved_by_id": report.resolved_by_id,
+        "resolved_at": report.resolved_at.isoformat() if report.resolved_at else None,
+        "resolution_notes": report.resolution_notes or "",
         "created_at": report.created_at.isoformat() if report.created_at else None,
         **extra,
     }

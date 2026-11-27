@@ -16,7 +16,6 @@ every staff-gated page logs them out.
 """
 
 import functools
-from datetime import timedelta
 
 from django import forms
 from django.contrib import messages
@@ -25,7 +24,7 @@ from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.forms import AuthenticationForm
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.paginator import Paginator
-from django.db.models import Count, Min, Q
+from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -34,22 +33,40 @@ from django.views.decorators.http import require_POST
 
 from apps.audit.services import log_admin_document_access
 from apps.listings.models import Listing, ListingCategory, ListingStatus, PickupLocation
-from apps.orders.models import Order
+from apps.orders.models import Dispute, Order, UnreturnedCase
+from apps.orders.selectors import (
+    get_dispute_dossier,
+    get_unreturned_case_dossier,
+    list_disputes,
+    list_unreturned_cases,
+)
+from apps.orders.services import (
+    OrderCaseConflictError,
+    close_unreturned_case,
+    escalate_dispute,
+    escalate_unreturned_case,
+    resolve_dispute,
+)
 from apps.reports.models import (
     ListingReport,
     MessageReport,
     ReviewReport,
     UserReport,
 )
+from apps.reports.services import ReportStateConflictError, resolve_report
 from apps.reviews.models import Review
 
+from .admin_selectors import (
+    get_admin_dashboard_metrics,
+    get_portal_nav_counts,
+)
 from .constants import (
     IDENTITY_DOCUMENT_STATUS_PENDING,
     IDENTITY_DOCUMENT_TYPE_PUP_ID,
     PUP_ID_NUMBER_REGEX,
 )
 from .encryption import decrypt_document_data, detect_document_content_type
-from .models import IdentityDocument, IdentityDocumentStatus, LenderRevocation, User
+from .models import IdentityDocument, LenderRevocation, User
 from .services import review_identity_document
 
 # Display labels for the two accepted document types (CP-105 lookup rows).
@@ -58,16 +75,19 @@ IDENTITY_DOCUMENT_TYPE_LABELS = {
     "government_id": "Government-issued ID",
 }
 
-# The order-status rows the dashboard chart highlights, in the design's order.
+# The order-status rows the dashboard chart highlights, covering all 11 lifecycle statuses.
 DASHBOARD_ORDER_STATUSES = (
     "requested",
     "confirmed",
     "active",
     "overdue",
-    "returned",
-    "completed",
-    "disputed",
     "unreturned",
+    "returned",
+    "disputed",
+    "completed",
+    "declined",
+    "expired",
+    "cancelled",
 )
 
 
@@ -133,12 +153,7 @@ def _identity_document_tab_counts() -> dict[str, int]:
 
 
 def _open_reports_count() -> int:
-    return (
-        ListingReport.objects.filter(status="open").count()
-        + UserReport.objects.filter(status="open").count()
-        + ReviewReport.objects.filter(status="open").count()
-        + MessageReport.objects.filter(status="open").count()
-    )
+    return get_portal_nav_counts()["nav_reports_count"]
 
 
 def _recent_activity() -> list[dict[str, str]]:
@@ -257,49 +272,31 @@ def portal_logout(request):
 @staff_login_required
 def dashboard(request):
     """
-    Overview page (screen 77): four stat cards, the orders-by-status chart and a
-    recent activity feed. Every figure is computed from the real tables; cards
-    whose domain has no data yet read zero rather than pretending otherwise.
+    Overview page (screen 77 / CP-1107): summary stat cards, orders-by-status chart,
+    and recent activity feed backed by the shared `get_admin_dashboard_metrics()` selector.
     """
-    now = timezone.now()
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    week_start = now - timedelta(days=7)
-
-    pending_status = IdentityDocumentStatus.objects.get(
-        name=IDENTITY_DOCUMENT_STATUS_PENDING
-    )
-    pending_documents = IdentityDocument.objects.filter(status=pending_status)
-    oldest_waiting = pending_documents.aggregate(oldest=Min("submitted_at"))["oldest"]
-    pending_days = (now - oldest_waiting).days if oldest_waiting is not None else None
-
-    active_listings_total = 0
-    active_status = ListingStatus.objects.filter(name="active").first()
-    if active_status is not None:
-        active_listings_total = Listing.objects.filter(status=active_status).count()
-
-    orders_by_status = {name: 0 for name in DASHBOARD_ORDER_STATUSES}
-    for row in Order.objects.values("status__name").annotate(total=Count("id")):
-        if row["status__name"] in orders_by_status:
-            orders_by_status[row["status__name"]] = row["total"]
+    metrics = get_admin_dashboard_metrics()
+    orders_by_status = metrics["orders_by_status"]
     order_rows = [
-        {"name": name, "total": total} for name, total in orders_by_status.items()
+        {"name": name, "total": orders_by_status.get(name, 0)}
+        for name in DASHBOARD_ORDER_STATUSES
     ]
     max_orders = max((row["total"] for row in order_rows), default=0)
     for row in order_rows:
         row["percent"] = round(row["total"] / max_orders * 100) if max_orders else 0
 
     stats = {
-        "total_users": User.objects.count(),
-        "new_users_this_month": User.objects.filter(
-            created_at__gte=month_start
-        ).count(),
-        "active_listings": active_listings_total,
-        "listings_added_week": Listing.objects.filter(
-            created_at__gte=week_start
-        ).count(),
-        "open_reports": _open_reports_count(),
-        "pending_verifications": pending_documents.count(),
-        "pending_days": pending_days,
+        "total_users": metrics["total_users"],
+        "new_users_this_month": metrics["new_users_this_month"],
+        "active_listings": metrics["active_listings"],
+        "listings_added_week": metrics["listings_added_this_week"],
+        "open_reports": metrics["open_reports"],
+        "flagged_users_pending": metrics["reports"]["flagged_users_pending_review"],
+        "pending_verifications": metrics["pending_verifications"],
+        "pending_days": metrics["oldest_pending_verification_days"],
+        "open_disputes": metrics["open_disputes"],
+        "open_unreturned_cases": metrics["open_unreturned_cases"],
+        "total_orders": metrics["total_orders"],
     }
 
     context = {
@@ -309,8 +306,10 @@ def dashboard(request):
         "orders_by_status_rows": order_rows,
         "activity": _recent_activity(),
         "current_time": timezone.localtime(timezone.now()),
-        "nav_verification_count": stats["pending_verifications"],
-        "nav_reports_count": stats["open_reports"],
+        "nav_verification_count": metrics["pending_verifications"],
+        "nav_reports_count": metrics["open_reports"],
+        "nav_unreturned_count": metrics["open_unreturned_cases"],
+        "nav_disputes_count": metrics["open_disputes"],
     }
     return render(request, "admin_portal/dashboard.html", context)
 
@@ -1329,24 +1328,216 @@ def reports_queue(request):
 @require_POST
 @staff_login_required
 def report_resolve(request, report_type: str, pk: int):
-    """Admin marks a report as resolved (CP-1111 / CP-1103 / TC-109)."""
-    model_map = {
-        "user": UserReport,
-        "listing": ListingReport,
-        "review": ReviewReport,
-        "message": MessageReport,
-    }
-    model = model_map.get(report_type.lower())
-    if not model:
+    """Admin marks a report as resolved via the shared service layer (CP-1111 / CP-1103 / TC-109)."""
+    from rest_framework.exceptions import ValidationError as DRFValidationError
+
+    notes = request.POST.get("resolution_notes", "").strip()
+    try:
+        resolve_report(
+            report_type=report_type,
+            report_id=pk,
+            admin=request.user,
+            resolution_notes=notes,
+        )
+        messages.success(
+            request, f"{report_type.title()} Report #{pk} has been marked as Resolved."
+        )
+    except ReportStateConflictError as exc:
+        messages.error(request, str(exc.detail))
+    except DRFValidationError:
         messages.error(request, "Invalid report type.")
         return redirect(reverse("portal-reports-queue"))
 
-    report = get_object_or_404(model, pk=pk)
-    report.status = "resolved"
-    report.save(update_fields=["status"])
-    messages.success(
-        request, f"{report_type.title()} Report #{pk} has been marked as Resolved."
-    )
     return redirect(
         reverse("portal-reports-queue") + f"?type={report_type}&status=open"
     )
+
+
+# ---------------------------------------------------------------------------
+# CP-903 -- Damage / missing-item disputes moderation
+# ---------------------------------------------------------------------------
+
+
+@staff_login_required
+def disputes_queue(request):
+    """List damage/missing-item disputes with status filter tabs (CP-903)."""
+    status_filter = request.GET.get("status", "open").strip().lower()
+    if status_filter not in ("open", "escalated", "resolved", "all"):
+        status_filter = "open"
+
+    qs = list_disputes(status_filter=None if status_filter == "all" else status_filter)
+    paginator = Paginator(qs, 20)
+    page = paginator.get_page(request.GET.get("page", 1))
+
+    counts = {
+        "open": Dispute.objects.filter(status=Dispute.StatusChoices.OPEN).count(),
+        "escalated": Dispute.objects.filter(
+            status=Dispute.StatusChoices.ESCALATED
+        ).count(),
+        "resolved": Dispute.objects.filter(
+            status=Dispute.StatusChoices.RESOLVED
+        ).count(),
+    }
+    counts["all"] = sum(counts.values())
+
+    context = {
+        "page_title": "Disputes",
+        "active_nav": "disputes",
+        "status_filter": status_filter,
+        "counts": counts,
+        "page": page,
+        "paginator": paginator,
+        "start_index": page.start_index() or 0,
+        "end_index": page.end_index() or paginator.count,
+        **get_portal_nav_counts(),
+    }
+    return render(request, "admin_portal/disputes.html", context)
+
+
+@staff_login_required
+def dispute_detail(request, pk: int):
+    """Full investigation dossier for a damage/missing-item dispute (CP-903)."""
+    dossier = get_dispute_dossier(dispute_id=pk, admin=request.user, request=request)
+    context = {
+        "page_title": f"Dispute #{pk}",
+        "active_nav": "disputes",
+        "dossier": dossier,
+        **get_portal_nav_counts(),
+    }
+    return render(request, "admin_portal/dispute_detail.html", context)
+
+
+@require_POST
+@staff_login_required
+def dispute_resolve(request, pk: int):
+    """Resolve a dispute to Completed via the shared service layer (CP-903)."""
+    notes = request.POST.get("resolution_notes", "").strip()
+    try:
+        resolve_dispute(dispute_id=pk, admin=request.user, resolution_notes=notes)
+        messages.success(
+            request,
+            f"Dispute #{pk} resolved and order marked as Completed.",
+        )
+    except OrderCaseConflictError as exc:
+        messages.error(request, str(exc.detail))
+    return redirect(reverse("portal-dispute-detail", args=[pk]))
+
+
+@require_POST
+@staff_login_required
+def dispute_escalate(request, pk: int):
+    """Escalate a dispute to PUP OSS via the shared service layer (CP-903)."""
+    notes = request.POST.get("resolution_notes", "").strip()
+    evidence_files = request.FILES.getlist("evidence")
+    try:
+        escalate_dispute(
+            dispute_id=pk,
+            admin=request.user,
+            resolution_notes=notes,
+            evidence_files=evidence_files,
+        )
+        messages.success(
+            request,
+            f"Dispute #{pk} escalated to PUP OSS for administrative review.",
+        )
+    except OrderCaseConflictError as exc:
+        messages.error(request, str(exc.detail))
+    return redirect(reverse("portal-dispute-detail", args=[pk]))
+
+
+# ---------------------------------------------------------------------------
+# CP-1103 / CP-506 / CP-1111 -- Unreturned cases moderation
+# ---------------------------------------------------------------------------
+
+
+@staff_login_required
+def unreturned_cases_queue(request):
+    """List UnreturnedCase records with status filter tabs (CP-1103, CP-506)."""
+    status_filter = request.GET.get("status", "open").strip().lower()
+    if status_filter not in ("open", "escalated", "returned", "unresolved", "all"):
+        status_filter = "open"
+
+    qs = list_unreturned_cases(
+        status_filter=None if status_filter == "all" else status_filter
+    )
+    paginator = Paginator(qs, 20)
+    page = paginator.get_page(request.GET.get("page", 1))
+
+    counts = {
+        "open": UnreturnedCase.objects.filter(status__name="open").count(),
+        "escalated": UnreturnedCase.objects.filter(status__name="escalated").count(),
+        "returned": UnreturnedCase.objects.filter(status__name="returned").count(),
+        "unresolved": UnreturnedCase.objects.filter(status__name="unresolved").count(),
+    }
+    counts["all"] = sum(counts.values())
+
+    context = {
+        "page_title": "Unreturned Cases",
+        "active_nav": "unreturned_cases",
+        "status_filter": status_filter,
+        "counts": counts,
+        "page": page,
+        "paginator": paginator,
+        "start_index": page.start_index() or 0,
+        "end_index": page.end_index() or paginator.count,
+        **get_portal_nav_counts(),
+    }
+    return render(request, "admin_portal/unreturned_cases.html", context)
+
+
+@staff_login_required
+def unreturned_case_detail(request, pk: int):
+    """Full investigation dossier for an UnreturnedCase (CP-1103, CP-506)."""
+    dossier = get_unreturned_case_dossier(
+        case_id=pk, admin=request.user, request=request
+    )
+    context = {
+        "page_title": f"Unreturned Case #{pk}",
+        "active_nav": "unreturned_cases",
+        "dossier": dossier,
+        **get_portal_nav_counts(),
+    }
+    return render(request, "admin_portal/unreturned_case_detail.html", context)
+
+
+@require_POST
+@staff_login_required
+def unreturned_case_escalate(request, pk: int):
+    """Escalate an UnreturnedCase to PUP OSS / Campus Security via shared service (CP-1103)."""
+    notes = request.POST.get("resolution_notes", "").strip()
+    evidence_files = request.FILES.getlist("evidence")
+    escalate_unreturned_case(
+        case_id=pk,
+        admin=request.user,
+        resolution_notes=notes,
+        evidence_files=evidence_files,
+    )
+    messages.success(
+        request,
+        f"Unreturned Case #{pk} escalated to PUP OSS / Campus Security.",
+    )
+    return redirect(reverse("portal-unreturned-case-detail", args=[pk]))
+
+
+@require_POST
+@staff_login_required
+def unreturned_case_close(request, pk: int):
+    """Close an UnreturnedCase as 'returned' or 'unresolved' via shared service (CP-1103)."""
+    from rest_framework.exceptions import ValidationError as DRFValidationError
+
+    close_status = request.POST.get("status", "").strip().lower()
+    notes = request.POST.get("resolution_notes", "").strip()
+    try:
+        close_unreturned_case(
+            case_id=pk,
+            admin=request.user,
+            close_status=close_status,
+            resolution_notes=notes,
+        )
+        messages.success(
+            request,
+            f"Unreturned Case #{pk} closed as {close_status.title()}.",
+        )
+    except (OrderCaseConflictError, DRFValidationError) as exc:
+        messages.error(request, str(exc.detail))
+    return redirect(reverse("portal-unreturned-case-detail", args=[pk]))

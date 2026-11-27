@@ -1,0 +1,77 @@
+{% extends "admin_portal/shell.html" %}
+{% block title %}Disputes &middot; CoPUPAdmin{% endblock %}
+{% block content %}
+<nav class="crumbs" aria-label="Breadcrumb">
+  <span>Moderation</span> / <a href="{% url 'portal-disputes-queue' %}">Disputes</a>
+</nav>
+
+<div class="page-heading">
+  <h1>Damage &amp; Missing-Item Disputes</h1>
+</div>
+
+<div class="tabs" role="tablist" aria-label="Dispute status tabs">
+  <a class="tab {% if status_filter == 'open' %}is-active{% endif %}" href="?status=open">
+    Open ({{ counts.open }})
+  </a>
+  <a class="tab {% if status_filter == 'escalated' %}is-active{% endif %}" href="?status=escalated">
+    Escalated to OSS ({{ counts.escalated }})
+  </a>
+  <a class="tab {% if status_filter == 'resolved' %}is-active{% endif %}" href="?status=resolved">
+    Resolved ({{ counts.resolved }})
+  </a>
+  <a class="tab {% if status_filter == 'all' %}is-active{% endif %}" href="?status=all">
+    All ({{ counts.all }})
+  </a>
+</div>
+
+<div class="card">
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Dispute / Order</th>
+          <th>Listing</th>
+          <th>Parties</th>
+          <th>Summary</th>
+          <th>Status</th>
+          <th>Opened</th>
+          <th style="text-align: right;">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for dispute in page %}
+        <tr>
+          <td data-label="Dispute / Order">
+            <strong>#{{ dispute.pk }}</strong>
+            <div style="font-size: 11px; color: var(--muted);">Order #{{ dispute.order_id }} ({{ dispute.order.status.name|title }})</div>
+          </td>
+          <td data-label="Listing">{{ dispute.order.listing.title }}</td>
+          <td data-label="Parties">
+            <div style="font-size: 12px;"><strong>Lender:</strong> {{ dispute.order.listing.lender.full_name }}</div>
+            <div style="font-size: 12px; color: var(--muted);"><strong>Borrower:</strong> {{ dispute.order.borrower.full_name }}</div>
+          </td>
+          <td data-label="Summary" style="max-width: 260px;">
+            <span style="font-size: 12px;">{{ dispute.description|truncatechars:90 }}</span>
+          </td>
+          <td data-label="Status">
+            {% if dispute.status == 'open' %}
+              <span class="badge badge-pending">Open</span>
+            {% elif dispute.status == 'escalated' %}
+              <span class="badge badge-rejected">Escalated</span>
+            {% else %}
+              <span class="badge badge-approved">Resolved</span>
+            {% endif %}
+          </td>
+          <td data-label="Opened">{{ dispute.created_at|date:"M. j, Y" }}</td>
+          <td data-label="Action" style="text-align: right;">
+            <a class="link" href="{% url 'portal-dispute-detail' dispute.pk %}">Inspect Dossier</a>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="7" class="table-empty">No {{ status_filter }} disputes found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
