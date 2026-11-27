@@ -429,6 +429,9 @@ erDiagram
         int category_id FK
         text description
         string status "enum: open, resolved"
+        int resolved_by FK "nullable (CP-1103)"
+        datetime resolved_at "nullable (CP-1103)"
+        text resolution_notes "CP-1103"
         datetime created_at
     }
 
@@ -442,8 +445,12 @@ erDiagram
         int reporter_id FK
         int target_user_id FK
         int category_id FK
+        int order_id FK "nullable"
         text description
         string status "enum: open, resolved"
+        int resolved_by FK "nullable (CP-1103)"
+        datetime resolved_at "nullable (CP-1103)"
+        text resolution_notes "CP-1103"
         datetime created_at
     }
 
@@ -459,6 +466,9 @@ erDiagram
         int category_id FK
         text description
         string status "enum: open, resolved"
+        int resolved_by FK "nullable (CP-1103)"
+        datetime resolved_at "nullable (CP-1103)"
+        text resolution_notes "CP-1103"
         datetime created_at
     }
 
@@ -474,6 +484,9 @@ erDiagram
         int category_id FK
         text description
         string status "enum: open, resolved"
+        int resolved_by FK "nullable (CP-1103)"
+        datetime resolved_at "nullable (CP-1103)"
+        text resolution_notes "CP-1103"
         datetime created_at
     }
 
