@@ -244,6 +244,28 @@ users can reapply through `/api/v1/auth/apply-lender/` after identity verificati
 | POST | `/api/v1/admin/users/<id>/confirm-flag/` | admin | `{reason?}` | `200` confirms flag & restricts new listing/borrow creation |
 | POST | `/api/v1/admin/users/<id>/dismiss-flag/` | admin | `{reason?}` | `200` clears flag & lifts restrictions |
 
+## Chat, Blocking & Evidence Retention (`apps/chat/` — CP-701, CP-702, CP-703)
+
+| Method | Path | Auth | Request body / query | Success |
+|---|---|---|---|---|
+| GET | `/api/v1/conversations/` | user | `?page=&page_size=` | `200` paginated threads with `unread_count`, `has_unread`, `can_block`, `is_blocked`, `is_retained`, plus top-level `total_unread_count` |
+| POST | `/api/v1/conversations/` | user | `{listing_id?, order_id?, initial_message?}` | `201` (new) or `200` (existing) conversation |
+| POST | `/api/v1/listings/<listing_id>/chat/` | user | `{initial_message?}` | `201` (new) or `200` (existing) listing-scoped conversation |
+| POST | `/api/v1/orders/<order_id>/chat/` | order party | `{initial_message?}` | `201` (new) or `200` (existing) order-scoped conversation (`404` for outsiders) |
+| GET | `/api/v1/conversations/unread-count/` | user | — | `200` `{unread_count, unread_conversations_count}` |
+| GET | `/api/v1/conversations/<id>/` | participant | — | `200` conversation metadata (`404` for outsiders) |
+| DELETE | `/api/v1/conversations/<id>/` | participant | — | `200` hides for caller; purges only if both delete AND not retained; preserved with `retained: true` when linked to an open report or Disputed order |
+| GET | `/api/v1/conversations/<id>/messages/` | participant | `?after_id=&since=&mark_read=true&page=&page_size=` | `200` chronological message history (supports short-interval polling) |
+| POST | `/api/v1/conversations/<id>/messages/` | participant | `{content}` | `201` persisted message (`403 conversation_blocked` if blocked); triggers `new_message` notification |
+| POST | `/api/v1/conversations/<id>/read/` | participant | — | `200` stamps `read_at` on incoming unread messages & marks matching `new_message` notifications read |
+| POST | `/api/v1/conversations/<id>/block/` | participant | — | `200` blocks counterparty (`409 active_order_in_progress` if Requested/Confirmed/Active/Overdue/Unreturned order exists between users) |
+| POST | `/api/v1/conversations/<id>/unblock/` | blocker | — | `200` unblocks counterparty (`403 not_blocker` if called by blocked user) |
+| GET | `/api/v1/chat/blocks/` | user | — | `200` list of users blocked by caller |
+| POST | `/api/v1/users/<user_id>/block/` | user | — | `200` blocks user in chat (`409 active_order_in_progress` while order in progress) |
+| DELETE | `/api/v1/users/<user_id>/block/` | blocker | — | `204` unblocks user (`403 not_blocker` if called by blocked user) |
+| GET | `/api/v1/admin/conversations/` | admin | `?retained=&order_id=&listing_id=&user_id=&is_blocked=` | `200` all conversations including blocked/user-deleted retained threads |
+| GET | `/api/v1/admin/conversations/<id>/` | admin | — | `200` full retained conversation + chronological messages; logs `AdminAccessLog(action="view_conversation")` |
+
 ## Admin portal (HTML, session login) — `/portal/`
 
 | Method | Path |
@@ -260,3 +282,4 @@ users can reapply through `/api/v1/auth/apply-lender/` after identity verificati
 | POST | `/portal/users/<id>/ban/` |
 | POST | `/portal/users/<id>/confirm-flag/` |
 | POST | `/portal/users/<id>/dismiss-flag/` |
+| GET | `/portal/conversations/<id>/` (retained chat evidence viewer — CP-703) |

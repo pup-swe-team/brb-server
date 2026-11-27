@@ -130,6 +130,12 @@ urlpatterns = [
         portal.report_resolve,
         name="portal-report-resolve",
     ),
+    # Retained chat conversation evidence viewer (CP-703).
+    path(
+        "conversations/<int:pk>/",
+        portal.conversation_detail,
+        name="portal-conversation-detail",
+    ),
     # System parameters configuration (CP-1112 / CP-1104 / TC-111 / TC-112).
     path(
         "system-parameters/",

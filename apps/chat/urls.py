@@ -1,0 +1,87 @@
+"""URL routing for 1-to-1 chat, blocking, and Admin retention review (CP-701, CP-702, CP-703)."""
+
+from django.urls import path
+
+from .views import (
+    AdminConversationDetailView,
+    AdminConversationListView,
+    ConversationBlockView,
+    ConversationDetailView,
+    ConversationListCreateView,
+    ConversationMarkReadView,
+    ConversationMessageListCreateView,
+    ConversationUnblockView,
+    ConversationUnreadCountView,
+    StartListingChatView,
+    StartOrderChatView,
+    UserBlockActionView,
+    UserBlockListView,
+)
+
+urlpatterns = [
+    path(
+        "conversations/",
+        ConversationListCreateView.as_view(),
+        name="chat-conversation-list-create",
+    ),
+    path(
+        "conversations/unread-count/",
+        ConversationUnreadCountView.as_view(),
+        name="chat-unread-count",
+    ),
+    path(
+        "conversations/<int:conversation_id>/",
+        ConversationDetailView.as_view(),
+        name="chat-conversation-detail",
+    ),
+    path(
+        "conversations/<int:conversation_id>/messages/",
+        ConversationMessageListCreateView.as_view(),
+        name="chat-message-list-create",
+    ),
+    path(
+        "conversations/<int:conversation_id>/read/",
+        ConversationMarkReadView.as_view(),
+        name="chat-conversation-mark-read",
+    ),
+    path(
+        "conversations/<int:conversation_id>/block/",
+        ConversationBlockView.as_view(),
+        name="chat-conversation-block",
+    ),
+    path(
+        "conversations/<int:conversation_id>/unblock/",
+        ConversationUnblockView.as_view(),
+        name="chat-conversation-unblock",
+    ),
+    path(
+        "listings/<int:listing_id>/chat/",
+        StartListingChatView.as_view(),
+        name="chat-start-from-listing",
+    ),
+    path(
+        "orders/<int:order_id>/chat/",
+        StartOrderChatView.as_view(),
+        name="chat-start-from-order",
+    ),
+    path(
+        "chat/blocks/",
+        UserBlockListView.as_view(),
+        name="chat-block-list",
+    ),
+    path(
+        "users/<int:user_id>/block/",
+        UserBlockActionView.as_view(),
+        name="chat-user-block-action",
+    ),
+    path(
+        "admin/conversations/",
+        AdminConversationListView.as_view(),
+        name="admin-chat-conversation-list",
+    ),
+    path(
+        "admin/conversations/<int:conversation_id>/",
+        AdminConversationDetailView.as_view(),
+        name="admin-chat-conversation-detail",
+    ),
+]

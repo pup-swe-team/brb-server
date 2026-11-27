@@ -1,0 +1,86 @@
+{% extends "admin_portal/shell.html" %}
+{% load portal_extras %}
+{% block title %}Conversation #{{ conversation.conversation_id }} &middot; CoPUPAdmin{% endblock %}
+{% block content %}
+<nav class="crumbs" aria-label="Breadcrumb">
+  <span>Moderation</span> / <a href="{% url 'portal-reports-queue' %}">Reports &amp; Flags</a> / <span>Conversation #{{ conversation.conversation_id }}</span>
+</nav>
+
+<div class="page-heading" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+  <div>
+    <h1>Conversation #{{ conversation.conversation_id }}</h1>
+    <p style="margin: 4px 0 0; color: var(--muted); font-size: 13px;">
+      {{ conversation.user_a.full_name }} ({{ conversation.user_a.affiliation }}) &amp; {{ conversation.user_b.full_name }} ({{ conversation.user_b.affiliation }})
+    </p>
+  </div>
+  <div style="display: flex; gap: 8px; align-items: center;">
+    {% if retention.is_retained %}
+      <span class="badge" style="background: #fef3c7; color: #92400e; font-weight: 600;">Retained for Review</span>
+    {% endif %}
+    {% if is_blocked %}
+      <span class="badge" style="background: #fee2e2; color: #991b1b; font-weight: 600;">Blocked</span>
+    {% endif %}
+    <a href="{% url 'portal-reports-queue' %}" class="btn btn-outline" style="padding: 6px 14px; font-size: 13px;">Back to Reports</a>
+  </div>
+</div>
+
+<div class="card" style="padding: 18px 20px; margin-bottom: 16px;">
+  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; font-size: 13px;">
+    <div>
+      <div style="color: var(--muted); font-size: 11px; text-transform: uppercase;">Participant A</div>
+      <div style="font-weight: 600; color: var(--navy);">{{ conversation.user_a.full_name }}</div>
+      <div style="font-size: 12px; color: var(--muted);">{{ conversation.user_a.email }}</div>
+      {% if conversation.user_a_deleted_at %}
+        <div style="font-size: 11px; color: #b45309;">Hidden by user on {{ conversation.user_a_deleted_at|date:"M. j, Y H:i" }}</div>
+      {% endif %}
+    </div>
+    <div>
+      <div style="color: var(--muted); font-size: 11px; text-transform: uppercase;">Participant B</div>
+      <div style="font-weight: 600; color: var(--navy);">{{ conversation.user_b.full_name }}</div>
+      <div style="font-size: 12px; color: var(--muted);">{{ conversation.user_b.email }}</div>
+      {% if conversation.user_b_deleted_at %}
+        <div style="font-size: 11px; color: #b45309;">Hidden by user on {{ conversation.user_b_deleted_at|date:"M. j, Y H:i" }}</div>
+      {% endif %}
+    </div>
+    <div>
+      <div style="color: var(--muted); font-size: 11px; text-transform: uppercase;">Linked Context</div>
+      {% if conversation.listing %}
+        <div>Listing #{{ conversation.listing_id }}: <strong>{{ conversation.listing.title }}</strong></div>
+      {% endif %}
+      {% if conversation.order %}
+        <div>Order #{{ conversation.order_id }} ({{ conversation.order.status.name|title }})</div>
+      {% endif %}
+      {% if not conversation.listing and not conversation.order %}
+        <div style="color: var(--muted);">Direct conversation</div>
+      {% endif %}
+    </div>
+    <div>
+      <div style="color: var(--muted); font-size: 11px; text-transform: uppercase;">Retention Basis</div>
+      {% if retention.reasons %}
+        <div>{{ retention.reasons|join:", " }}</div>
+      {% else %}
+        <div style="color: var(--muted);">Not currently under active retention lock</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="card" style="padding: 18px 20px;">
+  <h2 style="margin: 0 0 14px; font-size: 16px; color: var(--navy);">Message Transcript ({{ chat_messages|length }})</h2>
+  {% if chat_messages %}
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      {% for msg in chat_messages %}
+        <div style="padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: #f8fafc;">
+          <div style="display: flex; justify-content: space-between; gap: 12px; margin-bottom: 6px; font-size: 12px;">
+            <strong style="color: var(--navy);">{{ msg.sender.full_name }} <span style="font-weight: 400; color: var(--muted);">({{ msg.sender.affiliation }})</span></strong>
+            <span style="color: var(--muted);">#{{ msg.id }} &middot; {{ msg.sent_at|date:"M. j, Y H:i:s" }}{% if msg.read_at %} &middot; Read{% else %} &middot; Unread{% endif %}</span>
+          </div>
+          <div style="font-size: 13px; color: var(--charcoal); white-space: pre-wrap; word-break: break-word;">{{ msg.content }}</div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p style="color: var(--muted); font-size: 13px; margin: 0;">No messages in this conversation.</p>
+  {% endif %}
+</div>
+{% endblock %}

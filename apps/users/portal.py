@@ -1236,7 +1236,11 @@ def reports_queue(request):
     # 4. Message Reports
     if tab in ("all", "message"):
         qs = MessageReport.objects.select_related(
-            "reporter", "target_message", "target_message__sender", "category"
+            "reporter",
+            "target_message",
+            "target_message__sender",
+            "target_message__conversation",
+            "category",
         ).order_by("-created_at")
         if status_filter != "all":
             qs = qs.filter(status=status_filter)
@@ -1258,6 +1262,7 @@ def reports_queue(request):
                     "description": r.description,
                     "status": r.status,
                     "created_at": r.created_at,
+                    "conversation_id": r.target_message.conversation_id,
                 }
             )
 
@@ -1709,3 +1714,58 @@ def unreturned_case_escalate(request, pk: int):
         messages.error(request, f"Error escalating unreturned case: {e}")
 
     return redirect(reverse("portal-review-queues") + "?tab=unreturned")
+
+
+@staff_login_required
+def conversation_detail(request, pk: int):
+    """
+    CP-703: Read-only CoPUPAdmin evidence viewer for retained or reported chat threads.
+    Displays full chronological message history regardless of block or user-delete status,
+    and logs an immutable AdminAccessLog entry.
+    """
+    from apps.audit.services import log_admin_action
+    from apps.chat.models import Conversation
+    from apps.chat.selectors import (
+        get_conversation_retention_info,
+        is_conversation_blocked,
+    )
+
+    conversation = get_object_or_404(
+        Conversation.objects.select_related(
+            "user_a",
+            "user_b",
+            "listing",
+            "order",
+            "order__status",
+            "blocked_by",
+        ),
+        conversation_id=pk,
+    )
+    retention = get_conversation_retention_info(conversation)
+    chat_messages = list(
+        conversation.messages.select_related("sender").order_by("sent_at", "id")
+    )
+
+    log_admin_action(
+        admin=request.user,
+        action="view_conversation",
+        target_type="conversation",
+        target_id=conversation.conversation_id,
+        details=(
+            f"Viewed conversation #{conversation.conversation_id} in CoPUPAdmin portal "
+            f"(retained={retention['is_retained']})"
+        ),
+        request=request,
+    )
+
+    context = {
+        "page_title": f"Conversation #{conversation.conversation_id}",
+        "active_nav": "reports",
+        "conversation": conversation,
+        "retention": retention,
+        "is_blocked": is_conversation_blocked(conversation),
+        "chat_messages": chat_messages,
+        "nav_verification_count": _identity_document_tab_counts()["pending"],
+        "nav_reports_count": _open_reports_count(),
+    }
+    return render(request, "admin_portal/conversation_detail.html", context)

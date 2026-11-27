@@ -427,6 +427,10 @@ class AdminDisputeDetailView(APIView):
                 }
             )
 
+        from apps.chat.selectors import get_conversations_for_order_dossier
+
+        chat_data = get_conversations_for_order_dossier(order)
+
         dossier = {
             "case": {
                 "id": dispute.pk,
@@ -463,6 +467,7 @@ class AdminDisputeDetailView(APIView):
                 "email": lender.email,
                 "contact_number": lender.contact_number,
             },
+            "chat": chat_data,
             "evidences": evidences_data,
             "events": [
                 {
