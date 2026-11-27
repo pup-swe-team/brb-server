@@ -231,3 +231,127 @@ class HealthzEndpointTests(APITestCase):
         response = self.client.get(reverse("healthz"))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data, {"status": "ok"})
+
+
+class AdminSystemConfigEndpointTests(APITestCase):
+    """CP-1104 / TC-111 / TC-112: System parameters configuration tests."""
+
+    def setUp(self) -> None:
+        self.admin_user = User.objects.create_superuser(
+            email="admin@pup.edu.ph",
+            password="AdminPassword123!",
+            full_name="Admin Officer",
+        )
+        self.regular_user = User.objects.create_user(
+            email="borrower@pup.edu.ph",
+            password="BorrowerPass123!",
+            full_name="Regular Borrower",
+        )
+        self.list_url = reverse("api-admin-config-list")
+        self.detail_url = reverse(
+            "api-admin-config-detail", kwargs={"key": "borrowing_limit"}
+        )
+
+    def test_unauthenticated_request_rejected(self) -> None:
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_non_staff_user_rejected(self) -> None:
+        self.client.force_authenticate(user=self.regular_user)
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_admin_can_list_all_configs(self) -> None:
+        self.client.force_authenticate(user=self.admin_user)
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        configs = response.data.get("configs", [])
+        keys = [c["config_key"] for c in configs]
+        self.assertIn("borrowing_limit", keys)
+        self.assertIn("lending_limit", keys)
+        self.assertIn("request_expiry_hours", keys)
+        self.assertIn("auth_code_expiry_hours", keys)
+        self.assertIn("review_window_days", keys)
+
+    def test_admin_can_filter_by_category(self) -> None:
+        self.client.force_authenticate(user=self.admin_user)
+        response = self.client.get(
+            f"{self.list_url}?category=Borrowing%20%26%20Lending"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        configs = response.data.get("configs", [])
+        for c in configs:
+            self.assertEqual(c["category"], "Borrowing & Lending")
+
+    def test_admin_can_retrieve_single_config(self) -> None:
+        self.client.force_authenticate(user=self.admin_user)
+        response = self.client.get(self.detail_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["config_key"], "borrowing_limit")
+        self.assertEqual(response.data["default_value"], "3")
+
+    def test_admin_can_update_single_config_and_takes_effect_immediately(self) -> None:
+        """TC-111: Admin updates borrowing limit and it applies without redeployment."""
+        from apps.core.constants import BORROWING_LIMIT
+        from apps.core.selectors import get_int_config
+
+        self.client.force_authenticate(user=self.admin_user)
+        response = self.client.patch(self.detail_url, {"value": "5"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["config_value"], "5")
+
+        # Verify database persisted updated_by and new value
+        row = SystemConfig.objects.get(config_key=BORROWING_LIMIT)
+        self.assertEqual(row.config_value, "5")
+        self.assertEqual(row.updated_by, self.admin_user)
+
+        # Verify selector reads the new value immediately (no redeploy needed)
+        self.assertEqual(get_int_config(BORROWING_LIMIT, 3), 5)
+
+    def test_admin_updates_code_expiry_duration(self) -> None:
+        """TC-112: Admin updates code expiry duration."""
+        from apps.core.constants import AUTH_CODE_EXPIRY_HOURS
+        from apps.core.selectors import get_int_config
+
+        url = reverse(
+            "api-admin-config-detail", kwargs={"key": "auth_code_expiry_hours"}
+        )
+        self.client.force_authenticate(user=self.admin_user)
+        response = self.client.put(url, {"value": "2"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["config_value"], "2")
+        self.assertEqual(get_int_config(AUTH_CODE_EXPIRY_HOURS, 3), 2)
+
+    def test_invalid_integer_rejected(self) -> None:
+        self.client.force_authenticate(user=self.admin_user)
+        response = self.client.patch(self.detail_url, {"value": "not-a-number"})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_out_of_bounds_integer_rejected(self) -> None:
+        self.client.force_authenticate(user=self.admin_user)
+        # min for borrowing_limit is 1, max is 50
+        response = self.client.patch(self.detail_url, {"value": "0"})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        response2 = self.client.patch(self.detail_url, {"value": "999"})
+        self.assertEqual(response2.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_bulk_update_configs(self) -> None:
+        self.client.force_authenticate(user=self.admin_user)
+        payload = {
+            "configs": {
+                "borrowing_limit": "7",
+                "lending_limit": "20",
+                "review_window_days": "14",
+            }
+        }
+        response = self.client.put(self.list_url, payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            SystemConfig.objects.get(config_key="borrowing_limit").config_value, "7"
+        )
+        self.assertEqual(
+            SystemConfig.objects.get(config_key="lending_limit").config_value, "20"
+        )
+        self.assertEqual(
+            SystemConfig.objects.get(config_key="review_window_days").config_value, "14"
+        )

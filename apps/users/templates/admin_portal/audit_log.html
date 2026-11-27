@@ -1,0 +1,123 @@
+{% extends "admin_portal/shell.html" %}
+{% load portal_extras %}
+{% block title %}Audit Log &middot; CoPUPAdmin{% endblock %}
+{% block content %}
+<nav class="crumbs" aria-label="Breadcrumb">
+  <span>System</span> / <a href="{% url 'portal-audit-log' %}">Audit Log</a>
+</nav>
+
+<div class="page-heading">
+  <div>
+    <h1>Admin Action Audit Log</h1>
+    <p style="color: var(--muted); font-size: 14px; margin-top: 4px;">
+      Read-only, immutable audit trail of administrator operations, confidential document accesses, and moderation actions (FR14 / CP-1106).
+    </p>
+  </div>
+</div>
+
+<!-- Filter Toolbar -->
+<form method="get" class="card" style="padding: 14px 18px; margin-bottom: 16px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;">
+  <div style="display: flex; flex-wrap: wrap; gap: 10px; flex: 1; min-width: 280px;">
+    <input
+      type="search"
+      name="q"
+      value="{{ search_query }}"
+      placeholder="Search admin, action, target..."
+      style="padding: 7px 12px; border: 1px solid var(--border); border-radius: var(--radius); font: inherit; font-size: 13px; min-width: 200px; flex: 1;"
+    >
+    <select name="action" style="padding: 7px 12px; border: 1px solid var(--border); border-radius: var(--radius); font: inherit; font-size: 13px; background: var(--card);">
+      <option value="">All Actions</option>
+      {% for act in actions %}
+        <option value="{{ act }}" {% if action_filter == act %}selected{% endif %}>{{ act }}</option>
+      {% endfor %}
+    </select>
+    <select name="target_type" style="padding: 7px 12px; border: 1px solid var(--border); border-radius: var(--radius); font: inherit; font-size: 13px; background: var(--card);">
+      <option value="">All Target Types</option>
+      {% for tgt in target_types %}
+        <option value="{{ tgt }}" {% if target_type_filter == tgt %}selected{% endif %}>{{ tgt }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div style="display: flex; gap: 8px;">
+    <button type="submit" class="btn btn-primary" style="padding: 6px 16px; font-size: 13px;">Filter</button>
+    {% if action_filter or target_type_filter or search_query %}
+      <a href="{% url 'portal-audit-log' %}" class="btn btn-outline" style="padding: 6px 14px; font-size: 13px;">Reset</a>
+    {% endif %}
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Timestamp</th>
+          <th>Administrator</th>
+          <th>Action</th>
+          <th>Target</th>
+          <th>Details</th>
+          <th>IP Address</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for log in page %}
+        <tr>
+          <td data-label="Timestamp" style="white-space: nowrap; font-size: 12px; color: var(--muted);">
+            {{ log.accessed_at|date:"M j, Y H:i:s" }}
+          </td>
+          <td data-label="Administrator">
+            <div class="user-cell">
+              <span class="avatar avatar-sm">{{ log.admin.full_name|initials }}</span>
+              <span class="user-name">
+                <strong style="display: block; font-size: 13px;">{{ log.admin.full_name }}</strong>
+                <span style="font-size: 11px; color: var(--muted);">{{ log.admin.email }}</span>
+              </span>
+            </div>
+          </td>
+          <td data-label="Action">
+            <span class="badge" style="background: #e0f2fe; color: #0369a1; font-family: monospace; font-size: 11px;">
+              {{ log.action }}
+            </span>
+          </td>
+          <td data-label="Target">
+            {% if log.target_type %}
+              <span style="font-size: 12px; font-weight: 600;">{{ log.target_type }}</span>
+              {% if log.target_id %}<code style="font-size: 11px; color: var(--muted); margin-left: 2px;">#{{ log.target_id }}</code>{% endif %}
+            {% elif log.document_id %}
+              <span style="font-size: 12px; font-weight: 600;">document</span>
+              <code style="font-size: 11px; color: var(--muted); margin-left: 2px;">#{{ log.document_id }}</code>
+            {% else %}
+              <span style="color: var(--muted); font-size: 12px;">&mdash;</span>
+            {% endif %}
+          </td>
+          <td data-label="Details" style="font-size: 12px; max-width: 240px; word-break: break-word;">
+            {{ log.details|default:"&mdash;" }}
+          </td>
+          <td data-label="IP Address" style="font-family: monospace; font-size: 11px; color: var(--muted);">
+            {{ log.ip_address|default:"&mdash;" }}
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="6" class="table-empty">No audit log entries found matching criteria.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="table-footer">
+    <span>
+      {% if page.object_list %}Showing {{ start_index }} to {{ end_index }} of {{ paginator.count }} audit entries{% endif %}
+    </span>
+    <div class="pager">
+      {% if page.has_previous %}
+        <a class="pager-btn" href="?page={{ page.previous_page_number }}{% if action_filter %}&action={{ action_filter }}{% endif %}{% if target_type_filter %}&target_type={{ target_type_filter }}{% endif %}{% if search_query %}&q={{ search_query }}{% endif %}">&larr; Previous</a>
+      {% endif %}
+      {% if page.has_next %}
+        <a class="pager-btn" href="?page={{ page.next_page_number }}{% if action_filter %}&action={{ action_filter }}{% endif %}{% if target_type_filter %}&target_type={{ target_type_filter }}{% endif %}{% if search_query %}&q={{ search_query }}{% endif %}">Next &rarr;</a>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

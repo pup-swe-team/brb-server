@@ -1,0 +1,286 @@
+{% extends "admin_portal/shell.html" %}
+{% load portal_extras %}
+{% block title %}Review Queues &middot; CoPUPAdmin{% endblock %}
+{% block content %}
+<nav class="crumbs" aria-label="Breadcrumb">
+  <span>Moderation</span> / <a href="{% url 'portal-review-queues' %}">Review Queues</a>
+</nav>
+
+<div class="page-heading">
+  <div>
+    <h1>Admin Review Queues</h1>
+    <p style="color: var(--muted); font-size: 14px; margin-top: 4px;">
+      Consolidated queue hub for Identity Verification, Community Reports, and Unreturned Items (CP-1103).
+    </p>
+  </div>
+</div>
+
+<div class="tabs" role="tablist" aria-label="Review queue source tabs">
+  <a class="tab {% if tab == 'verification' %}is-active{% endif %}"
+     role="tab" aria-selected="{% if tab == 'verification' %}true{% else %}false{% endif %}"
+     href="?tab=verification">
+    Verification Queue ({{ pending_docs_count }})
+  </a>
+  <a class="tab {% if tab == 'reports' %}is-active{% endif %}"
+     role="tab" aria-selected="{% if tab == 'reports' %}true{% else %}false{% endif %}"
+     href="?tab=reports">
+    Reports Queue ({{ open_reports_count }})
+  </a>
+  <a class="tab {% if tab == 'unreturned' %}is-active{% endif %}"
+     role="tab" aria-selected="{% if tab == 'unreturned' %}true{% else %}false{% endif %}"
+     href="?tab=unreturned">
+    Unreturned Cases ({{ unreturned_cases_count }})
+  </a>
+</div>
+
+{% if tab == 'verification' %}
+<!-- Verification Queue Tab -->
+<div class="card">
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+    <h2 style="font-size: 16px; font-weight: 700; margin: 0;">Pending Identity Verifications ({{ pending_docs_count }})</h2>
+    <a href="{% url 'portal-verification-queue' %}" class="btn btn-outline" style="font-size: 12px; padding: 5px 12px;">Full Verification Queue &rarr;</a>
+  </div>
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Submitted</th>
+          <th>User</th>
+          <th>Affiliation</th>
+          <th>ID Type</th>
+          <th>Status</th>
+          <th style="min-width: 220px;">Review Controls</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for doc in pending_docs %}
+        <tr>
+          <td data-label="Submitted">{{ doc.submitted_at|date:"M j, Y" }}</td>
+          <td data-label="User">
+            <div class="user-cell">
+              <span class="avatar avatar-sm">{{ doc.user.full_name|initials }}</span>
+              <span class="user-name">
+                <strong style="display: block;">{{ doc.user.full_name }}</strong>
+                <span style="font-size: 11px; color: var(--muted);">{{ doc.user.email }}</span>
+              </span>
+            </div>
+          </td>
+          <td data-label="Affiliation">{{ doc.user.affiliation }}</td>
+          <td data-label="ID Type">{{ doc.document_type.name|doc_type_label }}</td>
+          <td data-label="Status">
+            <span class="badge badge-pending">Pending</span>
+          </td>
+          <td data-label="Review Controls">
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+              <div style="display: flex; gap: 6px;">
+                <form method="post" action="{% url 'portal-verification-review-submit' doc.pk %}" style="display: inline;">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="approve">
+                  <button type="submit" class="btn btn-primary" style="padding: 4px 12px; font-size: 12px; background: #16a34a; border-color: #16a34a;">
+                    Approve
+                  </button>
+                </form>
+                <a class="btn btn-outline" href="{% url 'portal-verification-review' doc.pk %}" style="padding: 4px 10px; font-size: 12px;">
+                  Inspect &rarr;
+                </a>
+              </div>
+              <!-- Inline reject control with reason -->
+              <details style="font-size: 12px;">
+                <summary style="cursor: pointer; color: #dc2626; font-weight: 600;">Reject with Reason...</summary>
+                <form method="post" action="{% url 'portal-verification-review-submit' doc.pk %}" style="margin-top: 6px; display: flex; flex-direction: column; gap: 4px;">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="reject">
+                  <input
+                    type="text"
+                    name="rejection_reason"
+                    placeholder="Reason (e.g. blurry ID photo)..."
+                    required
+                    style="padding: 5px 8px; font-size: 11px; border: 1px solid var(--border); border-radius: var(--radius); width: 100%;"
+                  >
+                  <button type="submit" class="btn btn-primary" style="padding: 4px 8px; font-size: 11px; background: #dc2626; border-color: #dc2626; align-self: flex-start;">
+                    Confirm Reject
+                  </button>
+                </form>
+              </details>
+            </div>
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="6" class="table-empty">No pending verification documents in queue.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% elif tab == 'reports' %}
+<!-- Reports Queue Tab -->
+<div class="card">
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+    <h2 style="font-size: 16px; font-weight: 700; margin: 0;">Open Reports ({{ open_reports_count }})</h2>
+    <a href="{% url 'portal-reports-queue' %}" class="btn btn-outline" style="font-size: 12px; padding: 5px 12px;">Full Reports Dashboard &rarr;</a>
+  </div>
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Submitted</th>
+          <th>Reporter</th>
+          <th>Reported Target</th>
+          <th>Category</th>
+          <th>Description</th>
+          <th>Resolution</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in reports_list %}
+        <tr>
+          <td data-label="Submitted" style="white-space: nowrap; font-size: 12px; color: var(--muted);">
+            {{ r.created_at|date:"M j, Y H:i" }}
+          </td>
+          <td data-label="Reporter">
+            <div class="user-cell">
+              <span class="avatar avatar-sm">{{ r.reporter.full_name|initials }}</span>
+              <span class="user-name">
+                <strong style="display: block; font-size: 13px;">{{ r.reporter.full_name }}</strong>
+                <span style="font-size: 11px; color: var(--muted);">{{ r.reporter.email }}</span>
+              </span>
+            </div>
+          </td>
+          <td data-label="Reported Target">
+            <span class="badge" style="background: #fef3c7; color: #92400e; font-size: 11px;">{{ r.type|upper }}</span>
+            <span style="font-size: 12px; margin-left: 4px;">{{ r.target }}</span>
+          </td>
+          <td data-label="Category">
+            <span style="font-size: 12px; font-weight: 600;">{{ r.category }}</span>
+          </td>
+          <td data-label="Description" style="font-size: 12px; max-width: 250px; word-break: break-word;">
+            {{ r.description }}
+          </td>
+          <td data-label="Resolution">
+            <form method="post" action="{% url 'portal-report-resolve' r.type r.pk %}" style="display: inline;">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-primary" style="padding: 4px 12px; font-size: 12px; background: #0284c7; border-color: #0284c7;">
+                Mark Resolved
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="6" class="table-empty">No open reports in queue.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% elif tab == 'unreturned' %}
+<!-- Unreturned Cases Tab -->
+<div class="card">
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+    <h2 style="font-size: 16px; font-weight: 700; margin: 0;">Unreturned Items &amp; Disputes ({{ unreturned_cases_count }})</h2>
+  </div>
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Case ID</th>
+          <th>Order</th>
+          <th>Borrower</th>
+          <th>Lender</th>
+          <th>Status</th>
+          <th>Created</th>
+          <th style="min-width: 240px;">Resolution Controls</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in unreturned_cases %}
+        <tr>
+          <td data-label="Case ID">
+            <strong>#{{ c.pk }}</strong>
+          </td>
+          <td data-label="Order">
+            <span style="font-size: 13px; font-weight: 600;">Order #{{ c.order_id }}</span>
+            <span style="display: block; font-size: 11px; color: var(--muted);">{{ c.order.listing.title }}</span>
+          </td>
+          <td data-label="Borrower">
+            <div class="user-cell">
+              <span class="avatar avatar-sm">{{ c.order.borrower.full_name|initials }}</span>
+              <span class="user-name">
+                <strong style="display: block; font-size: 12px;">{{ c.order.borrower.full_name }}</strong>
+                <span style="font-size: 11px; color: var(--muted);">{{ c.order.borrower.email }}</span>
+              </span>
+            </div>
+          </td>
+          <td data-label="Lender">
+            <div class="user-cell">
+              <span class="avatar avatar-sm">{{ c.order.listing.lender.full_name|initials }}</span>
+              <span class="user-name">
+                <strong style="display: block; font-size: 12px;">{{ c.order.listing.lender.full_name }}</strong>
+                <span style="font-size: 11px; color: var(--muted);">{{ c.order.listing.lender.email }}</span>
+              </span>
+            </div>
+          </td>
+          <td data-label="Status">
+            <span class="badge badge-{{ c.status.name }}">{{ c.status.name|title }}</span>
+          </td>
+          <td data-label="Created" style="font-size: 12px; color: var(--muted);">
+            {{ c.created_at|date:"M j, Y" }}
+          </td>
+          <td data-label="Resolution Controls">
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+              <div style="display: flex; gap: 6px;">
+                <!-- Resolve as returned -->
+                <form method="post" action="{% url 'portal-unreturned-resolve' c.pk %}" style="display: inline;">
+                  {% csrf_token %}
+                  <input type="hidden" name="status" value="returned">
+                  <button type="submit" class="btn btn-primary" style="padding: 4px 10px; font-size: 11px; background: #16a34a; border-color: #16a34a;" title="Mark order as returned and close case">
+                    Close: Returned
+                  </button>
+                </form>
+
+                <!-- Resolve as unresolved -->
+                <form method="post" action="{% url 'portal-unreturned-resolve' c.pk %}" style="display: inline;">
+                  {% csrf_token %}
+                  <input type="hidden" name="status" value="unresolved">
+                  <button type="submit" class="btn btn-outline" style="padding: 4px 10px; font-size: 11px; color: #dc2626; border-color: #dc2626;" title="Close case as unresolved">
+                    Close: Unresolved
+                  </button>
+                </form>
+              </div>
+
+              <!-- Escalate to OSS with notes -->
+              <details style="font-size: 12px;">
+                <summary style="cursor: pointer; color: #d97706; font-weight: 600;">Escalate to PUP OSS...</summary>
+                <form method="post" action="{% url 'portal-unreturned-escalate' c.pk %}" style="margin-top: 6px; display: flex; flex-direction: column; gap: 4px;">
+                  {% csrf_token %}
+                  <input
+                    type="text"
+                    name="resolution_notes"
+                    placeholder="Escalation notes for PUP OSS..."
+                    style="padding: 5px 8px; font-size: 11px; border: 1px solid var(--border); border-radius: var(--radius); width: 100%;"
+                  >
+                  <button type="submit" class="btn btn-primary" style="padding: 4px 8px; font-size: 11px; background: #d97706; border-color: #d97706; align-self: flex-start;">
+                    Confirm Escalation
+                  </button>
+                </form>
+              </details>
+            </div>
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="7" class="table-empty">No active unreturned cases or disputes in queue.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}

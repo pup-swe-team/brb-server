@@ -45,3 +45,36 @@ def log_admin_document_access(
         action=action,
         ip_address=ip_address,
     )
+
+
+def log_admin_action(
+    *,
+    admin: "User",
+    action: str,
+    target_type: str = "",
+    target_id: str | int = "",
+    details: str = "",
+    document: "IdentityDocument | None" = None,
+    request: Any = None,
+) -> AdminAccessLog:
+    """
+    Record an immutable audit log entry for FR14 / CP-1106 compliance.
+
+    Actions:
+      - 'view_document', 'download_document', 'review_document'
+      - 'suspend_user', 'reinstate_user', 'ban_user', 'revoke_lender'
+      - 'confirm_flag', 'dismiss_flag', 'clear_lender_hold'
+      - 'remove_listing', 'remove_review'
+      - 'resolve_report', 'resolve_unreturned'
+      - 'config_update', 'config_bulk_update'
+    """
+    ip_address = get_client_ip(request)
+    return AdminAccessLog.objects.create(
+        admin=admin,
+        action=action,
+        target_type=target_type,
+        target_id=str(target_id) if target_id else "",
+        details=details,
+        document=document,
+        ip_address=ip_address,
+    )

@@ -10,7 +10,11 @@ from django.contrib import admin
 from django.urls import include, path
 from django.views.static import serve as serve_media
 
-from apps.core.views import HealthView
+from apps.core.views import (
+    AdminSystemConfigDetailView,
+    AdminSystemConfigListView,
+    HealthView,
+)
 from apps.listings.views import AdminRemoveListingView
 from apps.reviews.views import AdminRemoveReviewView
 from apps.users.dashboards import BorrowerDashboardView, LenderDashboardView
@@ -44,6 +48,17 @@ urlpatterns = [
         AdminRemoveReviewView.as_view(),
         name="api-admin-remove-review",
     ),
+    path(
+        "api/v1/admin/configs/",
+        AdminSystemConfigListView.as_view(),
+        name="api-admin-config-list",
+    ),
+    path(
+        "api/v1/admin/configs/<str:key>/",
+        AdminSystemConfigDetailView.as_view(),
+        name="api-admin-config-detail",
+    ),
+    path("api/v1/", include("apps.audit.urls")),
     path("api/v1/", include("apps.codes.urls")),
     path("api/v1/", include("apps.orders.urls")),
     path("api/v1/", include("apps.listings.urls")),

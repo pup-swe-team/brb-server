@@ -32,22 +32,20 @@
       <a class="nav-item {% if active_nav == 'listings_reviews' %}is-active{% endif %}" href="{% url 'portal-listings-reviews' %}">
         <svg class="nav-icon"><use href="#icon-moderation"/></svg><span>Listings &amp; Reviews</span>
       </a>
-      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="CP-506 lands in Sprint 5, then the portal mirror CP-1111">
+      <a class="nav-item {% if active_nav == 'unreturned' %}is-active{% endif %}" href="{% url 'portal-review-queues' %}?tab=unreturned">
         <svg class="nav-icon"><use href="#icon-unreturned"/></svg><span>Unreturned Cases</span>
-        <span class="nav-tag">CP-1111</span>
+        {% if nav_unreturned_count %}<span class="nav-badge">{{ nav_unreturned_count }}</span>{% endif %}
       </a>
       <a class="nav-item is-disabled" href="#" aria-disabled="true" title="CP-903 lands in Sprint 5">
         <svg class="nav-icon"><use href="#icon-disputes"/></svg><span>Disputes</span>
         <span class="nav-tag">CP-903</span>
       </a>
       <p class="nav-group">System <span class="nav-group-tag">Sprint 5</span></p>
-      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="CP-1104 lands in Sprint 5, then the portal mirror CP-1112">
+      <a class="nav-item {% if active_nav == 'system_parameters' %}is-active{% endif %}" href="{% url 'portal-system-parameters' %}">
         <svg class="nav-icon"><use href="#icon-settings"/></svg><span>System Parameters</span>
-        <span class="nav-tag">CP-1112</span>
       </a>
-      <a class="nav-item is-disabled" href="#" aria-disabled="true" title="CP-1106 lands in Sprint 5, then the portal mirror CP-1113">
+      <a class="nav-item {% if active_nav == 'audit_log' %}is-active{% endif %}" href="{% url 'portal-audit-log' %}">
         <svg class="nav-icon"><use href="#icon-audit"/></svg><span>Audit Log</span>
-        <span class="nav-tag">CP-1113</span>
       </a>
     </nav>
   </aside>

@@ -1,5 +1,6 @@
 from django.utils import timezone
 from rest_framework import status
+from rest_framework.permissions import IsAdminUser
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -142,6 +143,193 @@ class AutoFlagRepeatedlyReportedUsersJobView(CronSecretMixin):
             {
                 "job": "auto-flag-users",
                 **summary,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class AdminSystemConfigListView(APIView):
+    """
+    CP-1104 / FR14: Read and bulk-update platform runtime configuration parameters.
+    Only accessible by staff/administrators (D-03).
+    """
+
+    permission_classes = (IsAdminUser,)
+
+    def get(self, request: Request) -> Response:
+        from .constants import CONFIG_METADATA
+        from .models import SystemConfig
+
+        db_configs = {
+            c.config_key: c
+            for c in SystemConfig.objects.select_related("updated_by").all()
+        }
+
+        category_filter = request.query_params.get("category")
+
+        items = []
+        for key, meta in CONFIG_METADATA.items():
+            if category_filter and meta.get("category") != category_filter:
+                continue
+            row = db_configs.get(key)
+            val = row.config_value if row else str(meta["default"])
+            items.append(
+                {
+                    "config_key": key,
+                    "config_value": val,
+                    "label": meta["label"],
+                    "category": meta["category"],
+                    "description": meta["description"],
+                    "type": meta["type"],
+                    "default_value": str(meta["default"]),
+                    "min_value": meta.get("min"),
+                    "max_value": meta.get("max"),
+                    "updated_by": (
+                        row.updated_by.email if (row and row.updated_by) else None
+                    ),
+                    "updated_at": row.updated_at if row else None,
+                }
+            )
+
+        return Response({"configs": items}, status=status.HTTP_200_OK)
+
+    def put(self, request: Request) -> Response:
+        from .constants import CONFIG_METADATA
+        from .models import SystemConfig
+        from .serializers import SystemConfigBulkUpdateSerializer
+
+        serializer = SystemConfigBulkUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        validated_configs = serializer.validated_data["configs"]
+
+        updated_items = []
+        for key, val in validated_configs.items():
+            row, _ = SystemConfig.objects.update_or_create(
+                config_key=key,
+                defaults={
+                    "config_value": val,
+                    "updated_by": request.user,
+                },
+            )
+            meta = CONFIG_METADATA[key]
+            updated_items.append(
+                {
+                    "config_key": key,
+                    "config_value": row.config_value,
+                    "label": meta["label"],
+                    "category": meta["category"],
+                    "description": meta["description"],
+                    "type": meta["type"],
+                    "default_value": str(meta["default"]),
+                    "min_value": meta.get("min"),
+                    "max_value": meta.get("max"),
+                    "updated_by": request.user.email,
+                    "updated_at": row.updated_at,
+                }
+            )
+
+        return Response(
+            {
+                "message": f"Successfully updated {len(updated_items)} configuration parameters.",
+                "configs": updated_items,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class AdminSystemConfigDetailView(APIView):
+    """
+    CP-1104 / FR14: Read or update a specific platform runtime configuration parameter.
+    Only accessible by staff/administrators (D-03).
+    """
+
+    permission_classes = (IsAdminUser,)
+
+    def get(self, request: Request, key: str) -> Response:
+        from .constants import CONFIG_METADATA
+        from .models import SystemConfig
+
+        if key not in CONFIG_METADATA:
+            return Response(
+                {"error": f"Configuration key '{key}' not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        meta = CONFIG_METADATA[key]
+        try:
+            row = SystemConfig.objects.select_related("updated_by").get(config_key=key)
+            val = row.config_value
+            updated_by = row.updated_by.email if row.updated_by else None
+            updated_at = row.updated_at
+        except SystemConfig.DoesNotExist:
+            val = str(meta["default"])
+            updated_by = None
+            updated_at = None
+
+        return Response(
+            {
+                "config_key": key,
+                "config_value": val,
+                "label": meta["label"],
+                "category": meta["category"],
+                "description": meta["description"],
+                "type": meta["type"],
+                "default_value": str(meta["default"]),
+                "min_value": meta.get("min"),
+                "max_value": meta.get("max"),
+                "updated_by": updated_by,
+                "updated_at": updated_at,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def patch(self, request: Request, key: str) -> Response:
+        return self._update(request, key)
+
+    def put(self, request: Request, key: str) -> Response:
+        return self._update(request, key)
+
+    def _update(self, request: Request, key: str) -> Response:
+        from .constants import CONFIG_METADATA
+        from .models import SystemConfig
+        from .serializers import SystemConfigUpdateSerializer
+
+        if key not in CONFIG_METADATA:
+            return Response(
+                {"error": f"Configuration key '{key}' not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        meta = CONFIG_METADATA[key]
+        serializer = SystemConfigUpdateSerializer(
+            data=request.data,
+            context={"config_key": key},
+        )
+        serializer.is_valid(raise_exception=True)
+        val = serializer.validated_data["value"]
+
+        row, _ = SystemConfig.objects.update_or_create(
+            config_key=key,
+            defaults={
+                "config_value": val,
+                "updated_by": request.user,
+            },
+        )
+
+        return Response(
+            {
+                "message": f"Configuration parameter '{key}' updated successfully.",
+                "config_key": key,
+                "config_value": row.config_value,
+                "label": meta["label"],
+                "category": meta["category"],
+                "description": meta["description"],
+                "type": meta["type"],
+                "default_value": str(meta["default"]),
+                "min_value": meta.get("min"),
+                "max_value": meta.get("max"),
+                "updated_by": request.user.email,
+                "updated_at": row.updated_at,
             },
             status=status.HTTP_200_OK,
         )

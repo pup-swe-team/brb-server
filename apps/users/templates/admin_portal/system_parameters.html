@@ -1,0 +1,80 @@
+{% extends "admin_portal/shell.html" %}
+{% load portal_extras %}
+{% block title %}System Parameters &middot; CoPUPAdmin{% endblock %}
+{% block content %}
+<nav class="crumbs" aria-label="Breadcrumb">
+  <span>System</span> / <a href="{% url 'portal-system-parameters' %}">System Parameters</a>
+</nav>
+
+<div class="page-heading">
+  <div>
+    <h1>System Parameters</h1>
+    <p style="color: var(--muted); font-size: 14px; margin-top: 4px;">
+      Runtime platform settings (FR14 / CP-1104). Changes take effect immediately across all endpoints without requiring redeployment.
+    </p>
+  </div>
+</div>
+
+<form method="post" novalidate>
+  {% csrf_token %}
+
+  {% for category, items in sections.items %}
+  <div class="card" style="margin-bottom: 20px;">
+    <h2 style="font-size: 16px; font-weight: 700; margin-bottom: 4px;">{{ category }}</h2>
+    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; margin-top: 14px;">
+      {% for item in items %}
+      <div class="field {% if item.error %}is-invalid{% endif %}" style="display: flex; flex-direction: column; justify-content: space-between; border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; background: #fafafa;">
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;">
+            <label for="id_{{ item.key }}" style="font-weight: 600; font-size: 14px; color: var(--text);">
+              {{ item.label }}
+            </label>
+            <span class="badge" style="font-size: 11px; background: #f3f4f6; color: #4b5563;" title="System fallback default">
+              Def: {{ item.default }}
+            </span>
+          </div>
+          <p style="font-size: 12px; color: var(--muted); margin: 4px 0 10px 0; line-height: 1.4;">
+            {{ item.description }}
+          </p>
+        </div>
+
+        <div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <input
+              id="id_{{ item.key }}"
+              name="{{ item.key }}"
+              type="{% if item.type == 'integer' %}number{% else %}text{% endif %}"
+              value="{{ item.value }}"
+              {% if item.min is not None %}min="{{ item.min }}"{% endif %}
+              {% if item.max is not None %}max="{{ item.max }}"{% endif %}
+              style="width: 100%; padding: 8px 12px; border: 1px solid {% if item.error %}#dc2626{% else %}var(--border){% endif %}; border-radius: var(--radius); font-size: 14px; background: #fff;"
+            >
+          </div>
+          {% if item.error %}
+            <span class="field-error" style="color: #dc2626; font-size: 12px; display: block; margin-top: 4px;">
+              {{ item.error }}
+            </span>
+          {% endif %}
+          {% if item.updated_by %}
+            <span style="font-size: 11px; color: var(--muted); display: block; margin-top: 6px;">
+              Updated by {{ item.updated_by }} ({{ item.updated_at|date:"M j, Y H:i" }})
+            </span>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+
+  <div style="position: sticky; bottom: 16px; background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(8px); padding: 16px 20px; border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 4px 12px rgba(0,0,0,0.08); display: flex; align-items: center; justify-content: space-between; z-index: 10;">
+    <span style="font-size: 13px; color: var(--muted);">
+      Adjust limits, timeouts, and rules. Changes apply directly to active database configurations.
+    </span>
+    <div style="display: flex; gap: 10px;">
+      <a href="{% url 'portal-system-parameters' %}" class="btn btn-outline" style="padding: 8px 18px;">Discard</a>
+      <button type="submit" class="btn btn-primary" style="padding: 8px 24px;">Save Parameters</button>
+    </div>
+  </div>
+</form>
+{% endblock %}

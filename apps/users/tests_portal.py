@@ -638,11 +638,14 @@ class PortalSidebarTests(TestCase):
         self.assertContains(response, reverse("portal-listings-reviews"))
         self.assertContains(response, reverse("portal-users"))
         self.assertContains(response, reverse("portal-reports-queue"))
+        self.assertContains(response, reverse("portal-system-parameters"))
+        self.assertContains(response, reverse("portal-audit-log"))
+        self.assertContains(response, reverse("portal-review-queues"))
 
     def test_locked_sections_carry_their_ticket(self) -> None:
         response = self.client.get(reverse("portal-dashboard"))
 
-        for ticket in ("CP-1111", "CP-1112", "CP-1113", "CP-903"):
+        for ticket in ("CP-903",):
             self.assertContains(response, ticket)
 
     def test_locked_sections_are_not_links(self) -> None:
@@ -1096,3 +1099,287 @@ class AdminPortalReportsQueueTests(TestCase):
         self.assertEqual(res.status_code, 302)
         self.report.refresh_from_db()
         self.assertEqual(self.report.status, "resolved")
+
+
+class PortalSystemParametersTests(TestCase):
+    """CP-1112 / CP-1104 / TC-111 / TC-112: System parameters configuration portal tests."""
+
+    def setUp(self) -> None:
+        self.admin = make_user(
+            "admin-params@iskolarngbayan.pup.edu.ph",
+            is_staff=True,
+            full_name="Admin Params",
+        )
+        self.member = make_user(
+            "regular@iskolarngbayan.pup.edu.ph",
+            is_staff=False,
+            full_name="Regular Member",
+        )
+        self.url = reverse("portal-system-parameters")
+
+    def test_anonymous_redirected_to_login(self) -> None:
+        res = self.client.get(self.url)
+        self.assertEqual(res.status_code, 302)
+        self.assertIn(reverse("portal-login"), res.url)
+
+    def test_non_staff_redirected(self) -> None:
+        self.client.force_login(self.member)
+        res = self.client.get(self.url)
+        self.assertEqual(res.status_code, 302)
+        self.assertIn(reverse("portal-login"), res.url)
+
+    def test_admin_can_view_parameters_page(self) -> None:
+        self.client.force_login(self.admin)
+        res = self.client.get(self.url)
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "System Parameters")
+        self.assertContains(res, "Borrowing Limit")
+        self.assertContains(res, "Lending Limit")
+        self.assertContains(res, "Request Expiry (Hours)")
+        self.assertContains(res, "Code Expiry (Hours)")
+        self.assertContains(res, "Review Window (Days)")
+        self.assertContains(res, "Save Parameters")
+
+    def test_admin_submits_updated_parameters(self) -> None:
+        """TC-111 / TC-112: Admin updates system config via portal."""
+        from apps.core.models import SystemConfig
+        from apps.core.selectors import get_int_config
+
+        self.client.force_login(self.admin)
+        data = {
+            "borrowing_limit": "6",
+            "lending_limit": "15",
+            "auth_code_expiry_hours": "4",
+            "review_window_days": "10",
+        }
+        res = self.client.post(self.url, data)
+        self.assertEqual(res.status_code, 302)
+        self.assertRedirects(res, self.url)
+
+        # Confirm persisted in DB
+        cfg = SystemConfig.objects.get(config_key="borrowing_limit")
+        self.assertEqual(cfg.config_value, "6")
+        self.assertEqual(cfg.updated_by, self.admin)
+
+        # Confirm live selector returns updated value
+        self.assertEqual(get_int_config("borrowing_limit", 3), 6)
+        self.assertEqual(get_int_config("lending_limit", 10), 15)
+        self.assertEqual(get_int_config("auth_code_expiry_hours", 3), 4)
+
+    def test_validation_errors_displayed_on_invalid_data(self) -> None:
+        self.client.force_login(self.admin)
+        data = {
+            "borrowing_limit": "not_an_int",
+            "lending_limit": "0",  # min is 1
+        }
+        res = self.client.post(self.url, data)
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "Must be a valid integer.")
+        self.assertContains(res, "Must be at least 1.")
+
+
+class PortalAuditLogViewerTests(TestCase):
+    """CP-1113 / CP-1106 / TC-115 / TC-116: Audit log viewer portal tests."""
+
+    def setUp(self) -> None:
+        self.admin = make_user(
+            "admin-audit-portal@iskolarngbayan.pup.edu.ph",
+            is_staff=True,
+            full_name="Admin AuditPortal",
+        )
+        self.member = make_user(
+            "regular-member@iskolarngbayan.pup.edu.ph",
+            is_staff=False,
+            full_name="Regular Member",
+        )
+        self.url = reverse("portal-audit-log")
+
+        AdminAccessLog.objects.create(
+            admin=self.admin,
+            action="suspend_user",
+            target_type="user",
+            target_id="101",
+            details="Suspended user for policy violations",
+        )
+        AdminAccessLog.objects.create(
+            admin=self.admin,
+            action="remove_listing",
+            target_type="listing",
+            target_id="202",
+            details="Removed listing with prohibited content",
+        )
+
+    def test_anonymous_redirected_to_login(self) -> None:
+        res = self.client.get(self.url)
+        self.assertEqual(res.status_code, 302)
+        self.assertIn(reverse("portal-login"), res.url)
+
+    def test_non_staff_redirected(self) -> None:
+        self.client.force_login(self.member)
+        res = self.client.get(self.url)
+        self.assertEqual(res.status_code, 302)
+        self.assertIn(reverse("portal-login"), res.url)
+
+    def test_admin_can_view_audit_log_page(self) -> None:
+        self.client.force_login(self.admin)
+        res = self.client.get(self.url)
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "Admin Action Audit Log")
+        self.assertContains(res, "Admin AuditPortal")
+        self.assertContains(res, "suspend_user")
+        self.assertContains(res, "remove_listing")
+        self.assertContains(res, "#101")
+        self.assertContains(res, "#202")
+
+    def test_filtering_by_action(self) -> None:
+        self.client.force_login(self.admin)
+        res = self.client.get(self.url + "?action=suspend_user")
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "#101")
+        self.assertNotContains(res, "#202")
+
+    def test_search_audit_logs(self) -> None:
+        self.client.force_login(self.admin)
+        res = self.client.get(self.url + "?q=prohibited")
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "#202")
+        self.assertNotContains(res, "#101")
+
+
+class PortalReviewQueuesTests(TestCase):
+    """CP-1103 / TC-108 / TC-109 / TC-110: Consolidated review queues portal tests."""
+
+    def setUp(self) -> None:
+        self.admin = make_user(
+            "admin-queues@iskolarngbayan.pup.edu.ph",
+            is_staff=True,
+            full_name="Admin Queues",
+        )
+        self.member = make_user(
+            "student-queues@iskolarngbayan.pup.edu.ph",
+            is_staff=False,
+            full_name="Student Queues",
+        )
+        self.lender = make_user(
+            "lender-queues@iskolarngbayan.pup.edu.ph",
+            full_name="Lender Queues",
+        )
+        self.url = reverse("portal-review-queues")
+
+        # Create pending verification doc
+        self.doc = make_document(self.member, status_name="pending")
+
+        # Create open report
+        cat = UserReportCategory.objects.create(name="Spam")
+        self.report = UserReport.objects.create(
+            reporter=self.member,
+            target_user=self.lender,
+            category=cat,
+            description="Posting spam listings repeatedly",
+            status="open",
+        )
+
+    def test_anonymous_redirected_to_login(self) -> None:
+        res = self.client.get(self.url)
+        self.assertEqual(res.status_code, 302)
+        self.assertIn(reverse("portal-login"), res.url)
+
+    def test_non_staff_redirected(self) -> None:
+        self.client.force_login(self.member)
+        res = self.client.get(self.url)
+        self.assertEqual(res.status_code, 302)
+        self.assertIn(reverse("portal-login"), res.url)
+
+    def test_verification_tab_renders_controls(self) -> None:
+        self.client.force_login(self.admin)
+        res = self.client.get(self.url + "?tab=verification")
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "Admin Review Queues")
+        self.assertContains(res, "Verification Queue")
+        self.assertContains(res, "Student Queues")
+        self.assertContains(res, "Approve")
+        self.assertContains(res, "Reject with Reason")
+
+    def test_tc108_admin_approves_item_from_verification_queue(self) -> None:
+        """TC-108: Admin approves item from queue; item removed, resolution recorded."""
+        self.client.force_login(self.admin)
+        res = self.client.post(
+            reverse("portal-verification-review-submit", args=[self.doc.pk]),
+            {"action": "approve"},
+        )
+        self.assertEqual(res.status_code, 302)
+        self.doc.refresh_from_db()
+        self.assertEqual(self.doc.status.name, "approved")
+
+        # Check document is no longer in pending queue table
+        queue_res = self.client.get(self.url + "?tab=verification")
+        self.assertContains(queue_res, "No pending verification documents in queue.")
+
+    def test_tc109_admin_resolves_item_from_reports_queue(self) -> None:
+        """TC-109: Admin resolves item from reports queue; report marked resolved."""
+        self.client.force_login(self.admin)
+        res = self.client.get(self.url + "?tab=reports")
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "Posting spam listings repeatedly")
+        self.assertContains(res, "Mark Resolved")
+
+        # Resolve
+        resolve_res = self.client.post(
+            reverse("portal-report-resolve", args=["user", self.report.pk])
+        )
+        self.assertEqual(resolve_res.status_code, 302)
+        self.report.refresh_from_db()
+        self.assertEqual(self.report.status, "resolved")
+
+    def test_tc110_admin_resolves_unreturned_case(self) -> None:
+        """TC-110: Admin resolves an item from the Unreturned cases queue."""
+        from apps.orders.models import (
+            Order,
+            OrderStatus,
+            UnreturnedCase,
+            UnreturnedCaseStatus,
+        )
+
+        pickup_loc, _ = PickupLocation.objects.get_or_create(name="Campus Main Gate")
+        listing_status, _ = ListingStatus.objects.get_or_create(name="active")
+        listing = Listing.objects.create(
+            lender=self.lender,
+            title="Scientific Calculator",
+            description="Good condition",
+            category=ListingCategory.objects.first()
+            or ListingCategory.objects.create(name="Electronics"),
+            status=listing_status,
+            pickup_location=pickup_loc,
+        )
+        active_status, _ = OrderStatus.objects.get_or_create(name="active")
+        today = timezone.now().date()
+        order = Order.objects.create(
+            listing=listing,
+            borrower=self.member,
+            start_date=today,
+            end_date=today,
+            status=active_status,
+        )
+        case_status, _ = UnreturnedCaseStatus.objects.get_or_create(name="open")
+        case = UnreturnedCase.objects.create(
+            order=order,
+            status=case_status,
+        )
+
+        self.client.force_login(self.admin)
+        res = self.client.get(self.url + "?tab=unreturned")
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "Scientific Calculator")
+        self.assertContains(res, "Close: Returned")
+
+        # Resolve case as returned
+        resolve_res = self.client.post(
+            reverse("portal-unreturned-resolve", args=[case.pk]),
+            {
+                "status": "returned",
+                "resolution_notes": "Item physically returned to OSS desk.",
+            },
+        )
+        self.assertEqual(resolve_res.status_code, 302)
+        case.refresh_from_db()
+        self.assertEqual(case.status.name, "returned")

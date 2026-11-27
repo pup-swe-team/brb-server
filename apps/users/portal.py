@@ -34,7 +34,8 @@ from django.views.decorators.http import require_POST
 
 from apps.audit.services import log_admin_document_access
 from apps.listings.models import Listing, ListingCategory, ListingStatus, PickupLocation
-from apps.orders.models import Order
+from apps.orders.models import Order, UnreturnedCase
+from apps.orders.services import close_unreturned_case, escalate_unreturned_case
 from apps.reports.models import (
     ListingReport,
     MessageReport,
@@ -139,6 +140,15 @@ def _open_reports_count() -> int:
         + ReviewReport.objects.filter(status="open").count()
         + MessageReport.objects.filter(status="open").count()
     )
+
+
+def _open_unreturned_count() -> int:
+    try:
+        return UnreturnedCase.objects.filter(
+            status__name__in=("open", "escalated")
+        ).count()
+    except Exception:  # noqa: BLE001
+        return 0
 
 
 def _recent_activity() -> list[dict[str, str]]:
@@ -1350,3 +1360,352 @@ def report_resolve(request, report_type: str, pk: int):
     return redirect(
         reverse("portal-reports-queue") + f"?type={report_type}&status=open"
     )
+
+
+@staff_login_required
+def system_parameters(request):
+    """
+    CP-1112 / CP-1104 / TC-111 / TC-112: System parameters configuration portal page.
+    Allows administrators to configure borrowing limit, lending limit, request expiry,
+    code rules, review window, and security lockouts.
+    """
+    from apps.core.constants import CONFIG_METADATA
+    from apps.core.models import SystemConfig
+
+    db_configs = {
+        c.config_key: c for c in SystemConfig.objects.select_related("updated_by").all()
+    }
+
+    errors: dict[str, str] = {}
+
+    if request.method == "POST":
+        updated_count = 0
+        for key, meta in CONFIG_METADATA.items():
+            if key in request.POST:
+                raw_val = request.POST.get(key, "").strip()
+                if not raw_val:
+                    errors[key] = "Value cannot be blank."
+                    continue
+                if meta.get("type") == "integer":
+                    try:
+                        int_val = int(raw_val)
+                    except ValueError:
+                        errors[key] = "Must be a valid integer."
+                        continue
+                    min_val = meta.get("min")
+                    max_val = meta.get("max")
+                    if min_val is not None and int_val < min_val:
+                        errors[key] = f"Must be at least {min_val}."
+                        continue
+                    if max_val is not None and int_val > max_val:
+                        errors[key] = f"Cannot exceed {max_val}."
+                        continue
+
+                current_row = db_configs.get(key)
+                current_val = (
+                    current_row.config_value if current_row else str(meta["default"])
+                )
+                if raw_val != current_val:
+                    SystemConfig.objects.update_or_create(
+                        config_key=key,
+                        defaults={
+                            "config_value": raw_val,
+                            "updated_by": request.user,
+                        },
+                    )
+                    updated_count += 1
+
+        if not errors:
+            if updated_count > 0:
+                messages.success(
+                    request,
+                    f"Successfully updated {updated_count} system parameter{'s' if updated_count != 1 else ''}. Changes take effect immediately.",
+                )
+            else:
+                messages.info(request, "No configuration changes were made.")
+            return redirect(reverse("portal-system-parameters"))
+        else:
+            messages.error(request, "Please correct the errors in the form below.")
+
+    # Re-fetch latest configs from DB to render
+    db_configs = {
+        c.config_key: c for c in SystemConfig.objects.select_related("updated_by").all()
+    }
+
+    sections: dict[str, list[dict]] = {}
+    for key, meta in CONFIG_METADATA.items():
+        category = meta.get("category", "General")
+        if category not in sections:
+            sections[category] = []
+        row = db_configs.get(key)
+        val = (
+            request.POST.get(key)
+            if request.method == "POST" and key in request.POST
+            else (row.config_value if row else str(meta["default"]))
+        )
+        sections[category].append(
+            {
+                "key": key,
+                "label": meta["label"],
+                "description": meta["description"],
+                "type": meta["type"],
+                "default": str(meta["default"]),
+                "min": meta.get("min"),
+                "max": meta.get("max"),
+                "value": val,
+                "error": errors.get(key),
+                "updated_by": (
+                    row.updated_by.email if (row and row.updated_by) else None
+                ),
+                "updated_at": row.updated_at if row else None,
+            }
+        )
+
+    context = {
+        "active_nav": "system_parameters",
+        "sections": sections,
+        "nav_verification_count": _identity_document_tab_counts()["pending"],
+        "nav_reports_count": _open_reports_count(),
+    }
+    return render(request, "admin_portal/system_parameters.html", context)
+
+
+@staff_login_required
+def audit_log_viewer(request):
+    """
+    CP-1113 / CP-1106 / TC-115 / TC-116: Read-only audit log viewer in CoPUPAdmin portal.
+    Displays immutable history of administrative actions, document views, and moderation events.
+    """
+    from apps.audit.models import AdminAccessLog
+
+    qs = AdminAccessLog.objects.select_related("admin", "document").order_by(
+        "-accessed_at"
+    )
+
+    action_filter = request.GET.get("action", "").strip()
+    if action_filter:
+        qs = qs.filter(action=action_filter)
+
+    target_type_filter = request.GET.get("target_type", "").strip()
+    if target_type_filter:
+        qs = qs.filter(target_type=target_type_filter)
+
+    search_query = request.GET.get("q", "").strip()
+    if search_query:
+        qs = qs.filter(
+            Q(admin__email__icontains=search_query)
+            | Q(admin__full_name__icontains=search_query)
+            | Q(action__icontains=search_query)
+            | Q(target_id__icontains=search_query)
+            | Q(details__icontains=search_query)
+        )
+
+    # Distinct action and target types for filters
+    actions = (
+        AdminAccessLog.objects.order_by("action")
+        .values_list("action", flat=True)
+        .distinct()
+    )
+    target_types = (
+        AdminAccessLog.objects.exclude(target_type="")
+        .order_by("target_type")
+        .values_list("target_type", flat=True)
+        .distinct()
+    )
+
+    paginator = Paginator(qs, 25)
+    page_number = request.GET.get("page", 1)
+    try:
+        page = paginator.get_page(page_number)
+    except Exception:  # noqa: BLE001
+        page = paginator.get_page(1)
+
+    start_index = (
+        (page.number - 1) * paginator.per_page + 1 if paginator.count > 0 else 0
+    )
+    end_index = min(page.number * paginator.per_page, paginator.count)
+
+    context = {
+        "active_nav": "audit_log",
+        "page": page,
+        "paginator": paginator,
+        "start_index": start_index,
+        "end_index": end_index,
+        "action_filter": action_filter,
+        "target_type_filter": target_type_filter,
+        "search_query": search_query,
+        "actions": actions,
+        "target_types": target_types,
+        "nav_verification_count": _identity_document_tab_counts()["pending"],
+        "nav_reports_count": _open_reports_count(),
+    }
+    return render(request, "admin_portal/audit_log.html", context)
+
+
+@staff_login_required
+def consolidated_review_queues(request):
+    """
+    CP-1103 / TC-108 / TC-109 / TC-110: Consolidated Admin Review Queue UI
+    with Verification, Reports, and Unreturned tabs, and approve/reject/resolution controls.
+    """
+    tab = request.GET.get("tab", "verification").lower()
+    if tab not in ("verification", "reports", "unreturned"):
+        tab = "verification"
+
+    pending_docs = (
+        IdentityDocument.objects.select_related("user", "document_type", "status")
+        .filter(status__name=IDENTITY_DOCUMENT_STATUS_PENDING)
+        .order_by("-submitted_at")
+    )
+    pending_docs_count = pending_docs.count()
+
+    # Open reports
+    user_reports = UserReport.objects.select_related(
+        "reporter", "target_user", "category"
+    ).filter(status="open")
+    listing_reports = ListingReport.objects.select_related(
+        "reporter", "target_listing", "category"
+    ).filter(status="open")
+    review_reports = ReviewReport.objects.select_related(
+        "reporter", "target_review", "category"
+    ).filter(status="open")
+    message_reports = MessageReport.objects.select_related(
+        "reporter", "target_message", "category"
+    ).filter(status="open")
+    open_reports_count = (
+        user_reports.count()
+        + listing_reports.count()
+        + review_reports.count()
+        + message_reports.count()
+    )
+
+    reports_list = []
+    for r in user_reports:
+        reports_list.append(
+            {
+                "type": "user",
+                "pk": r.pk,
+                "reporter": r.reporter,
+                "target": f"User: {r.target_user.full_name}",
+                "category": r.category.name if r.category else "General",
+                "description": r.description,
+                "created_at": r.created_at,
+            }
+        )
+    for r in listing_reports:
+        reports_list.append(
+            {
+                "type": "listing",
+                "pk": r.pk,
+                "reporter": r.reporter,
+                "target": f"Listing: {r.target_listing.title}",
+                "category": r.category.name if r.category else "General",
+                "description": r.description,
+                "created_at": r.created_at,
+            }
+        )
+    for r in review_reports:
+        reports_list.append(
+            {
+                "type": "review",
+                "pk": r.pk,
+                "reporter": r.reporter,
+                "target": f"Review #{r.target_review_id}",
+                "category": r.category.name if r.category else "General",
+                "description": r.description,
+                "created_at": r.created_at,
+            }
+        )
+    for r in message_reports:
+        reports_list.append(
+            {
+                "type": "message",
+                "pk": r.pk,
+                "reporter": r.reporter,
+                "target": f"Message #{r.target_message_id}",
+                "category": r.category.name if r.category else "General",
+                "description": r.description,
+                "created_at": r.created_at,
+            }
+        )
+    reports_list.sort(key=lambda x: x["created_at"], reverse=True)
+
+    # Unreturned cases
+    unreturned_cases = (
+        UnreturnedCase.objects.select_related(
+            "order__listing",
+            "order__borrower",
+            "order__listing__lender",
+            "status",
+        )
+        .filter(status__name__in=("open", "escalated"))
+        .order_by("-created_at")
+    )
+    unreturned_cases_count = unreturned_cases.count()
+
+    context = {
+        "active_nav": "unreturned" if tab == "unreturned" else "queues",
+        "tab": tab,
+        "pending_docs": pending_docs,
+        "pending_docs_count": pending_docs_count,
+        "reports_list": reports_list,
+        "open_reports_count": open_reports_count,
+        "unreturned_cases": unreturned_cases,
+        "unreturned_cases_count": unreturned_cases_count,
+        "nav_verification_count": pending_docs_count,
+        "nav_reports_count": open_reports_count,
+        "nav_unreturned_count": unreturned_cases_count,
+    }
+    return render(request, "admin_portal/review_queues.html", context)
+
+
+@require_POST
+@staff_login_required
+def unreturned_case_resolve(request, pk: int):
+    """
+    Admin resolves an UnreturnedCase as 'returned' or 'unresolved' (CP-1103 / TC-110).
+    """
+    close_status = request.POST.get("status", "returned").lower()
+    if close_status not in ("returned", "unresolved"):
+        close_status = "returned"
+    resolution_notes = request.POST.get("resolution_notes", "").strip()
+
+    try:
+        case = close_unreturned_case(
+            case_id=pk,
+            admin=request.user,
+            close_status=close_status,
+            resolution_notes=resolution_notes,
+        )
+        messages.success(
+            request,
+            f"Unreturned Case #{case.pk} for Order #{case.order_id} marked as \u201c{close_status}\u201d.",
+        )
+    except Exception as e:  # noqa: BLE001
+        messages.error(request, f"Error resolving unreturned case: {e}")
+
+    return redirect(reverse("portal-review-queues") + "?tab=unreturned")
+
+
+@require_POST
+@staff_login_required
+def unreturned_case_escalate(request, pk: int):
+    """
+    Admin escalates an UnreturnedCase to PUP OSS / Campus Security (CP-1103 / CP-506).
+    """
+    resolution_notes = request.POST.get("resolution_notes", "").strip()
+
+    try:
+        case = escalate_unreturned_case(
+            case_id=pk,
+            admin=request.user,
+            resolution_notes=resolution_notes,
+        )
+        messages.success(
+            request,
+            f"Unreturned Case #{case.pk} escalated to PUP OSS.",
+        )
+    except Exception as e:  # noqa: BLE001
+        messages.error(request, f"Error escalating unreturned case: {e}")
+
+    return redirect(reverse("portal-review-queues") + "?tab=unreturned")

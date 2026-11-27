@@ -130,4 +130,32 @@ urlpatterns = [
         portal.report_resolve,
         name="portal-report-resolve",
     ),
+    # System parameters configuration (CP-1112 / CP-1104 / TC-111 / TC-112).
+    path(
+        "system-parameters/",
+        portal.system_parameters,
+        name="portal-system-parameters",
+    ),
+    # Audit log viewer (CP-1113 / CP-1106 / TC-115 / TC-116).
+    path(
+        "audit-log/",
+        portal.audit_log_viewer,
+        name="portal-audit-log",
+    ),
+    # Consolidated review queues (CP-1103 / TC-108 / TC-109 / TC-110).
+    path(
+        "queues/",
+        portal.consolidated_review_queues,
+        name="portal-review-queues",
+    ),
+    path(
+        "unreturned/<int:pk>/resolve/",
+        portal.unreturned_case_resolve,
+        name="portal-unreturned-resolve",
+    ),
+    path(
+        "unreturned/<int:pk>/escalate/",
+        portal.unreturned_case_escalate,
+        name="portal-unreturned-escalate",
+    ),
 ]

@@ -99,6 +99,8 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    # Audit logging for administrator actions (FR14 / CP-1106).
+    "apps.audit.middleware.AdminActionLoggingMiddleware",
 ]
 
 ROOT_URLCONF = "brb_server.urls"
