@@ -2,104 +2,22 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from rest_framework import serializers
 
 from .constants import (
-    NOTIFICATION_TYPE_ACCEPTANCE,
-    NOTIFICATION_TYPE_CANCELLATION,
-    NOTIFICATION_TYPE_CODE_GENERATION,
-    NOTIFICATION_TYPE_CONFIRMED_HANDOVER,
-    NOTIFICATION_TYPE_CONFIRMED_RETURN,
-    NOTIFICATION_TYPE_DECLINE,
-    NOTIFICATION_TYPE_EXPIRY,
-    NOTIFICATION_TYPE_NEW_MESSAGE,
-    NOTIFICATION_TYPE_NEW_REQUEST,
-    NOTIFICATION_TYPE_NEW_REVIEW,
-    NOTIFICATION_TYPE_OVERDUE_STATUS,
-    NOTIFICATION_TYPE_REPORT_UPDATES,
-    NOTIFICATION_TYPE_UNRETURNED_STATUS,
-    NOTIFICATION_TYPE_UPCOMING_DUE_DATE,
-    NOTIFICATION_TYPE_VERIFICATION_RESULT,
+    DEFAULT_EMAIL_NOTIFICATION_PREFERENCES,
+    NOTIFICATION_METADATA,
+    NOTIFICATION_PREFERENCE_CATEGORIES,
+    ORDER_PREFIXED_NOTIFICATION_TYPES,
+    PREF_CATEGORY_ACCOUNT_VERIFICATION,
+    PREF_CATEGORY_MESSAGES,
+    PREF_CATEGORY_ORDER_UPDATES,
+    PREF_CATEGORY_REVIEWS,
+    PREFERENCE_CATEGORY_ALIASES,
 )
 from .models import Notification
-
-NOTIFICATION_METADATA: dict[str, dict[str, str]] = {
-    NOTIFICATION_TYPE_NEW_REQUEST: {
-        "title": "New Borrow Request",
-        "message": "You received a new borrow request.",
-        "reference_type": "order",
-    },
-    NOTIFICATION_TYPE_ACCEPTANCE: {
-        "title": "Borrow Request Accepted",
-        "message": "Your borrow request has been accepted by the lender.",
-        "reference_type": "order",
-    },
-    NOTIFICATION_TYPE_DECLINE: {
-        "title": "Borrow Request Declined",
-        "message": "Your borrow request was declined.",
-        "reference_type": "order",
-    },
-    NOTIFICATION_TYPE_EXPIRY: {
-        "title": "Borrow Request Expired",
-        "message": "A borrow request has expired without a lender response.",
-        "reference_type": "order",
-    },
-    NOTIFICATION_TYPE_CANCELLATION: {
-        "title": "Order Cancelled",
-        "message": "An order has been cancelled.",
-        "reference_type": "order",
-    },
-    NOTIFICATION_TYPE_CODE_GENERATION: {
-        "title": "Handover Code Generated",
-        "message": "A verification code has been generated for handover/return.",
-        "reference_type": "order",
-    },
-    NOTIFICATION_TYPE_CONFIRMED_HANDOVER: {
-        "title": "Handover Confirmed",
-        "message": "The item handover has been confirmed. The order is now active.",
-        "reference_type": "order",
-    },
-    NOTIFICATION_TYPE_CONFIRMED_RETURN: {
-        "title": "Return Confirmed",
-        "message": "The item return has been confirmed. The order is completed.",
-        "reference_type": "order",
-    },
-    NOTIFICATION_TYPE_UPCOMING_DUE_DATE: {
-        "title": "Upcoming Due Date",
-        "message": "Your borrowed item is due tomorrow. Please prepare for return.",
-        "reference_type": "order",
-    },
-    NOTIFICATION_TYPE_OVERDUE_STATUS: {
-        "title": "Order Overdue",
-        "message": "The return deadline for your borrowed item has passed.",
-        "reference_type": "order",
-    },
-    NOTIFICATION_TYPE_UNRETURNED_STATUS: {
-        "title": "Order Marked Unreturned",
-        "message": "This order is significantly overdue and has been escalated as unreturned.",
-        "reference_type": "order",
-    },
-    NOTIFICATION_TYPE_NEW_MESSAGE: {
-        "title": "New Message",
-        "message": "You received a new message.",
-        "reference_type": "conversation",
-    },
-    NOTIFICATION_TYPE_NEW_REVIEW: {
-        "title": "New Review",
-        "message": "You received a new review and rating.",
-        "reference_type": "order",
-    },
-    NOTIFICATION_TYPE_VERIFICATION_RESULT: {
-        "title": "Identity Verification Update",
-        "message": "Your identity verification submission has been reviewed.",
-        "reference_type": "verification",
-    },
-    NOTIFICATION_TYPE_REPORT_UPDATES: {
-        "title": "Report / Case Update",
-        "message": "There is an update on your reported issue or order escalation.",
-        "reference_type": "report",
-    },
-}
 
 
 class NotificationSerializer(serializers.ModelSerializer):
@@ -133,17 +51,7 @@ class NotificationSerializer(serializers.ModelSerializer):
     def get_message(self, obj: Notification) -> str:
         meta = NOTIFICATION_METADATA.get(obj.type.name, {})
         base_msg = meta.get("message", "You have a new notification.")
-        if obj.reference_id and obj.type.name in (
-            NOTIFICATION_TYPE_NEW_REQUEST,
-            NOTIFICATION_TYPE_ACCEPTANCE,
-            NOTIFICATION_TYPE_DECLINE,
-            NOTIFICATION_TYPE_CANCELLATION,
-            NOTIFICATION_TYPE_UPCOMING_DUE_DATE,
-            NOTIFICATION_TYPE_OVERDUE_STATUS,
-            NOTIFICATION_TYPE_UNRETURNED_STATUS,
-            NOTIFICATION_TYPE_CONFIRMED_HANDOVER,
-            NOTIFICATION_TYPE_CONFIRMED_RETURN,
-        ):
+        if obj.reference_id and obj.type.name in ORDER_PREFIXED_NOTIFICATION_TYPES:
             return f"Order #{obj.reference_id}: {base_msg}"
         return base_msg
 
@@ -164,17 +72,76 @@ class NotificationSerializer(serializers.ModelSerializer):
         return None
 
 
-class NotificationChannelPreferenceSerializer(serializers.Serializer):
-    push = serializers.BooleanField(required=False, default=True)
-    email = serializers.BooleanField(required=False, default=True)
+def serialize_notification_preferences(prefs: dict[str, bool]) -> dict[str, Any]:
+    """Build the CP-802 preferences response with both top-level booleans and category metadata."""
+    return {
+        PREF_CATEGORY_ORDER_UPDATES: bool(prefs.get(PREF_CATEGORY_ORDER_UPDATES, True)),
+        PREF_CATEGORY_MESSAGES: bool(prefs.get(PREF_CATEGORY_MESSAGES, True)),
+        PREF_CATEGORY_REVIEWS: bool(prefs.get(PREF_CATEGORY_REVIEWS, True)),
+        PREF_CATEGORY_ACCOUNT_VERIFICATION: bool(
+            prefs.get(PREF_CATEGORY_ACCOUNT_VERIFICATION, True)
+        ),
+        "categories": [
+            {
+                "key": key,
+                "label": label,
+                "description": description,
+                "email_enabled": bool(prefs.get(key, True)),
+            }
+            for key, label, description in NOTIFICATION_PREFERENCE_CATEGORIES
+        ],
+    }
 
 
 class NotificationPreferencesSerializer(serializers.Serializer):
-    """Serialize and validate user notification preference categories."""
+    """
+    Validate CP-802 email notification preferences across the four categories:
+    order_updates, messages, reviews, and account_verification.
 
-    requests = NotificationChannelPreferenceSerializer(required=False)
-    handover = NotificationChannelPreferenceSerializer(required=False)
-    overdue = NotificationChannelPreferenceSerializer(required=False)
-    messages = NotificationChannelPreferenceSerializer(required=False)
-    reviews = NotificationChannelPreferenceSerializer(required=False)
-    security = NotificationChannelPreferenceSerializer(required=False)
+    Accepts flat booleans (e.g. `{"messages": false}`) or channel dicts
+    (e.g. `{"messages": {"email": false}}`) as well as display-name aliases.
+    """
+
+    def to_internal_value(self, data: Any) -> dict[str, bool]:
+        if not isinstance(data, dict):
+            raise serializers.ValidationError(
+                {"detail": "Preferences payload must be a JSON object."}
+            )
+
+        parsed: dict[str, bool] = {}
+        errors: dict[str, str] = {}
+
+        for raw_key, raw_val in data.items():
+            normalized_key = PREFERENCE_CATEGORY_ALIASES.get(
+                str(raw_key).strip().lower()
+            )
+            if normalized_key is None:
+                allowed = ", ".join(DEFAULT_EMAIL_NOTIFICATION_PREFERENCES.keys())
+                errors[str(raw_key)] = (
+                    f"Unknown notification preference category '{raw_key}'. "
+                    f"Allowed categories: {allowed}."
+                )
+                continue
+
+            if isinstance(raw_val, bool):
+                parsed[normalized_key] = raw_val
+            elif isinstance(raw_val, dict):
+                if "email" in raw_val and isinstance(raw_val["email"], bool):
+                    parsed[normalized_key] = raw_val["email"]
+                elif "email_enabled" in raw_val and isinstance(
+                    raw_val["email_enabled"], bool
+                ):
+                    parsed[normalized_key] = raw_val["email_enabled"]
+                else:
+                    errors[str(raw_key)] = (
+                        "Must provide a boolean or an object with a boolean 'email' field."
+                    )
+            else:
+                errors[str(raw_key)] = (
+                    "Preference value must be a boolean (true/false)."
+                )
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        return parsed

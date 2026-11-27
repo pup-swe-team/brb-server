@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
+from typing import Any
 
 from django.contrib.auth import get_user_model
+from django.core.mail import send_mail
 from django.db import transaction
 from django.utils import timezone
 
@@ -13,53 +15,21 @@ from apps.orders.constants import ORDER_STATUS_ACTIVE
 from apps.orders.models import Order
 
 from .constants import (
-    NOTIFICATION_TYPE_ACCEPTANCE,
-    NOTIFICATION_TYPE_CANCELLATION,
-    NOTIFICATION_TYPE_CODE_GENERATION,
-    NOTIFICATION_TYPE_CONFIRMED_HANDOVER,
-    NOTIFICATION_TYPE_CONFIRMED_RETURN,
-    NOTIFICATION_TYPE_DECLINE,
-    NOTIFICATION_TYPE_EXPIRY,
-    NOTIFICATION_TYPE_NEW_MESSAGE,
-    NOTIFICATION_TYPE_NEW_REQUEST,
-    NOTIFICATION_TYPE_NEW_REVIEW,
-    NOTIFICATION_TYPE_OVERDUE_STATUS,
-    NOTIFICATION_TYPE_REPORT_UPDATES,
-    NOTIFICATION_TYPE_UNRETURNED_STATUS,
+    DEFAULT_EMAIL_NOTIFICATION_PREFERENCES,
+    EVENT_TO_CATEGORY_MAP,
+    NOTIFICATION_METADATA,
     NOTIFICATION_TYPE_UPCOMING_DUE_DATE,
-    NOTIFICATION_TYPE_VERIFICATION_RESULT,
+    ORDER_PREFIXED_NOTIFICATION_TYPES,
+    PREF_CATEGORY_ACCOUNT_VERIFICATION,
+    PREF_CATEGORY_ORDER_UPDATES,
 )
 from .models import Notification, NotificationPreference, NotificationType
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
-DEFAULT_NOTIFICATION_PREFERENCES = {
-    "requests": {"push": True, "email": True},
-    "handover": {"push": True, "email": True},
-    "overdue": {"push": True, "email": True},
-    "messages": {"push": True, "email": False},
-    "reviews": {"push": True, "email": True},
-    "security": {"push": True, "email": True},
-}
-
-EVENT_TO_CATEGORY_MAP: dict[str, str] = {
-    NOTIFICATION_TYPE_NEW_REQUEST: "requests",
-    NOTIFICATION_TYPE_ACCEPTANCE: "requests",
-    NOTIFICATION_TYPE_DECLINE: "requests",
-    NOTIFICATION_TYPE_EXPIRY: "requests",
-    NOTIFICATION_TYPE_CANCELLATION: "requests",
-    NOTIFICATION_TYPE_CODE_GENERATION: "handover",
-    NOTIFICATION_TYPE_CONFIRMED_HANDOVER: "handover",
-    NOTIFICATION_TYPE_CONFIRMED_RETURN: "handover",
-    NOTIFICATION_TYPE_UPCOMING_DUE_DATE: "handover",
-    NOTIFICATION_TYPE_OVERDUE_STATUS: "overdue",
-    NOTIFICATION_TYPE_UNRETURNED_STATUS: "overdue",
-    NOTIFICATION_TYPE_NEW_MESSAGE: "messages",
-    NOTIFICATION_TYPE_NEW_REVIEW: "reviews",
-    NOTIFICATION_TYPE_VERIFICATION_RESULT: "security",
-    NOTIFICATION_TYPE_REPORT_UPDATES: "security",
-}
+# Backward-compatible export aliases.
+DEFAULT_NOTIFICATION_PREFERENCES = DEFAULT_EMAIL_NOTIFICATION_PREFERENCES
 
 
 def get_notification_type(name: str) -> NotificationType:
@@ -68,39 +38,77 @@ def get_notification_type(name: str) -> NotificationType:
     return obj
 
 
-def get_user_notification_preferences(user: User) -> dict:
-    """Return the merged notification preferences dictionary for a user."""
-    pref, _ = NotificationPreference.objects.get_or_create(
-        user=user,
-        defaults={"preferences": DEFAULT_NOTIFICATION_PREFERENCES},
-    )
-    result: dict[str, dict[str, bool]] = {
-        cat: dict(vals) for cat, vals in DEFAULT_NOTIFICATION_PREFERENCES.items()
-    }
-    if isinstance(pref.preferences, dict):
-        for cat, vals in pref.preferences.items():
-            if cat in result and isinstance(vals, dict):
-                result[cat] = {
-                    "push": bool(vals.get("push", result[cat]["push"])),
-                    "email": bool(vals.get("email", result[cat]["email"])),
-                }
-    # Security category is locked to enabled
-    result["security"] = {"push": True, "email": True}
+def _extract_category_enabled(raw_val: Any, default: bool = True) -> bool:
+    """Interpret either a plain boolean or a legacy {'email': bool} channel dict."""
+    if isinstance(raw_val, bool):
+        return raw_val
+    if (
+        isinstance(raw_val, dict)
+        and "email" in raw_val
+        and isinstance(raw_val["email"], bool)
+    ):
+        return raw_val["email"]
+    return default
+
+
+def _normalize_stored_preferences(raw_prefs: Any) -> dict[str, bool]:
+    """
+    Normalize stored JSON preferences to CP-802's four boolean categories.
+    All four categories default to True unless explicitly opted out.
+    """
+    result: dict[str, bool] = dict(DEFAULT_EMAIL_NOTIFICATION_PREFERENCES)
+    if not isinstance(raw_prefs, dict):
+        return result
+
+    # Graceful fallback for any legacy Sprint 4 6-category rows if canonical key is absent.
+    if PREF_CATEGORY_ORDER_UPDATES not in raw_prefs:
+        legacy_order_vals = [
+            _extract_category_enabled(raw_prefs[k], True)
+            for k in ("requests", "handover", "overdue")
+            if k in raw_prefs
+        ]
+        if legacy_order_vals:
+            result[PREF_CATEGORY_ORDER_UPDATES] = any(legacy_order_vals)
+
+    if PREF_CATEGORY_ACCOUNT_VERIFICATION not in raw_prefs and "security" in raw_prefs:
+        result[PREF_CATEGORY_ACCOUNT_VERIFICATION] = _extract_category_enabled(
+            raw_prefs["security"], True
+        )
+
+    for category_key in DEFAULT_EMAIL_NOTIFICATION_PREFERENCES:
+        if category_key in raw_prefs:
+            result[category_key] = _extract_category_enabled(
+                raw_prefs[category_key], True
+            )
+
     return result
 
 
-def update_user_notification_preferences(user: User, new_prefs: dict) -> dict:
-    """Update and persist user notification preferences."""
+def get_user_notification_preferences(user: User) -> dict[str, bool]:
+    """
+    Return the user's email notification preferences across CP-802's four categories:
+    order_updates, messages, reviews, and account_verification (all True by default).
+    """
+    pref, _ = NotificationPreference.objects.get_or_create(
+        user=user,
+        defaults={"preferences": dict(DEFAULT_EMAIL_NOTIFICATION_PREFERENCES)},
+    )
+    return _normalize_stored_preferences(pref.preferences)
+
+
+def update_user_notification_preferences(
+    user: User, new_prefs: dict[str, Any]
+) -> dict[str, bool]:
+    """
+    Update and persist email notification preferences for `user` (CP-802).
+    Users may opt out of or re-enable any of the four categories individually.
+    """
     current = get_user_notification_preferences(user)
     if isinstance(new_prefs, dict):
-        for cat, vals in new_prefs.items():
-            if cat in current and cat != "security" and isinstance(vals, dict):
-                if "push" in vals:
-                    current[cat]["push"] = bool(vals["push"])
-                if "email" in vals:
-                    current[cat]["email"] = bool(vals["email"])
+        for cat, val in new_prefs.items():
+            if cat in current:
+                current[cat] = _extract_category_enabled(val, current[cat])
 
-    current["security"] = {"push": True, "email": True}
     pref, _ = NotificationPreference.objects.get_or_create(
         user=user,
         defaults={"preferences": current},
@@ -110,30 +118,107 @@ def update_user_notification_preferences(user: User, new_prefs: dict) -> dict:
     return current
 
 
+def get_category_for_event(event_name: str) -> str | None:
+    """Map a NotificationType event name to its CP-802 preference category."""
+    return EVENT_TO_CATEGORY_MAP.get(event_name)
+
+
+def should_send_email_for_event(*, user: User, event_name: str) -> bool:
+    """
+    Determine whether an email notification should be sent to `user` for `event_name` (CP-802).
+    Returns True only when the user has an email address and has not opted out of the event's category.
+    """
+    if user is None or not getattr(user, "email", None):
+        return False
+
+    category = get_category_for_event(event_name)
+    if category is None:
+        return False
+
+    prefs = get_user_notification_preferences(user)
+    return bool(prefs.get(category, True))
+
+
+def build_notification_email(*, notification: Notification) -> tuple[str, str]:
+    """Build plain-text subject and body for an event notification email (CP-802)."""
+    event_name = notification.type.name
+    meta = NOTIFICATION_METADATA.get(event_name, {})
+    title = meta.get("title", event_name.replace("_", " ").title())
+    base_msg = meta.get("message", "You have a new notification on BRB.")
+    if notification.reference_id and event_name in ORDER_PREFIXED_NOTIFICATION_TYPES:
+        detail_line = f"Order #{notification.reference_id}: {base_msg}"
+    else:
+        detail_line = base_msg
+
+    recipient_name = notification.user.full_name or "there"
+    subject = f"BRB — {title}"
+    body = (
+        f"Hi {recipient_name},\n\n"
+        f"{detail_line}\n\n"
+        "Open the BRB app to view full details. "
+        "You can manage your email notification preferences anytime in your account settings.\n\n"
+        "Thank you,\n"
+        "BRB Team\n"
+    )
+    return subject, body
+
+
+def send_notification_email(notification: Notification) -> bool:
+    """
+    Send an email notification for `notification` if the recipient has not opted out
+    of its CP-802 category. Failures are logged and never raise into callers.
+    """
+    user = notification.user
+    event_name = notification.type.name
+
+    if not should_send_email_for_event(user=user, event_name=event_name):
+        logger.info(
+            "CP-802: email notification suppressed for user #%d on event '%s' (opted out)",
+            user.pk,
+            event_name,
+        )
+        return False
+
+    subject, body = build_notification_email(notification=notification)
+    try:
+        send_mail(
+            subject=subject,
+            message=body,
+            from_email=None,  # falls back to settings.DEFAULT_FROM_EMAIL
+            recipient_list=[user.email],
+            fail_silently=False,
+        )
+        logger.info(
+            "CP-802: sent email notification '%s' (Notification #%d) to user #%d",
+            event_name,
+            notification.pk,
+            user.pk,
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "CP-802: failed to send email notification '%s' (Notification #%d) to user #%d: %s",
+            event_name,
+            notification.pk,
+            user.pk,
+            exc,
+        )
+        return False
+
+
 def create_notification(
     *,
     user: User,
     event_name: str,
     reference_id: str | int | None = None,
-) -> Notification | None:
+) -> Notification:
     """
     Dispatch an in-app notification to `user` for event `event_name` (CP-801, FR11).
 
-    Idempotent for key events with the same reference_id to avoid duplicate spamming.
-    Respects user preferences if an opt-out is configured.
+    In-app notifications are always created regardless of email preferences (CP-802).
+    Email delivery is automatically gated and dispatched via the Notification post_save signal.
+    Idempotent for unread notifications with the same (user, event_name, reference_id).
     """
-    category = EVENT_TO_CATEGORY_MAP.get(event_name)
-    if category and category != "security":
-        prefs = get_user_notification_preferences(user)
-        if not prefs.get(category, {}).get("push", True):
-            logger.info(
-                "CP-801: in-app notification '%s' suppressed for user #%d by category preference '%s'",
-                event_name,
-                user.pk,
-                category,
-            )
-            return None
-
     ref_str = str(reference_id) if reference_id is not None else None
     notif_type = get_notification_type(event_name)
 

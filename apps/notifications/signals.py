@@ -1,4 +1,4 @@
-"""Signal handlers for dispatching event notifications (CP-801, FR11)."""
+"""Signal handlers for dispatching in-app and preference-gated email notifications (CP-801, CP-802, FR11)."""
 
 from __future__ import annotations
 
@@ -11,9 +11,33 @@ from apps.chat.models import Message
 from apps.reviews.models import Review
 
 from .constants import NOTIFICATION_TYPE_NEW_MESSAGE, NOTIFICATION_TYPE_NEW_REVIEW
-from .services import create_notification
+from .models import Notification
+from .services import create_notification, send_notification_email
 
 logger = logging.getLogger(__name__)
+
+
+@receiver(post_save, sender=Notification)
+def handle_notification_email_dispatch(
+    sender, instance: Notification, created: bool, **kwargs
+) -> None:
+    """
+    Send a preference-gated email notification whenever a new Notification row is created (CP-802).
+    Skipped when the caller explicitly handles tailored email dispatch (`_skip_email_dispatch=True`).
+    """
+    if not created:
+        return
+    if getattr(instance, "_skip_email_dispatch", False):
+        return
+
+    try:
+        send_notification_email(instance)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "CP-802: failed to dispatch email for Notification #%d: %s",
+            instance.pk,
+            exc,
+        )
 
 
 @receiver(post_save, sender=Message)

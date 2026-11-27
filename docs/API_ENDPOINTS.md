@@ -266,6 +266,18 @@ users can reapply through `/api/v1/auth/apply-lender/` after identity verificati
 | GET | `/api/v1/admin/conversations/` | admin | `?retained=&order_id=&listing_id=&user_id=&is_blocked=` | `200` all conversations including blocked/user-deleted retained threads |
 | GET | `/api/v1/admin/conversations/<id>/` | admin | — | `200` full retained conversation + chronological messages; logs `AdminAccessLog(action="view_conversation")` |
 
+## Notifications & Email Preferences (`apps/notifications/` — CP-801, CP-802)
+
+| Method | Path | Auth | Request body / query | Success |
+|---|---|---|---|---|
+| GET | `/api/v1/notifications/` | user | `?is_read=true\|false&page=&page_size=` | `200` paginated in-app notifications + `unread_count` |
+| GET | `/api/v1/notifications/unread-count/` | user | — | `200` `{unread_count}` |
+| POST | `/api/v1/notifications/<id>/read/` | user | — | `200` marks single notification read + updated `unread_count` |
+| POST | `/api/v1/notifications/read-all/` | user | — | `200` marks all user notifications read |
+| GET | `/api/v1/notifications/preferences/` | user | — | `200` `{order_updates, messages, reviews, account_verification, categories}` (all `true` by default) |
+| PUT/PATCH | `/api/v1/notifications/preferences/` | user | `{order_updates?, messages?, reviews?, account_verification?}` | `200` updates email notification preferences per category (in-app notifications are always created; email is sent only for non-opted-out categories) |
+| GET/PUT/PATCH | `/api/v1/auth/notification-preferences/` | user | Same as `/api/v1/notifications/preferences/` | `200` alias for user settings screen |
+
 ## Admin portal (HTML, session login) — `/portal/`
 
 | Method | Path |

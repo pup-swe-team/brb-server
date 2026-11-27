@@ -11,7 +11,11 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import Notification
-from .serializers import NotificationPreferencesSerializer, NotificationSerializer
+from .serializers import (
+    NotificationPreferencesSerializer,
+    NotificationSerializer,
+    serialize_notification_preferences,
+)
 from .services import (
     get_user_notification_preferences,
     mark_all_notifications_as_read,
@@ -137,20 +141,33 @@ class NotificationUnreadCountView(APIView):
 
 class NotificationPreferencesView(APIView):
     """
-    Get or update user notification preferences across channels (CP-801, CP-802).
+    Get or update user email notification preferences across the four CP-802 categories:
+    Order Updates, Messages, Reviews, and Account & Verification (FR11, CP-802).
     """
 
     permission_classes = (IsAuthenticated,)
 
     def get(self, request: Request) -> Response:
         prefs = get_user_notification_preferences(request.user)
-        return Response(prefs, status=status.HTTP_200_OK)
+        return Response(
+            serialize_notification_preferences(prefs),
+            status=status.HTTP_200_OK,
+        )
 
     def put(self, request: Request) -> Response:
+        return self._update(request)
+
+    def patch(self, request: Request) -> Response:
+        return self._update(request)
+
+    def _update(self, request: Request) -> Response:
         serializer = NotificationPreferencesSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         updated = update_user_notification_preferences(
             user=request.user,
             new_prefs=serializer.validated_data,
         )
-        return Response(updated, status=status.HTTP_200_OK)
+        return Response(
+            serialize_notification_preferences(updated),
+            status=status.HTTP_200_OK,
+        )

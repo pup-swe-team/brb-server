@@ -528,7 +528,15 @@ erDiagram
         datetime created_at
     }
 
+    NOTIFICATION_PREFERENCES {
+        int id PK
+        int user_id FK "unique (1:1 per user, CP-802)"
+        json preferences "4 email categories (all true by default): order_updates, messages, reviews, account_verification"
+        datetime updated_at
+    }
+
     USERS ||--o{ NOTIFICATIONS : receives
+    USERS ||--o| NOTIFICATION_PREFERENCES : configures
 ```
 
 ---
