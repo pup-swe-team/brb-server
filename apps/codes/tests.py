@@ -614,3 +614,105 @@ class ReturnCodeTests(APITestCase):
         )
         self.assertEqual(reuse_res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("already been used", str(reuse_res.json()))
+
+
+class AuthCodeAdminTests(APITestCase):
+    """Django /admin/ code-expiration overrides for QA verification (TC-067)."""
+
+    def setUp(self) -> None:
+        self.admin_user = User.objects.create_superuser(
+            email="codes-admin@pup.edu.ph",
+            password="AdminPassword123!",
+            full_name="Codes Admin",
+            contact_number="09170000001",
+        )
+        self.lender = User.objects.create_user(
+            email="codes-lender@iskolarngbayan.pup.edu.ph",
+            full_name="Codes Lender",
+            contact_number="09170000002",
+        )
+        self.borrower = User.objects.create_user(
+            email="codes-borrower@iskolarngbayan.pup.edu.ph",
+            full_name="Codes Borrower",
+            contact_number="09170000003",
+        )
+        cat = ListingCategory.objects.create(name="Tools")
+        loc = PickupLocation.objects.create(name="South Wing")
+        active_listing_status, _ = ListingStatus.objects.get_or_create(name="active")
+        listing = Listing.objects.create(
+            lender=self.lender,
+            title="Solder Station",
+            description="Complete set",
+            category=cat,
+            pickup_location=loc,
+            status=active_listing_status,
+        )
+        confirmed_status, _ = OrderStatus.objects.get_or_create(
+            name=ORDER_STATUS_CONFIRMED
+        )
+        today = timezone.localdate()
+        self.order = Order.objects.create(
+            listing=listing,
+            borrower=self.borrower,
+            start_date=today,
+            end_date=today + timedelta(days=2),
+            status=confirmed_status,
+        )
+
+    def test_admin_action_expires_active_code_and_blocks_verify_tc067(self) -> None:
+        self.client.force_authenticate(user=self.lender)
+        gen_res = self.client.post(
+            reverse("order-handover-code-generate", kwargs={"order_id": self.order.pk})
+        )
+        self.assertEqual(gen_res.status_code, status.HTTP_201_CREATED)
+        code_id = gen_res.json()["id"]
+        code_value = gen_res.json()["code_value"]
+
+        self.client.force_login(self.admin_user)
+        changelist_url = reverse("admin:codes_authcode_changelist")
+        admin_res = self.client.post(
+            changelist_url,
+            {
+                "action": "expire_selected_active_codes",
+                "_selected_action": [str(code_id)],
+            },
+        )
+        self.assertEqual(admin_res.status_code, status.HTTP_302_FOUND)
+
+        auth_code = AuthCode.objects.get(pk=code_id)
+        self.assertEqual(auth_code.auth_status.name, CODE_STATUS_EXPIRED)
+        self.assertLess(auth_code.expires_at, timezone.now())
+
+        self.client.force_authenticate(user=self.borrower)
+        verify_res = self.client.post(
+            reverse("order-handover-code-verify", kwargs={"order_id": self.order.pk}),
+            {"code": code_value},
+            format="json",
+        )
+        self.assertEqual(verify_res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("expired", str(verify_res.json()).lower())
+
+    def test_admin_edit_expires_at_marks_code_expired(self) -> None:
+        self.client.force_authenticate(user=self.lender)
+        gen_res = self.client.post(
+            reverse("order-handover-code-generate", kwargs={"order_id": self.order.pk})
+        )
+        code_id = gen_res.json()["id"]
+
+        self.client.force_login(self.admin_user)
+        past = timezone.localtime(timezone.now() - timedelta(hours=1))
+        change_url = reverse("admin:codes_authcode_change", args=[code_id])
+        save_res = self.client.post(
+            change_url,
+            {
+                "expires_at_0": past.strftime("%Y-%m-%d"),
+                "expires_at_1": past.strftime("%H:%M:%S"),
+                "attempts-TOTAL_FORMS": "0",
+                "attempts-INITIAL_FORMS": "0",
+                "attempts-MIN_NUM_FORMS": "0",
+                "attempts-MAX_NUM_FORMS": "1000",
+            },
+        )
+        self.assertEqual(save_res.status_code, status.HTTP_302_FOUND)
+        auth_code = AuthCode.objects.get(pk=code_id)
+        self.assertEqual(auth_code.auth_status.name, CODE_STATUS_EXPIRED)

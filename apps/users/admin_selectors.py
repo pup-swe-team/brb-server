@@ -82,36 +82,47 @@ def get_admin_dashboard_metrics(*, now: datetime | None = None) -> dict[str, Any
     month_start = current_time.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     week_start = current_time - timedelta(days=7)
 
-    # 1. Users breakdown (single GROUP BY for account_status)
-    users_by_status = {choice.value: 0 for choice in User.AccountStatusChoices}
-    total_users = 0
-    for row in User.objects.values("account_status").annotate(total=Count("id")):
-        status_key = row["account_status"]
-        count = row["total"]
-        if status_key in users_by_status:
-            users_by_status[status_key] = count
-        total_users += count
+    # 1. Users breakdown (single aggregate query for status buckets & KPIs)
+    user_stats = User.objects.aggregate(
+        total=Count("id"),
+        new_this_month=Count("id", filter=Q(created_at__gte=month_start)),
+        active_lenders=Count(
+            "id", filter=Q(lender_status=User.LenderStatusChoices.ACTIVE)
+        ),
+        flagged_pending=Count(
+            "id",
+            filter=Q(is_flagged=True, is_flag_confirmed=False)
+            | Q(account_status=User.AccountStatusChoices.PENDING_REVIEW),
+        ),
+        **{
+            f"status_{choice.value}": Count("id", filter=Q(account_status=choice.value))
+            for choice in User.AccountStatusChoices
+        },
+    )
+    users_by_status = {
+        choice.value: (user_stats[f"status_{choice.value}"] or 0)
+        for choice in User.AccountStatusChoices
+    }
+    total_users = user_stats["total"] or 0
+    new_users_this_month = user_stats["new_this_month"] or 0
+    active_lenders = user_stats["active_lenders"] or 0
+    flagged_users_pending = user_stats["flagged_pending"] or 0
 
-    new_users_this_month = User.objects.filter(created_at__gte=month_start).count()
-    active_lenders = User.objects.filter(
-        lender_status=User.LenderStatusChoices.ACTIVE
-    ).count()
-    flagged_users_pending = _flagged_users_pending_review_count()
-
-    # 2. Listings breakdown (single GROUP BY for status__name)
-    listings_by_status = {key: 0 for key in LISTING_STATUS_KEYS}
-    total_listings = 0
-    for row in Listing.objects.values("status__name").annotate(total=Count("id")):
-        status_name = row["status__name"]
-        count = row["total"]
-        if status_name in listings_by_status:
-            listings_by_status[status_name] = count
-        total_listings += count
-
+    # 2. Listings breakdown (single aggregate query for status counts & weekly adds)
+    listing_stats = Listing.objects.aggregate(
+        total=Count("id"),
+        added_this_week=Count("id", filter=Q(created_at__gte=week_start)),
+        **{
+            f"status_{key}": Count("id", filter=Q(status__name=key))
+            for key in LISTING_STATUS_KEYS
+        },
+    )
+    listings_by_status = {
+        key: (listing_stats[f"status_{key}"] or 0) for key in LISTING_STATUS_KEYS
+    }
+    total_listings = listing_stats["total"] or 0
     active_listings = listings_by_status["active"]
-    listings_added_this_week = Listing.objects.filter(
-        created_at__gte=week_start
-    ).count()
+    listings_added_this_week = listing_stats["added_this_week"] or 0
 
     # 3. Orders by status (single GROUP BY seeded with all 11 lifecycle statuses)
     orders_by_status = {status_name: 0 for status_name in ALL_ORDER_STATUSES}
@@ -127,12 +138,15 @@ def get_admin_dashboard_metrics(*, now: datetime | None = None) -> dict[str, Any
     reports_by_type = _open_reports_by_type()
     total_open_reports = sum(reports_by_type.values())
 
-    # 5. Review queues & moderation backlog
-    pending_documents = IdentityDocument.objects.filter(
+    # 5. Review queues & moderation backlog (single aggregate query)
+    pending_doc_stats = IdentityDocument.objects.filter(
         status__name=IDENTITY_DOCUMENT_STATUS_PENDING
+    ).aggregate(
+        total=Count("id"),
+        oldest=Min("submitted_at"),
     )
-    pending_verifications = pending_documents.count()
-    oldest_waiting = pending_documents.aggregate(oldest=Min("submitted_at"))["oldest"]
+    pending_verifications = pending_doc_stats["total"] or 0
+    oldest_waiting = pending_doc_stats["oldest"]
     oldest_pending_days = (
         max(0, (current_time - oldest_waiting).days)
         if oldest_waiting is not None

@@ -59,6 +59,7 @@ from apps.reports.services import ReportStateConflictError, resolve_report
 from apps.reviews.models import Review
 
 from .admin_selectors import (
+    _open_reports_by_type,
     get_admin_dashboard_metrics,
     get_portal_nav_counts,
 )
@@ -155,7 +156,7 @@ def _identity_document_tab_counts() -> dict[str, int]:
 
 
 def _open_reports_count() -> int:
-    return get_portal_nav_counts()["nav_reports_count"]
+    return sum(_open_reports_by_type().values())
 
 
 def _open_unreturned_count() -> int:
@@ -171,9 +172,12 @@ def _recent_activity() -> list[dict[str, str]]:
     """A small, truthful activity feed drawn from the tables that exist."""
     events: list[tuple] = []
 
-    for document in IdentityDocument.objects.select_related(
-        "user", "document_type", "status"
-    ).filter(status__name__in=("approved", "rejected"), reviewed_at__isnull=False)[:5]:
+    for document in (
+        IdentityDocument.objects.select_related("user", "document_type", "status")
+        .defer("document_data")
+        .filter(status__name__in=("approved", "rejected"), reviewed_at__isnull=False)
+        .order_by("-reviewed_at", "-pk")[:5]
+    ):
         events.append(
             (
                 document.reviewed_at,
@@ -183,9 +187,12 @@ def _recent_activity() -> list[dict[str, str]]:
             )
         )
 
-    for document in IdentityDocument.objects.select_related(
-        "user", "document_type"
-    ).filter(status__name=IDENTITY_DOCUMENT_STATUS_PENDING)[:5]:
+    for document in (
+        IdentityDocument.objects.select_related("user", "document_type")
+        .defer("document_data")
+        .filter(status__name=IDENTITY_DOCUMENT_STATUS_PENDING)
+        .order_by("-submitted_at", "-pk")[:5]
+    ):
         events.append(
             (
                 document.submitted_at,
@@ -332,13 +339,14 @@ def verification_queue(request):
     submitted identity documents, with the design's table columns and footer
     pagination.
     """
+    tab_counts = _identity_document_tab_counts()
     tabs = []
     for name in ("pending", "approved", "rejected"):
         tabs.append(
             {
                 "name": name,
                 "label": "Pending Review" if name == "pending" else name.title(),
-                "count": _identity_document_tab_counts()[name],
+                "count": tab_counts[name],
             }
         )
 
@@ -349,6 +357,7 @@ def verification_queue(request):
     documents = (
         IdentityDocument.objects.filter(status__name=current)
         .select_related("user", "document_type", "status")
+        .defer("document_data")
         .order_by("-submitted_at")
     )
 
@@ -1485,8 +1494,10 @@ def audit_log_viewer(request):
     """
     from apps.audit.models import AdminAccessLog
 
-    qs = AdminAccessLog.objects.select_related("admin", "document").order_by(
-        "-accessed_at"
+    qs = (
+        AdminAccessLog.objects.select_related("admin", "document")
+        .defer("document__document_data")
+        .order_by("-accessed_at")
     )
 
     action_filter = request.GET.get("action", "").strip()
@@ -1561,6 +1572,7 @@ def consolidated_review_queues(request):
 
     pending_docs = (
         IdentityDocument.objects.select_related("user", "document_type", "status")
+        .defer("document_data")
         .filter(status__name=IDENTITY_DOCUMENT_STATUS_PENDING)
         .order_by("-submitted_at")
     )
@@ -1663,7 +1675,9 @@ def consolidated_review_queues(request):
         "nav_verification_count": pending_docs_count,
         "nav_reports_count": open_reports_count,
         "nav_unreturned_count": unreturned_cases_count,
-        "nav_disputes_count": get_portal_nav_counts()["nav_disputes_count"],
+        "nav_disputes_count": Dispute.objects.filter(
+            status__in=(Dispute.StatusChoices.OPEN, Dispute.StatusChoices.ESCALATED)
+        ).count(),
     }
     return render(request, "admin_portal/review_queues.html", context)
 
@@ -1712,14 +1726,14 @@ def disputes_queue(request):
     paginator = Paginator(qs, 20)
     page = paginator.get_page(request.GET.get("page", 1))
 
+    raw_counts = {
+        row["status"]: row["total"]
+        for row in Dispute.objects.values("status").annotate(total=Count("id"))
+    }
     counts = {
-        "open": Dispute.objects.filter(status=Dispute.StatusChoices.OPEN).count(),
-        "escalated": Dispute.objects.filter(
-            status=Dispute.StatusChoices.ESCALATED
-        ).count(),
-        "resolved": Dispute.objects.filter(
-            status=Dispute.StatusChoices.RESOLVED
-        ).count(),
+        "open": raw_counts.get(Dispute.StatusChoices.OPEN, 0),
+        "escalated": raw_counts.get(Dispute.StatusChoices.ESCALATED, 0),
+        "resolved": raw_counts.get(Dispute.StatusChoices.RESOLVED, 0),
     }
     counts["all"] = sum(counts.values())
 

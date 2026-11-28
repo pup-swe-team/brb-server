@@ -364,6 +364,8 @@ def send_message(
         content=cleaned,
     )
 
+    mark_conversation_read(conversation=conversation, reader=sender)
+
     update_fields = ["updated_at"]
     if conversation.user_a_deleted_at is not None:
         conversation.user_a_deleted_at = None

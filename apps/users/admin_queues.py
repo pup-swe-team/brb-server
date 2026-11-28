@@ -102,9 +102,13 @@ def list_admin_verifications(
             }
         )
 
-    qs = IdentityDocument.objects.select_related(
-        "user", "document_type", "status", "reviewed_by"
-    ).order_by("-submitted_at", "-pk")
+    qs = (
+        IdentityDocument.objects.select_related(
+            "user", "document_type", "status", "reviewed_by"
+        )
+        .defer("document_data")
+        .order_by("-submitted_at", "-pk")
+    )
     if normalized != "all":
         qs = qs.filter(status__name=normalized)
 
@@ -271,9 +275,13 @@ def get_admin_review_queues(
     items: list[dict[str, Any]] = []
 
     if include_verification:
-        v_qs = IdentityDocument.objects.select_related(
-            "user", "document_type", "status", "reviewed_by"
-        ).order_by("-submitted_at", "-pk")
+        v_qs = (
+            IdentityDocument.objects.select_related(
+                "user", "document_type", "status", "reviewed_by"
+            )
+            .defer("document_data")
+            .order_by("-submitted_at", "-pk")
+        )
         if normalized_status == "open":
             v_qs = v_qs.filter(status__name=IDENTITY_DOCUMENT_STATUS_PENDING)
         elif normalized_status == "closed":

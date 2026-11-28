@@ -906,3 +906,53 @@ class ClientAlignmentContractTests(ChatBaseTestCase):
                 target_id=str(dispute.pk),
             ).exists()
         )
+
+    def test_replying_clears_unread_count_and_updates_last_message_in_list(
+        self,
+    ) -> None:
+        order = self._create_order(status_name=ORDER_STATUS_CONFIRMED)
+        self.client.force_authenticate(user=self.borrower)
+        conv_res = self.client.post(f"/api/v1/orders/{order.pk}/chat/")
+        conv_id = conv_res.data["conversation_id"]
+
+        self.client.post(
+            f"/api/v1/chats/{conv_id}/messages/",
+            {"text": "Hello from Neo"},
+            format="json",
+        )
+
+        # Lender has 1 unread message before replying.
+        self.client.force_authenticate(user=self.lender)
+        before_list = self.client.get("/api/v1/chats/")
+        self.assertEqual(before_list.status_code, status.HTTP_200_OK)
+        self.assertEqual(before_list.data["results"][0]["unread_count"], 1)
+        self.assertEqual(
+            before_list.data["results"][0]["last_message"]["text"], "Hello from Neo"
+        )
+        self.assertFalse(before_list.data["results"][0]["last_message"]["is_mine"])
+
+        # Lender replies directly without separately hitting /read/.
+        reply_res = self.client.post(
+            f"/api/v1/chats/{conv_id}/messages/",
+            {"text": "Yes, still available!"},
+            format="json",
+        )
+        self.assertEqual(reply_res.status_code, status.HTTP_201_CREATED)
+
+        after_list = self.client.get("/api/v1/chats/")
+        self.assertEqual(after_list.status_code, status.HTTP_200_OK)
+        self.assertEqual(after_list.data["results"][0]["unread_count"], 0)
+        self.assertFalse(after_list.data["results"][0]["has_unread"])
+        self.assertEqual(
+            after_list.data["results"][0]["last_message"]["text"],
+            "Yes, still available!",
+        )
+        self.assertTrue(after_list.data["results"][0]["last_message"]["is_mine"])
+        self.assertFalse(
+            Notification.objects.filter(
+                user=self.lender,
+                type__name=NOTIFICATION_TYPE_NEW_MESSAGE,
+                reference_id=str(conv_id),
+                is_read=False,
+            ).exists()
+        )

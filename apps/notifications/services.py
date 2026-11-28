@@ -233,6 +233,11 @@ def update_user_notification_preferences(
     channels["security"] = {"push": True, "email": True}
     pref.preferences = {**current, "channels": channels}
     pref.save(update_fields=["preferences", "updated_at"])
+    logger.info(
+        "CP-802: updated notification preferences for user #%d (canonical=%s)",
+        user.pk,
+        current,
+    )
     return current
 
 
@@ -358,6 +363,13 @@ def create_notification(
             is_read=False,
         ).first()
         if existing:
+            logger.info(
+                "CP-801: reused existing unread notification #%d ('%s') for user #%d (reference_id=%s)",
+                existing.pk,
+                event_name,
+                user.pk,
+                ref_str,
+            )
             return existing
 
     notification = Notification.objects.create(

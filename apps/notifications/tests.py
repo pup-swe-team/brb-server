@@ -9,7 +9,7 @@ from django.core import mail
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.test import APITestCase
+from rest_framework.test import APIClient, APITestCase
 
 from apps.chat.models import Conversation, Message
 from apps.listings.models import (
@@ -960,5 +960,37 @@ class EmailNotificationGatingCP802Tests(TestCase):
         self.assertFalse(
             should_send_email_for_event(
                 user=self.lender, event_name=NOTIFICATION_TYPE_NEW_MESSAGE
+            )
+        )
+
+    def test_cp802_logs_preference_updates_and_email_suppression_at_info(self) -> None:
+        """CP-802: Both preference updates and suppressed emails emit INFO logs."""
+        client = APIClient()
+        client.force_authenticate(user=self.lender)
+
+        with self.assertLogs("apps.notifications.services", level="INFO") as pref_logs:
+            res = client.put(
+                "/api/v1/auth/notification-preferences/",
+                {"messages": {"push": True, "email": False}},
+                format="json",
+            )
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(
+            any(
+                "CP-802: updated notification preferences" in line
+                for line in pref_logs.output
+            )
+        )
+
+        with self.assertLogs("apps.notifications.services", level="INFO") as sup_logs:
+            create_notification(
+                user=self.lender,
+                event_name=NOTIFICATION_TYPE_NEW_MESSAGE,
+                reference_id="888",
+            )
+        self.assertTrue(
+            any(
+                "CP-802: email notification suppressed" in line
+                for line in sup_logs.output
             )
         )

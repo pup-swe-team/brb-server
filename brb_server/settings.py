@@ -366,3 +366,32 @@ EMAIL_VERIFICATION_EXPIRY_DAYS = 7
 # Must be a valid Fernet key (32 url-safe base64-encoded bytes).
 # Generate one with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 IDENTITY_DOCUMENT_ENCRYPTION_KEY = os.getenv("IDENTITY_DOCUMENT_ENCRYPTION_KEY", "")
+
+# Emit INFO logs for backend application services (e.g. CP-802 notification preference
+# updates and suppressed emails) during runserver while keeping unit test output concise.
+APP_LOG_LEVEL = os.getenv(
+    "DJANGO_LOG_LEVEL", "WARNING" if "test" in sys.argv else "INFO"
+)
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "app": {
+            "format": "[%(asctime)s] %(levelname)s %(name)s: %(message)s",
+            "datefmt": "%Y-%m-%d %H:%M:%S",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "app",
+        },
+    },
+    "loggers": {
+        "apps": {
+            "handlers": ["console"],
+            "level": APP_LOG_LEVEL,
+            "propagate": False,
+        },
+    },
+}
